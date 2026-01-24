@@ -32,3 +32,6 @@ dist-ssr
 .aws-sam/
 # local deploy config (do not commit)
 template.yaml
+
+# SAM local deployment config
+samconfig.toml
