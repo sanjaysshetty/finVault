@@ -8,6 +8,7 @@ confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
 disable_rollback = true
 image_repositories = []
+parameter_overrides = "ReceiptLedgerTableName=\"ReceiptLedger\" ReceiptsBucketName=\"finapp-receipts-1152\" ReceiptsPrefix=\"receipts/\" FrontendBucketName=\"metals-prices-sanjay-1152\" FrontendPrefix=\"app/\""
 
 [default.global.parameters]
 region = "us-east-1"

@@ -5,7 +5,7 @@
 //
 // Required env vars:
 //   OPENAI_API_KEY
-//   COSTCO_SPENDING_TABLE
+//   RECEIPT_LEDGER_TABLE
 //
 // Optional env vars:
 //   OPENAI_MODEL (default: gpt-5.2)
@@ -128,15 +128,26 @@ async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
     input: [
       {
         role: "system",
-        content:
-          "You extract structured receipt data.\n" +
-          "Return ONLY JSON that matches the provided schema.\n" +
-          "Rules:\n" +
-          "- 'lines' must include ONLY purchasable item lines.\n" +
-          "- Exclude payment lines (VISA/CASH), rebates, membership, non-item adjustments.\n" +
-          "- 'summaryLines' MUST include exactly three objects with type SUBTOTAL, TAX, TOTAL (amount can be null).\n" +
-          "- Keep product codes exactly as printed when present.\n" +
-          "- If a field is missing/unclear, use null.\n"
+      content:
+        "You extract structured receipt data.\n" +
+        "Return ONLY JSON that matches the provided schema.\n" +
+        "\n" +
+        "Rules:\n" +
+        "- 'lines' must include ONLY purchasable item lines.\n" +
+        "- Exclude payment lines (VISA/CASH), rebates, membership, non-item adjustments.\n" +
+        "- 'summaryLines' MUST include exactly three objects with type SUBTOTAL, TAX, TOTAL (amount can be null).\n" +
+        "- Keep product codes exactly as printed when present.\n" +
+        "\n" +
+        "Category requirement (IMPORTANT):\n" +
+        "- For EVERY object in 'lines', you MUST provide a category.\n" +
+        "- Do NOT leave 'category' null or empty.\n" +
+        "- You must infer the most accurate category from the item description/code and receipt context.\n" +
+        "- Use short, human-readable categories (1–3 words) like: Produce, Dairy, Meat, Bakery, Snacks, Beverages,\n" +
+        "  Frozen, Pantry, Household, Personal Care, Pharmacy, Electronics, Clothing, Home, Automotive, Pet, etc.\n" +
+        "- If you are genuinely unsure, set category to \"Uncategorized\" (never null).\n" +
+        "\n" +
+        "Missing fields:\n" +
+        "- If a field besides 'category' is missing/unclear, use null.\n"
       },
       {
         role: "user",
@@ -183,8 +194,8 @@ function normalizeSummaryLines(summaryLines) {
   return ["SUBTOTAL", "TAX", "TOTAL"].map((t) => map.get(t));
 }
 
-async function writeToCostcoSpendingTable({ receiptId, bucket, s3Key, extracted }) {
-  const table = requireEnv("COSTCO_SPENDING_TABLE");
+async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted }) {
+  const table = requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
   const purchaseDate = extracted?.receipt?.purchaseDate ?? null;
 
@@ -262,7 +273,7 @@ async function writeToCostcoSpendingTable({ receiptId, bucket, s3Key, extracted 
 }
 
 async function markFailed({ receiptId, bucket, s3Key, errorMessage }) {
-  const table = requireEnv("COSTCO_SPENDING_TABLE");
+  const table = requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
 
   await ddb.send(
@@ -331,8 +342,8 @@ export const handler = async (event) => {
     const extracted = await extractReceiptFromImageBytes({ imageBytes: bytes, mimeType });
     console.log("OpenAI extraction done. Lines:", Array.isArray(extracted.lines) ? extracted.lines.length : 0);
 
-    console.log("Writing to DynamoDB table:", process.env.COSTCO_SPENDING_TABLE);
-    await writeToCostcoSpendingTable({ receiptId, bucket, s3Key: key, extracted });
+    console.log("Writing to DynamoDB table:", process.env.RECEIPT_LEDGER_TABLE);
+    await writeToReceiptLedgerTable({ receiptId, bucket, s3Key: key, extracted });
 
     console.log("DynamoDB write complete.");
     return { ok: true, receiptId, bucket, key, lines: (extracted?.lines?.length || 0) + 3 };
