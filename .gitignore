@@ -30,3 +30,6 @@ dist-ssr
 
 # Build output
 .aws-sam/
+# local deploy config (do not commit)
+template.yml
+template.yaml
