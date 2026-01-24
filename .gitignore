@@ -7,7 +7,8 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
+node_modules/
+**/node_modules/
 dist
 dist-ssr
 *.local
@@ -35,3 +36,7 @@ template.yaml
 
 # SAM local deployment config
 samconfig.toml
+
+# dependencies
+node_modules/
+**/node_modules/
