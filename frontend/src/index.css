@@ -1,26 +1,327 @@
-:root {
-  color-scheme: dark;
+/* =========================
+   index.css (FULL REPLACEMENT)
+   SoFi-ish Theme (Teal bg + White cards + Purple accents)
+   ========================= */
+
+/* Theme tokens */
+:root{
+  /* IMPORTANT: we are moving to a LIGHT theme like your SoFi reference */
+  color-scheme: light;
+
+  --bg: #00A7C4;                 /* teal background */
+  --card: #ffffff;               /* white cards */
+  --cardBorder: rgba(0,0,0,.08);
+
+  --text: #0f172a;               /* slate */
+  --muted: rgba(15,23,42,.65);
+
+  --accent: #5B2BBE;             /* purple */
+  --accentDeep: #3a1a86;
+
+  --shadow: 0 10px 25px rgba(15, 23, 42, .12);
+  --shadow2: 0 6px 18px rgba(15, 23, 42, .10);
+
+  --radius: 18px;
+  --radiusLg: 22px;
 }
 
-* {
-  box-sizing: border-box;
-}
+/* Base reset */
+*{ box-sizing: border-box; }
 
 html,
 body,
-#root {
+#root{
   height: 100%;
   width: 100%;
   margin: 0;
   padding: 0;
 }
 
-body {
-  background: #020617; /* matches your app background */
+body{
+  background: var(--bg);
+  color: var(--text);
   overflow-x: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, system-ui, Arial, sans-serif;
 }
 
 /* IMPORTANT: remove Vite template constraints */
-#root {
+#root{
   max-width: none;
+}
+
+/* =========================
+   Page scaffolding
+   ========================= */
+.page-sofi{
+  min-height: 100dvh;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.sofi-wrap{
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 18px 16px 28px;
+}
+
+.sofi-banner{
+  background: linear-gradient(90deg, var(--accent), var(--accentDeep));
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 999px;
+  width: fit-content;
+  box-shadow: var(--shadow2);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* =========================
+   Cards / containers
+   ========================= */
+.sofi-card{
+  background: var(--card);
+  border: 1px solid var(--cardBorder);
+  border-radius: var(--radiusLg);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+.sofi-card-header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.sofi-title{
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.2px;
+}
+
+.sofi-subtitle{
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* =========================
+   Buttons / pills
+   ========================= */
+.sofi-btn-primary{
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
+}
+.sofi-btn-primary:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow2);
+}
+.sofi-btn-primary:disabled{
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.sofi-btn{
+  background: #fff;
+  color: var(--text);
+  border: 1px solid rgba(0,0,0,.12);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
+}
+.sofi-btn:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow2);
+}
+.sofi-btn:disabled{
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.sofi-pill{
+  background: rgba(255,255,255,.86);
+  color: var(--text);
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.sofi-pill:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow2);
+}
+
+/* =========================
+   Inputs
+   ========================= */
+.sofi-input{
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(0,0,0,.12);
+  background: rgba(255,255,255,.96);
+  color: var(--text);
+  outline: none;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.sofi-input:focus{
+  border-color: rgba(91,43,190,.55);
+  box-shadow: 0 0 0 4px rgba(91,43,190,.18);
+}
+
+/* Make truncation look clean */
+.sofi-ellipsis{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* =========================
+   Prices page layout (tiles)
+   ========================= */
+.sofi-grid{
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 12px;
+}
+
+.sofi-tile{
+  grid-column: span 4;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,.08);
+  border-radius: var(--radiusLg);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+@media (max-width: 900px){
+  .sofi-tile{ grid-column: span 6; }
+}
+@media (max-width: 600px){
+  .sofi-tile{ grid-column: span 12; }
+}
+
+.sofi-tile .label{
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.sofi-tile .value{
+  margin-top: 6px;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: -0.4px;
+}
+
+.sofi-tile .meta{
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* =========================
+   Spending page table helpers (optional, safe)
+   ========================= */
+.sofi-table{
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 10px; /* “row cards” spacing */
+}
+.sofi-table thead th{
+  text-align: left;
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: rgba(15,23,42,.65);
+  padding: 0 10px 6px;
+}
+.sofi-table tbody tr{
+  background: #fff;
+  box-shadow: var(--shadow2);
+}
+.sofi-table tbody td{
+  padding: 12px 10px;
+  border-top: 1px solid rgba(0,0,0,.06);
+  border-bottom: 1px solid rgba(0,0,0,.06);
+}
+.sofi-table tbody tr td:first-child{
+  border-left: 1px solid rgba(0,0,0,.06);
+  border-top-left-radius: 14px;
+  border-bottom-left-radius: 14px;
+}
+.sofi-table tbody tr td:last-child{
+  border-right: 1px solid rgba(0,0,0,.06);
+  border-top-right-radius: 14px;
+  border-bottom-right-radius: 14px;
+}
+
+/* =========================
+   Compatibility: Your existing Spending.jsx input classes
+   (so once you switch to SoFi theme, inputs still look nice)
+   ========================= */
+input.spend-date,
+input.spend-text{
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,.12);
+  background: rgba(255,255,255,.96);
+  color: var(--text);
+  padding: 10px 12px;
+  outline: none;
+}
+
+input.spend-date:focus,
+input.spend-text:focus{
+  border-color: rgba(91,43,190,.55);
+  box-shadow: 0 0 0 4px rgba(91,43,190,.18);
+}
+
+input.spend-text{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Date picker indicator (keep visible) */
+input.spend-date::-webkit-calendar-picker-indicator{
+  opacity: 1 !important;
+  cursor: pointer;
+}
+
+/* =========================
+   Utility: small status boxes
+   ========================= */
+.sofi-alert{
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255,255,255,.92);
+  border: 1px solid rgba(0,0,0,.10);
+  box-shadow: var(--shadow2);
+  font-size: 13px;
+  color: var(--text);
+}
+.sofi-alert-error{
+  border-color: rgba(220, 38, 38, .35);
+  color: #991b1b;
 }

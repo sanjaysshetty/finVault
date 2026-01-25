@@ -24,7 +24,7 @@ function normalizeDateInput(v) {
   return s.slice(0, 10);
 }
 
-async function fetchAllSpending({ limitPerPage = 200, maxPages = 80, signal }) {
+async function fetchAllSpending({ limitPerPage = 200, maxPages = 80 }) {
   let items = [];
   let nextToken = null;
   let pages = 0;
@@ -34,7 +34,7 @@ async function fetchAllSpending({ limitPerPage = 200, maxPages = 80, signal }) {
     url.searchParams.set("limit", String(limitPerPage));
     if (nextToken) url.searchParams.set("nextToken", nextToken);
 
-    const resp = await fetch(url.toString(), { cache: "no-store", signal });
+    const resp = await fetch(url.toString(), { cache: "no-store" });
     if (!resp.ok) throw new Error(`API ${resp.status} (spending list)`);
     const json = await resp.json();
 
@@ -62,7 +62,7 @@ function groupByReceipt(items) {
         .filter(Boolean)
         .sort()
         .slice(-1)[0] || "";
-    return { receipt, tells: receipt, rows, maxDate };
+    return { receipt, rows, maxDate };
   });
 
   groups.sort((a, b) => (b.maxDate || "").localeCompare(a.maxDate || ""));
@@ -85,7 +85,12 @@ function isBlankLineItem(row) {
 
 function isSummaryRow(row) {
   const d = normDesc(row.productDescription);
-  return d === "SUBTOTAL" || d === "TAX" || d === "TOTAL" || normDesc(row.category) === "SUMMARY";
+  return (
+    d === "SUBTOTAL" ||
+    d === "TAX" ||
+    d === "TOTAL" ||
+    normDesc(row.category) === "SUMMARY"
+  );
 }
 
 function isSubtotalOrTotal(row) {
@@ -99,7 +104,7 @@ function isTax(row) {
 
 function isCountableItem(row) {
   if (isBlankLineItem(row)) return false;
-  if (isSummaryRow(row)) return false; // exclude SUBTOTAL/TAX/TOTAL from count
+  if (isSummaryRow(row)) return false;
   return true;
 }
 
@@ -169,6 +174,11 @@ function blobToJpegFromVideo(videoEl, { quality = 0.85, maxWidth = 1400 } = {}) 
   });
 }
 
+// Stable DOM id helper for date inputs
+function safeDomId(str) {
+  return `date_${String(str).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
 // -------------------- Component --------------------
 
 export default function Spending() {
@@ -195,12 +205,7 @@ export default function Spending() {
     setLoading(true);
     setErr("");
     try {
-      const controller = new AbortController();
-      const items = await fetchAllSpending({
-        limitPerPage: 200,
-        maxPages: 80,
-        signal: controller.signal,
-      });
+      const items = await fetchAllSpending({ limitPerPage: 200, maxPages: 80 });
       setRaw(items);
 
       const groups = groupByReceipt(items);
@@ -226,7 +231,6 @@ export default function Spending() {
   }
 
   function rowKeyFromPkSk(row) {
-    // hidden identity: pk + sk
     return `${row.pk}::${row.sk}`;
   }
 
@@ -262,7 +266,6 @@ export default function Spending() {
     }
   }
 
-  // ✅ Save ONE row at a time using pk+sk
   async function saveRow(row) {
     const pk = row.pk;
     const sk = row.sk;
@@ -479,8 +482,21 @@ export default function Spending() {
     }
   }
 
+  // Opens native picker reliably (Chrome/Edge), with a focus fallback
+  function openDatePickerById(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    try {
+      el.focus();
+      if (typeof el.showPicker === "function") el.showPicker();
+      else el.click();
+    } catch {
+      el.focus();
+    }
+  }
+
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 16px" }}>
+    <div style={{ maxWidth: 1120, margin: "0 auto", padding: "20px 16px" }}>
       <div
         style={{
           display: "flex",
@@ -491,39 +507,75 @@ export default function Spending() {
           marginBottom: 14,
         }}
       >
+        {/* Custom date icon (reliable), hide native indicator */}
         <style>{`
           input.spend-date{
             width:100%;
             box-sizing:border-box;
             background:#0B1220 !important;
-            color:#FFFFFF !important;
+            color:#F9FAFB !important;
             border:1px solid #334155 !important;
             border-radius:10px;
-            padding:8px 10px;
-            color-scheme: dark;
+            padding:8px 44px 8px 10px; /* room for icon */
+            outline:none;
           }
 
-          input.spend-date::-webkit-datetime-edit,
-          input.spend-date::-webkit-datetime-edit-text,
-          input.spend-date::-webkit-datetime-edit-month-field,
-          input.spend-date::-webkit-datetime-edit-day-field,
-          input.spend-date::-webkit-datetime-edit-year-field{
-            color:#FFFFFF;
-          }
-
+          /* Hide native calendar icon (it’s unreliable across themes) */
           input.spend-date::-webkit-calendar-picker-indicator{
-            opacity:1 !important;
-            width:18px;
-            height:18px;
+            opacity: 0 !important;
+            cursor: pointer;
+          }
+
+          .date-wrap{
+            position: relative;
+            width: 100%;
+            min-width: 0;
+          }
+
+          .date-btn{
+            position:absolute;
+            right:10px;
+            top:50%;
+            transform: translateY(-50%);
+            width:28px;
+            height:28px;
+            border-radius:8px;
+            border:1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            display:flex;
+            align-items:center;
+            justify-content:center;
             cursor:pointer;
-            filter: invert(1) brightness(1.2) contrast(1.2) !important;
+            padding:0;
+          }
+
+          .date-btn:hover{
+            background: rgba(255,255,255,0.10);
+            border-color: rgba(255,255,255,0.18);
+          }
+
+          .date-btn svg{
+            width:16px;
+            height:16px;
+            fill: none;
+            stroke: #F9FAFB;
+            stroke-width: 2;
+            opacity: 0.95;
+          }
+
+          input.spend-text{
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
           }
         `}</style>
 
-
         <div>
-          <div style={{ fontSize: 18, fontWeight: 800 }}>Spending</div>
-          <div style={{ marginTop: 4, fontSize: 12, color: "#9CA3AF" }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: "#F9FAFB" }}>Spending</div>
+          <div style={{ marginTop: 4, fontSize: 12, color: "#CBD5F5" }}>
             Upload/Scan Store Receipts
           </div>
         </div>
@@ -534,9 +586,9 @@ export default function Spending() {
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search product description…"
             style={{
-              width: 260,
+              width: 280,
               background: "#0B1220",
-              border: "1px solid #1F2937",
+              border: "1px solid #334155",
               color: "#F9FAFB",
               padding: "10px 12px",
               borderRadius: 12,
@@ -577,9 +629,9 @@ export default function Spending() {
             marginBottom: 10,
             padding: 12,
             borderRadius: 12,
-            border: "1px solid #1F2937",
+            border: "1px solid #334155",
             background: "#0B1220",
-            color: "#9CA3AF",
+            color: "#E5E7EB",
             fontSize: 13,
           }}
         >
@@ -590,7 +642,7 @@ export default function Spending() {
       {scanOpen && (
         <div
           style={{
-            border: "1px solid #1F2937",
+            border: "1px solid #334155",
             borderRadius: 14,
             background: "#0F172A",
             padding: 12,
@@ -598,7 +650,7 @@ export default function Spending() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-            <div style={{ fontWeight: 800 }}>Scan receipt</div>
+            <div style={{ fontWeight: 800, color: "#F9FAFB" }}>Scan receipt</div>
             <button onClick={closeScanner} style={btn(false)}>Close</button>
           </div>
 
@@ -616,7 +668,7 @@ export default function Spending() {
                 width: "100%",
                 maxHeight: 420,
                 borderRadius: 12,
-                border: "1px solid #1F2937",
+                border: "1px solid #334155",
                 background: "#0B1220",
               }}
             />
@@ -624,7 +676,7 @@ export default function Spending() {
               <button onClick={captureAndUpload} disabled={uploading} style={btn(uploading)}>
                 Capture & Upload (JPG)
               </button>
-              <div style={{ fontSize: 12, color: "#9CA3AF", alignSelf: "center" }}>
+              <div style={{ fontSize: 12, color: "#CBD5F5", alignSelf: "center" }}>
                 Tip: hold steady, fill the frame, good lighting.
               </div>
             </div>
@@ -632,7 +684,7 @@ export default function Spending() {
         </div>
       )}
 
-      {loading && <div style={{ color: "#9CA3AF" }}>Loading…</div>}
+      {loading && <div style={{ color: "#CBD5F5" }}>Loading…</div>}
 
       {err && (
         <div
@@ -640,7 +692,7 @@ export default function Spending() {
             marginTop: 10,
             padding: 12,
             borderRadius: 12,
-            border: "1px solid #374151",
+            border: "1px solid #475569",
             background: "#0B1220",
             color: "#FCA5A5",
             fontSize: 13,
@@ -652,7 +704,7 @@ export default function Spending() {
       )}
 
       {!loading && !err && groups.length === 0 && (
-        <div style={{ color: "#9CA3AF" }}>No receipts match your search.</div>
+        <div style={{ color: "#CBD5F5" }}>No receipts match your search.</div>
       )}
 
       {!loading && groups.length > 0 && (
@@ -671,7 +723,7 @@ export default function Spending() {
               <div
                 key={g.receipt}
                 style={{
-                  border: "1px solid #1F2937",
+                  border: "1px solid #334155",
                   borderRadius: 14,
                   background: "#0F172A",
                   overflow: "hidden",
@@ -682,38 +734,66 @@ export default function Spending() {
                   style={{
                     cursor: "pointer",
                     padding: "12px 14px",
-                    display: "flex",
-                    justifyContent: "space-between",
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto auto",
                     alignItems: "center",
-                    gap: 12,
+                    columnGap: 14,
+                    rowGap: 6,
                   }}
                 >
-                  <div style={{ display: "flex", flexDirection: "column" }}>
-                    <div style={{ fontWeight: 800 }}>
+                  <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: 900,
+                        color: "#F9FAFB",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={g.receipt}
+                    >
                       {g.receipt}
-                      <span
-                        style={{
-                          marginLeft: 10,
-                          fontSize: 12,
-                          color: "#9CA3AF",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {g.maxDate || "—"}
-                      </span>
                     </div>
-                    <div style={{ marginTop: 2, fontSize: 12, color: "#9CA3AF" }}>
-                      {totalItems} items · Total {fmtUSD(totalDollars)}
+
+                    <div style={{ marginTop: 2, fontSize: 12, color: "#CBD5F5" }}>
+                      <span className="numeric" style={{ fontWeight: 800, color: "#E5E7EB" }}>
+                        {totalItems}
+                      </span>{" "}
+                      items · Total{" "}
+                      <span className="numeric" style={{ fontWeight: 900, color: "#FFFFFF" }}>
+                        {fmtUSD(totalDollars)}
+                      </span>
                     </div>
                   </div>
 
-                  <div style={{ color: "#9CA3AF", fontWeight: 800 }}>
+                  <div
+                    className="numeric"
+                    style={{
+                      justifySelf: "end",
+                      fontWeight: 800,
+                      color: "#E5E7EB",
+                      opacity: g.maxDate ? 1 : 0.8,
+                    }}
+                    title="Receipt Date"
+                  >
+                    {g.maxDate || "—"}
+                  </div>
+
+                  <div
+                    style={{
+                      justifySelf: "end",
+                      color: "#CBD5F5",
+                      fontWeight: 900,
+                      paddingLeft: 6,
+                    }}
+                    aria-label={isOpen ? "Collapse receipt" : "Expand receipt"}
+                  >
                     {isOpen ? "–" : "+"}
                   </div>
                 </div>
 
                 {isOpen && (
-                  <div style={{ borderTop: "1px solid #1F2937", padding: 12 }}>
+                  <div style={{ borderTop: "1px solid #334155", padding: 12 }}>
                     <div style={{ overflowX: "auto" }}>
                       <table
                         style={{
@@ -724,17 +804,16 @@ export default function Spending() {
                         }}
                       >
                         <colgroup>
-                          <col style={{ width: 190 }} />  {/* Date */}
-                          <col style={{ width: 120 }} />  {/* Code */}
-                          <col />                         {/* Description */}
-                          <col style={{ width: 220 }} />  {/* Category */}
-                          <col style={{ width: 120 }} />  {/* Amount */}
-                          <col style={{ width: 140 }} />  {/* Actions */}
+                          <col style={{ width: 150 }} />
+                          <col style={{ width: 120 }} />
+                          <col style={{ width: 150 }} />
+                          <col style={{ width: 150 }} />
+                          <col style={{ width: 120 }} />
+                          <col style={{ width: 140 }} />
                         </colgroup>
 
-                        {/* ✅ PUT HEADERS BACK */}
                         <thead>
-                          <tr style={{ color: "#9CA3AF" }}>
+                          <tr style={{ color: "#E5E7EB" }}>
                             <th align="left" style={th}>Date</th>
                             <th align="left" style={th}>Code</th>
                             <th align="left" style={th}>Description</th>
@@ -750,7 +829,8 @@ export default function Spending() {
                             .slice()
                             .sort((a, b) => String(a.sk || "").localeCompare(String(b.sk || "")))
                             .map((row) => {
-                              const rowKey = rowKeyFromPkSk(row);
+                              const rowKey = `${row.pk}::${row.sk}`;
+                              const dateId = safeDomId(rowKey);
 
                               const dateVal = normalizeDateInput(mergedValue(row, rowKey, "date"));
                               const desc = mergedValue(row, rowKey, "productDescription");
@@ -758,24 +838,41 @@ export default function Spending() {
                               const amt = mergedValue(row, rowKey, "amount");
 
                               return (
-                                <tr key={row.sk} style={{ borderTop: "1px solid #1F2937" }}>
-                                  {/* ✅ FIXED: style={td} (NOT style={{td}}) */}
+                                <tr key={row.sk} style={{ borderTop: "1px solid #334155" }}>
                                   <td style={{ ...td, overflow: "hidden" }}>
-                                    <input
-                                      className="spend-date"
-                                      type="date"
-                                      value={dateVal}
-                                      onChange={(e) => setEdit(rowKey, "date", e.target.value)}
-                                      style={dateInput()}
-                                    />
+                                    <div className="date-wrap">
+                                      <input
+                                        id={dateId}
+                                        className="spend-date"
+                                        type="date"
+                                        value={dateVal}
+                                        onChange={(e) => setEdit(rowKey, "date", e.target.value)}
+                                        style={dateInput()}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="date-btn"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          openDatePickerById(dateId);
+                                        }}
+                                        aria-label="Pick date"
+                                      >
+                                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                                          <path d="M8 3v3M16 3v3M4 8h16M6 6h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" />
+                                        </svg>
+                                      </button>
+                                    </div>
                                   </td>
 
-                                  <td style={{ ...td, overflow: "hidden" }}>
+                                  <td style={{ ...td, overflow: "hidden", color: "#F9FAFB", fontWeight: 700 }}>
                                     {row.productCode || "—"}
                                   </td>
 
                                   <td style={{ ...td, overflow: "hidden" }}>
                                     <input
+                                      className="spend-text"
                                       value={desc}
                                       onChange={(e) => setEdit(rowKey, "productDescription", e.target.value)}
                                       style={input()}
@@ -784,6 +881,7 @@ export default function Spending() {
 
                                   <td style={{ ...td, overflow: "hidden" }}>
                                     <input
+                                      className="spend-text"
                                       value={cat}
                                       onChange={(e) => setEdit(rowKey, "category", e.target.value)}
                                       style={input()}
@@ -792,6 +890,7 @@ export default function Spending() {
 
                                   <td style={{ ...td, textAlign: "right", overflow: "hidden" }}>
                                     <input
+                                      className="numeric"
                                       value={amt}
                                       onChange={(e) => setEdit(rowKey, "amount", e.target.value)}
                                       style={{ ...input(), textAlign: "right" }}
@@ -820,12 +919,11 @@ export default function Spending() {
                             })}
                         </tbody>
                       </table>
-
                     </div>
 
-                    <div style={{ marginTop: 10, fontSize: 12, color: "#9CA3AF" }}>
+                    <div style={{ marginTop: 10, fontSize: 12, color: "#CBD5F5" }}>
                       Search filters receipts by{" "}
-                      <span style={{ color: "#E5E7EB" }}>Product Description</span>.
+                      <span style={{ color: "#FFFFFF", fontWeight: 800 }}>Product Description</span>.
                     </div>
                   </div>
                 )}
@@ -839,32 +937,31 @@ export default function Spending() {
 }
 
 /* Styles */
-const th = { padding: "10px 8px", fontWeight: 700, fontSize: 12 };
+const th = { padding: "10px 8px", fontWeight: 800, fontSize: 12, opacity: 0.95 };
 const td = { padding: "10px 8px", verticalAlign: "top" };
 
 function input() {
   return {
     width: "100%",
     background: "#0B1220",
-    border: "1px solid #1F2937",
+    border: "1px solid #334155",
     color: "#F9FAFB",
     padding: "8px 10px",
     borderRadius: 10,
     outline: "none",
-    minWidth: 0,          // ✅ critical
+    minWidth: 0,
     boxSizing: "border-box",
   };
 }
-
 
 function btn(disabled) {
   return {
     padding: "10px 14px",
     borderRadius: 12,
-    border: "1px solid #1F2937",
+    border: "1px solid #334155",
     background: disabled ? "#0B1220" : "#0F172A",
-    color: disabled ? "#6B7280" : "#F9FAFB",
-    fontWeight: 700,
+    color: disabled ? "#94A3B8" : "#F9FAFB",
+    fontWeight: 800,
     cursor: disabled ? "not-allowed" : "pointer",
   };
 }
@@ -873,10 +970,10 @@ function btnSmall(disabled) {
   return {
     padding: "8px 10px",
     borderRadius: 10,
-    border: "1px solid #1F2937",
+    border: "1px solid #334155",
     background: disabled ? "#0B1220" : "#0F172A",
-    color: disabled ? "#6B7280" : "#F9FAFB",
-    fontWeight: 800,
+    color: disabled ? "#94A3B8" : "#F9FAFB",
+    fontWeight: 900,
     cursor: disabled ? "not-allowed" : "pointer",
     marginRight: 8,
   };
@@ -888,8 +985,8 @@ function btnDanger(disabled) {
     borderRadius: 10,
     border: "1px solid #7F1D1D",
     background: disabled ? "#0B1220" : "#1F0B10",
-    color: disabled ? "#6B7280" : "#FCA5A5",
-    fontWeight: 800,
+    color: disabled ? "#94A3B8" : "#FCA5A5",
+    fontWeight: 900,
     cursor: disabled ? "not-allowed" : "pointer",
   };
 }
@@ -897,10 +994,8 @@ function btnDanger(disabled) {
 function dateInput() {
   return {
     ...input(),
-    minWidth: 0,          // ✅ critical: prevents overflow into next column
+    minWidth: 0,
     width: "100%",
     boxSizing: "border-box",
-    padding: "8px 10px",
   };
 }
-
