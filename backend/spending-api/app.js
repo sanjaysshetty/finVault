@@ -6,18 +6,22 @@ const {
   PutCommand,
   UpdateCommand,
   DeleteCommand,
+  GetCommand,
 } = require("@aws-sdk/lib-dynamodb");
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
+  marshallOptions: { removeUndefinedValues: true },
+});
 
-// ✅ IMPORTANT: default table name so GET /spending doesn't 500 if env var missing
+// ✅ default table name so GET /spending doesn't 500 if env var missing
 const TABLE_NAME = process.env.TABLE_NAME || "ReceiptLedger";
 
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    // Include Authorization because we now use Cognito JWT
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
   };
@@ -42,6 +46,18 @@ function parseBody(event) {
   } catch {
     throw new Error("Invalid JSON body");
   }
+}
+
+function getUserIdFromJwt(event) {
+  // HTTP API JWT authorizer puts claims here
+  const claims = event?.requestContext?.authorizer?.jwt?.claims || {};
+  const sub = claims.sub;
+  if (!sub) {
+    const err = new Error("Unauthorized");
+    err.statusCode = 401;
+    throw err;
+  }
+  return sub;
 }
 
 function normalizeReceipt(receiptParam) {
@@ -142,10 +158,40 @@ function buildUpdateExpression(input) {
   };
 }
 
+async function getItemOrNull(pk, sk) {
+  const resp = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { pk, sk },
+    })
+  );
+  return resp.Item || null;
+}
+
+function assertOwned(item, userId) {
+  if (!item) {
+    const err = new Error("Item not found");
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!item.userId) {
+    // legacy item without ownership
+    const err = new Error("Forbidden");
+    err.statusCode = 403;
+    throw err;
+  }
+  if (item.userId !== userId) {
+    const err = new Error("Forbidden");
+    err.statusCode = 403;
+    throw err;
+  }
+}
+
 /* -------------------- Handlers -------------------- */
 
 async function listSpending(event) {
   requireTableName();
+  const userId = getUserIdFromJwt(event);
 
   const qs = event.queryStringParameters || {};
   const limit = Math.max(1, Math.min(200, Number(qs.limit) || 50));
@@ -171,7 +217,10 @@ async function listSpending(event) {
         TableName: TABLE_NAME,
         IndexName: "GSI1",
         KeyConditionExpression: "gsi1pk = :pk",
-        ExpressionAttributeValues: { ":pk": `DATE#${d}` },
+        ExpressionAttributeValues: { ":pk": `DATE#${d}`, ":uid": userId },
+        // Enforce user isolation even on GSI query
+        FilterExpression: "#uid = :uid",
+        ExpressionAttributeNames: { "#uid": "userId" },
         Limit: limit,
         ExclusiveStartKey: exclusiveStartKey,
       })
@@ -184,9 +233,13 @@ async function listSpending(event) {
     return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
   }
 
+  // Fallback: Scan and filter by userId (fine for small scale)
   const resp = await ddb.send(
     new ScanCommand({
       TableName: TABLE_NAME,
+      FilterExpression: "#uid = :uid",
+      ExpressionAttributeNames: { "#uid": "userId" },
+      ExpressionAttributeValues: { ":uid": userId },
       Limit: limit,
       ExclusiveStartKey: exclusiveStartKey,
     })
@@ -199,9 +252,10 @@ async function listSpending(event) {
   return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
 }
 
-// Old style: receipt -> pk=RECEIPT#receipt
+// receipt -> pk=RECEIPT#receipt
 async function getReceipt(event) {
   requireTableName();
+  const userId = getUserIdFromJwt(event);
 
   const receipt = normalizeReceipt(event.pathParameters?.receipt);
   const pk = `RECEIPT#${receipt}`;
@@ -210,16 +264,19 @@ async function getReceipt(event) {
     new QueryCommand({
       TableName: TABLE_NAME,
       KeyConditionExpression: "pk = :pk",
-      ExpressionAttributeValues: { ":pk": pk },
+      ExpressionAttributeValues: { ":pk": pk, ":uid": userId },
+      FilterExpression: "#uid = :uid",
+      ExpressionAttributeNames: { "#uid": "userId" },
     })
   );
 
   return json(200, { receipt, items: resp.Items || [] });
 }
 
-// (Optional) create uses LINE#000001 format. Keep for compatibility.
+// create uses LINE#000001 format. Keep for compatibility.
 async function createItem(event) {
   requireTableName();
+  const userId = getUserIdFromJwt(event);
 
   const body = parseBody(event);
 
@@ -244,6 +301,7 @@ async function createItem(event) {
     category: typeof body.category === "string" ? body.category.trim() : "",
     gsi1pk: d ? `DATE#${d}` : "DATE#UNKNOWN",
     gsi1sk: `${pk}#${sk}`,
+    userId, // ✅ ownership set by auth, not client
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -262,6 +320,7 @@ async function createItem(event) {
 // OLD update: receipt + lineId => LINE#000002
 async function updateItemByReceiptLine(event) {
   requireTableName();
+  const userId = getUserIdFromJwt(event);
 
   const receipt = normalizeReceipt(event.pathParameters?.receipt);
   const lineId = normalizeLineId(event.pathParameters?.lineId);
@@ -269,6 +328,10 @@ async function updateItemByReceiptLine(event) {
 
   const pk = `RECEIPT#${receipt}`;
   const sk = `LINE#${pad6(lineId)}`;
+
+  // ✅ ownership check
+  const existing = await getItemOrNull(pk, sk);
+  assertOwned(existing, userId);
 
   const { UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues } =
     buildUpdateExpression(body);
@@ -291,11 +354,16 @@ async function updateItemByReceiptLine(event) {
 // ✅ NEW update: true pk/sk (supports ITEM#0001 etc)
 async function updateItemByPkSk(event) {
   requireTableName();
+  const userId = getUserIdFromJwt(event);
 
   const pk = decodeURIComponent(event.pathParameters?.pk || "").trim();
   const sk = decodeURIComponent(event.pathParameters?.sk || "").trim();
   if (!pk) throw new Error("Missing pk");
   if (!sk) throw new Error("Missing sk");
+
+  // ✅ ownership check
+  const existing = await getItemOrNull(pk, sk);
+  assertOwned(existing, userId);
 
   const body = parseBody(event);
 
@@ -319,12 +387,17 @@ async function updateItemByPkSk(event) {
 
 async function deleteItemByReceiptLine(event) {
   requireTableName();
+  const userId = getUserIdFromJwt(event);
 
   const receipt = normalizeReceipt(event.pathParameters?.receipt);
   const lineId = normalizeLineId(event.pathParameters?.lineId);
 
   const pk = `RECEIPT#${receipt}`;
   const sk = `LINE#${pad6(lineId)}`;
+
+  // ✅ ownership check
+  const existing = await getItemOrNull(pk, sk);
+  assertOwned(existing, userId);
 
   await ddb.send(
     new DeleteCommand({
@@ -340,11 +413,16 @@ async function deleteItemByReceiptLine(event) {
 // ✅ NEW delete: true pk/sk
 async function deleteItemByPkSk(event) {
   requireTableName();
+  const userId = getUserIdFromJwt(event);
 
   const pk = decodeURIComponent(event.pathParameters?.pk || "").trim();
   const sk = decodeURIComponent(event.pathParameters?.sk || "").trim();
   if (!pk) throw new Error("Missing pk");
   if (!sk) throw new Error("Missing sk");
+
+  // ✅ ownership check
+  const existing = await getItemOrNull(pk, sk);
+  assertOwned(existing, userId);
 
   await ddb.send(
     new DeleteCommand({
@@ -374,7 +452,7 @@ exports.handler = async (event) => {
     if (method === "GET" && rawPath.startsWith("/spending/receipt/"))
       return await getReceipt(event);
 
-    // ✅ NEW pk/sk update/delete routes
+    // ✅ pk/sk update/delete routes
     if (method === "PATCH" && rawPath.startsWith("/spending/item/"))
       return await updateItemByPkSk(event);
 
@@ -392,11 +470,20 @@ exports.handler = async (event) => {
   } catch (e) {
     const msg = String(e?.message || e);
 
-    if (msg.includes("ConditionalCheckFailed")) return json(404, { error: "Item not found" });
-    if (msg.includes("Invalid JSON")) return json(400, { error: msg });
-    if (msg.includes("No editable fields")) return json(400, { error: msg });
-    if (msg.includes("Missing") || msg.includes("Invalid")) return json(400, { error: msg });
+    const code = e?.statusCode || (
+      msg.includes("Unauthorized") ? 401 :
+      msg.includes("Forbidden") ? 403 :
+      msg.includes("ConditionalCheckFailed") ? 404 :
+      msg.includes("Invalid JSON") ? 400 :
+      msg.includes("No editable fields") ? 400 :
+      msg.includes("Missing") || msg.includes("Invalid") ? 400 :
+      500
+    );
 
-    return json(500, { error: "Server error", detail: msg });
+    if (code === 404) return json(404, { error: "Item not found" });
+    if (code === 401) return json(401, { error: "Unauthorized" });
+    if (code === 403) return json(403, { error: "Forbidden" });
+
+    return json(code, { error: code === 500 ? "Server error" : "Bad Request", detail: msg });
   }
 };

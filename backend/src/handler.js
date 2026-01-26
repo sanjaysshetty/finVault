@@ -8,11 +8,13 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    // ✅ add Authorization
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
   };
 }
+
 
 /* -------------------- Fetch with timeout -------------------- */
 async function fetchWithTimeout(url, options = {}, timeoutMs = 4000) {
