@@ -11,18 +11,36 @@ import Options from "./pages/Options";
 import FixedIncome from "./pages/FixedIncome";
 import SpendingDash from "./pages/SpendingDash";
 
+import AuthCallback from "./auth/AuthCallback";
+import RequireAuth from "./auth/RequireAuth";
+
 import "./App.css";
+
+// ✅ Works in both dev (/) and prod (/app) without changing code
+function computeBasename() {
+  const p = window.location.pathname || "/";
+  return p.startsWith("/app") ? "/app" : "/";
+}
 
 export default function App() {
   return (
-    // ✅ Critical: makes /app/ behave like "/"
-    <BrowserRouter basename={import.meta.env.BASE_URL}>
+    <BrowserRouter basename={computeBasename()}>
       <Routes>
-        <Route element={<Shell />}>
-          {/* ✅ Default page should be Portfolio */}
+        {/* ✅ callback must be outside auth guard */}
+        <Route path="/auth/callback" element={<AuthCallback />} />
+
+        {/* ✅ everything else requires login */}
+        <Route
+          element={
+            <RequireAuth>
+              <Shell />
+            </RequireAuth>
+          }
+        >
+          {/* Default */}
           <Route path="/" element={<Navigate to="/assets/portfolio" replace />} />
 
-          {/* Prices page (optional, since prices show in top bar now) */}
+          {/* Prices */}
           <Route path="/prices" element={<Prices />} />
 
           {/* Assets */}
@@ -30,8 +48,6 @@ export default function App() {
           <Route path="/assets/stocks" element={<Stocks />} />
           <Route path="/assets/bullion" element={<Bullion />} />
           <Route path="/assets/options" element={<Options />} />
-
-          {/* ✅ MUST match SideNav link: /assets/fixedincome */}
           <Route path="/assets/fixedincome" element={<FixedIncome />} />
 
           {/* Spending */}
@@ -39,7 +55,7 @@ export default function App() {
           <Route path="/spending/receipts-ledger" element={<Spending />} />
         </Route>
 
-        {/* ✅ For any unknown route, go to Portfolio (not Prices) */}
+        {/* Fallback */}
         <Route path="*" element={<Navigate to="/assets/portfolio" replace />} />
       </Routes>
     </BrowserRouter>

@@ -9,9 +9,8 @@ function json(statusCode, bodyObj, extraHeaders = {}) {
     statusCode,
     headers: {
       "Content-Type": "application/json",
-      // CORS (adjust origin if you want to lock it down)
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "content-type",
+      "Access-Control-Allow-Headers": "content-type,authorization",
       "Access-Control-Allow-Methods": "POST,OPTIONS",
       ...extraHeaders,
     },
@@ -28,7 +27,7 @@ function sanitizeFilename(name) {
 function isAllowedContentType(ct) {
   if (!ct) return false;
   if (ct === "application/pdf") return true;
-  if (ct.startsWith("image/")) return true; // image/jpeg, image/png, image/webp, etc.
+  if (ct.startsWith("image/")) return true;
   return false;
 }
 
@@ -37,22 +36,29 @@ function extFromContentType(ct, fallbackName) {
   if (ct === "image/jpeg") return ".jpg";
   if (ct === "image/png") return ".png";
   if (ct === "image/webp") return ".webp";
-
-  // fallback to filename extension if present
   const m = String(fallbackName || "").match(/(\.[a-zA-Z0-9]+)$/);
   return m ? m[1].toLowerCase() : "";
 }
 
+function getUserIdFromJwt(event) {
+  // HTTP API JWT authorizer
+  const claims = event?.requestContext?.authorizer?.jwt?.claims || {};
+  // Prefer sub; fallback to username
+  return claims.sub || claims["cognito:username"] || "";
+}
+
 exports.handler = async (event) => {
-  // If you didn't configure CORS at the API level, this covers preflight.
   if (event?.requestContext?.http?.method === "OPTIONS") {
     return json(200, { ok: true });
   }
 
   try {
+    const userId = getUserIdFromJwt(event);
+    if (!userId) return json(401, { error: "Unauthorized" });
+
     const bucket = process.env.RECEIPTS_BUCKET || "finapp-receipts-1152";
     const prefix = process.env.RECEIPTS_PREFIX || "receipts/";
-    const expiresIn = Number(process.env.PRESIGN_EXPIRES_SECONDS || "300"); // 5 min default
+    const expiresIn = Number(process.env.PRESIGN_EXPIRES_SECONDS || "300");
 
     let body = event.body;
     if (event.isBase64Encoded) body = Buffer.from(event.body, "base64").toString("utf-8");
@@ -65,29 +71,27 @@ exports.handler = async (event) => {
       return json(400, { error: `Unsupported contentType: ${contentType}` });
     }
 
-    // key: receipts/<timestamp>-<rand><ext>
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
     const rand = crypto.randomBytes(6).toString("hex");
     const ext = extFromContentType(contentType, filename) || "";
-    const key = `${prefix}${ts}-${rand}${ext}`;
+
+    // ✅ Put userId into key path (easiest + efficient)
+    // receipts/<userId>/<timestamp>-<rand>.<ext>
+    const key = `${prefix}${userId}/${ts}-${rand}${ext}`;
 
     const cmd = new PutObjectCommand({
       Bucket: bucket,
       Key: key,
       ContentType: contentType,
-      // Optional hardening:
-      // ServerSideEncryption: "AES256",
+      // ✅ userId metadata (also useful if you later change key scheme)
+      Metadata: {
+        userid: userId,
+      },
     });
 
     const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn });
 
-    return json(200, {
-      uploadUrl,
-      key,
-      bucket,
-      expiresIn,
-      contentType,
-    });
+    return json(200, { uploadUrl, key, bucket, expiresIn, contentType });
   } catch (err) {
     console.error("upload-url error:", err);
     return json(500, { error: "Failed to create presigned url", detail: String(err?.message || err) });

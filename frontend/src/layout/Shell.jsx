@@ -16,26 +16,21 @@ export default function Shell() {
     localStorage.setItem("finvault.navCollapsed", navCollapsed ? "1" : "0");
   }, [navCollapsed]);
 
+  // Mobile redirect safety (keeps your existing behavior)
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const mobileTarget = "/spending/receipts-ledger";
 
-// ✅ Mobile behavior: always show Spending ledger
-useEffect(() => {
-  const mq = window.matchMedia("(max-width: 768px)");
-  const MOBILE_TARGET = "spending/receipts-ledger";
+    const enforce = () => {
+      if (mq.matches && location.pathname.startsWith("/assets/")) {
+        navigate(mobileTarget, { replace: true });
+      }
+    };
 
-  const enforceMobileRoute = () => {
-    if (mq.matches && !location.pathname.endsWith("/spending/receipts-ledger")) {
-      navigate(MOBILE_TARGET, { replace: true });
-    }
-  };
-
-  enforceMobileRoute();
-  mq.addEventListener("change", enforceMobileRoute);
-
-  return () => {
-    mq.removeEventListener("change", enforceMobileRoute);
-  };
-}, [location.pathname, navigate]);
-
+    enforce();
+    mq.addEventListener("change", enforce);
+    return () => mq.removeEventListener("change", enforce);
+  }, [location.pathname, navigate]);
 
   return (
     <div className={`app-shell ${navCollapsed ? "nav-collapsed" : ""}`}>

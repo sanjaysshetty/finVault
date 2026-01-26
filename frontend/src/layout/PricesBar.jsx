@@ -1,6 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE;
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_BASE || "").replace(
+  /\/+$/,
+  ""
+);
+
+function getAuthToken() {
+  return (
+    sessionStorage.getItem("finvault.accessToken") ||
+    sessionStorage.getItem("finvault.idToken") ||
+    ""
+  );
+}
+
+async function authedFetch(url, options = {}) {
+  const token = getAuthToken();
+  const headers = { ...(options.headers || {}) };
+
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  return fetch(url, { ...options, headers, cache: "no-store" });
+}
 
 function fmtUSD(x) {
   if (typeof x !== "number") return "—";
@@ -103,7 +123,6 @@ function MiniCard({ label, value, accent }) {
         {label}
       </div>
 
-      {/* Finance recommendation: tabular numbers */}
       <div
         className="numeric"
         style={{
@@ -129,7 +148,7 @@ export default function PricesBar() {
   async function load() {
     setLoading(true);
     try {
-      const resp = await fetch(apiUrl, { cache: "no-store" });
+      const resp = await authedFetch(apiUrl);
       if (!resp.ok) throw new Error(`API ${resp.status}`);
       setData(await resp.json());
     } finally {
@@ -169,17 +188,8 @@ export default function PricesBar() {
         accent={priceColor(silver?.price, silver?.prev_close_price)}
       />
 
-      <MiniCard
-        label="BTC"
-        value={loading ? "…" : fmtMaybeNumberUSD(btcMid)}
-        accent="#F59E0B"
-      />
-
-      <MiniCard
-        label="ETH"
-        value={loading ? "…" : fmtMaybeNumberUSD(ethMid)}
-        accent="#F59E0B"
-      />
+      <MiniCard label="BTC" value={loading ? "…" : fmtMaybeNumberUSD(btcMid)} accent="#F59E0B" />
+      <MiniCard label="ETH" value={loading ? "…" : fmtMaybeNumberUSD(ethMid)} accent="#F59E0B" />
 
       <button
         onClick={load}

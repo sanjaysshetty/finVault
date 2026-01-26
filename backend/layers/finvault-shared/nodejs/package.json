@@ -1,0 +1,10 @@
+{
+  "name": "finvault-layer-root",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "finvault-shared": "file:./finvault-shared"
+  }
+}

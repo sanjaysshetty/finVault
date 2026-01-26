@@ -1,6 +1,43 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE;
+function getApiBase() {
+  const envBase = (import.meta?.env?.VITE_API_BASE_URL || "").trim();
+  if (envBase) return envBase.replace(/\/+$/, "");
+  const winBase = (window?.__FINVAULT_API_BASE_URL || "").trim?.() || "";
+  if (winBase) return winBase.replace(/\/+$/, "");
+  if (import.meta.env.DEV) {
+    console.error("VITE_API_BASE_URL is missing. Requests will hit localhost and return HTML.");
+  }
+  return ""; // allow relative as fallback (prod may proxy)
+}
+
+function getAccessToken() {
+  return (
+    sessionStorage.getItem("finvault.accessToken") ||
+    sessionStorage.getItem("access_token") ||
+    sessionStorage.getItem("token") ||
+    ""
+  );
+}
+
+function authHeaders(extra = {}) {
+  const t = getAccessToken();
+  return {
+    ...extra,
+    ...(t ? { Authorization: `Bearer ${t}` } : {}),
+  };
+}
+
+const API_BASE = getApiBase();
+
+// ✅ NEW: safe URL builder (works with API_BASE="" too)
+function apiUrl(path) {
+  // ensure path starts with "/"
+  const p = path.startsWith("/") ? path : `/${path}`;
+  // If API_BASE is set, use it. Otherwise use current origin (prevents Invalid URL).
+  const base = API_BASE || window.location.origin;
+  return new URL(p, base);
+}
 
 function fmtUSD(x) {
   const n = typeof x === "string" ? Number(x) : x;
@@ -30,11 +67,14 @@ async function fetchAllSpending({ limitPerPage = 200, maxPages = 80 }) {
   let pages = 0;
 
   do {
-    const url = new URL(`${API_BASE}/spending`);
+    const url = apiUrl("/spending");
     url.searchParams.set("limit", String(limitPerPage));
     if (nextToken) url.searchParams.set("nextToken", nextToken);
 
-    const resp = await fetch(url.toString(), { cache: "no-store" });
+    const resp = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: authHeaders(),
+    });
     if (!resp.ok) throw new Error(`API ${resp.status} (spending list)`);
     const json = await resp.json();
 
@@ -49,8 +89,7 @@ async function fetchAllSpending({ limitPerPage = 200, maxPages = 80 }) {
 function groupByReceipt(items) {
   const map = new Map();
   for (const it of items) {
-    const receipt =
-      it.receipt || (it.pk ? String(it.pk).replace("RECEIPT#", "") : "UNKNOWN");
+    const receipt = it.receipt || (it.pk ? String(it.pk).replace("RECEIPT#", "") : "UNKNOWN");
     if (!map.has(receipt)) map.set(receipt, []);
     map.get(receipt).push(it);
   }
@@ -85,12 +124,7 @@ function isBlankLineItem(row) {
 
 function isSummaryRow(row) {
   const d = normDesc(row.productDescription);
-  return (
-    d === "SUBTOTAL" ||
-    d === "TAX" ||
-    d === "TOTAL" ||
-    normDesc(row.category) === "SUMMARY"
-  );
+  return d === "SUBTOTAL" || d === "TAX" || d === "TOTAL" || normDesc(row.category) === "SUMMARY";
 }
 
 function isSubtotalOrTotal(row) {
@@ -110,13 +144,12 @@ function isCountableItem(row) {
 
 function isIncludedInDollarTotal(row) {
   if (isBlankLineItem(row)) return false;
-  if (isSubtotalOrTotal(row)) return false; // exclude SUBTOTAL + TOTAL from dollars
-  if (isTax(row)) return true; // include TAX
+  if (isSubtotalOrTotal(row)) return false;
+  if (isTax(row)) return true;
   if (normDesc(row.category) === "SUMMARY") return false;
   return true;
 }
 
-// Suppress ONLY when both productCode and productDescription are missing
 function shouldDisplayRow(row) {
   const code = String(row?.productCode ?? "").trim();
   const desc = String(row?.productDescription ?? "").trim();
@@ -132,13 +165,14 @@ function sanitizeFilename(name) {
 }
 
 async function getPresignedUploadUrl({ filename, contentType }) {
-  const resp = await fetch(`${API_BASE}/receipts/upload-url`, {
+  const url = apiUrl("/receipts/upload-url");
+  const resp = await fetch(url.toString(), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ filename, contentType }),
   });
   if (!resp.ok) throw new Error(`Failed to get upload URL (${resp.status})`);
-  return resp.json(); // { uploadUrl, key }
+  return resp.json();
 }
 
 async function uploadToS3WithPresignedUrl({ fileOrBlob, filename, contentType }) {
@@ -174,7 +208,6 @@ function blobToJpegFromVideo(videoEl, { quality = 0.85, maxWidth = 1400 } = {}) 
   });
 }
 
-// Stable DOM id helper for date inputs
 function safeDomId(str) {
   return `date_${String(str).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
@@ -282,7 +315,7 @@ export default function Spending() {
     setErr("");
 
     try {
-      const url = `${API_BASE}/spending/item/${encodeURIComponent(pk)}/${encodeURIComponent(sk)}`;
+      const url = apiUrl(`/spending/item/${encodeURIComponent(pk)}/${encodeURIComponent(sk)}`);
 
       const body = {
         date: patch.date !== undefined ? normalizeDateInput(patch.date) : undefined,
@@ -293,9 +326,9 @@ export default function Spending() {
       };
       Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
 
-      const resp = await fetch(url, {
+      const resp = await fetch(url.toString(), {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
 
@@ -330,16 +363,15 @@ export default function Spending() {
     }
 
     const key = rowKeyFromPkSk(row);
-
     if (!confirm(`Delete item ${sk} from ${pk}?`)) return;
 
     setDeleting((p) => ({ ...p, [key]: true }));
     setErr("");
 
     try {
-      const url = `${API_BASE}/spending/item/${encodeURIComponent(pk)}/${encodeURIComponent(sk)}`;
+      const url = apiUrl(`/spending/item/${encodeURIComponent(pk)}/${encodeURIComponent(sk)}`);
+      const resp = await fetch(url.toString(), { method: "DELETE", headers: authHeaders() });
 
-      const resp = await fetch(url, { method: "DELETE" });
       if (!resp.ok) {
         const msg = await readErrorText(resp);
         throw new Error(`DELETE failed: ${resp.status} ${msg}`.trim());
@@ -482,7 +514,6 @@ export default function Spending() {
     }
   }
 
-  // Opens native picker reliably (Chrome/Edge), with a focus fallback
   function openDatePickerById(id) {
     const el = document.getElementById(id);
     if (!el) return;

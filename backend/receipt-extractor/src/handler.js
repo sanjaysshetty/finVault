@@ -1,8 +1,8 @@
 // backend/receipt-extractor/src/handler.js
 //
 // S3-triggered receipt extractor Lambda (images only).
-// CHANGE: receiptId now uses: <StoreName>-<ReceiptDate>-<UniqueID>
-// Example: Walmart-01-24-2026-feffa2087d299d5d
+// receiptId format: <StoreName>_<MM-DD-YYYY>_<UniqueID>
+// Example: Costco_01-24-2026_feffa2087d299d5d
 //
 // Required env vars:
 //   OPENAI_API_KEY
@@ -14,7 +14,7 @@
 
 import crypto from "crypto";
 import OpenAI from "openai";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 
@@ -22,7 +22,7 @@ import { DynamoDBDocumentClient, PutCommand, BatchWriteCommand } from "@aws-sdk/
 const s3 = new S3Client({});
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
-// -------------------- Helpers (define BEFORE handler) --------------------
+/* -------------------- Helpers -------------------- */
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -52,7 +52,6 @@ function guessMimeType(contentType, key) {
 
 /**
  * Deterministic unique id derived from S3 bucket+key.
- * (Same concept as before, but returns only the hex slice without the S3- prefix.)
  */
 function buildUniqueIdFromS3(bucket, key) {
   return crypto
@@ -68,7 +67,6 @@ function simplifyStoreName(store) {
 
   const upper = raw.toUpperCase();
 
-  // Common normalizations (add more if you want)
   if (upper.includes("COSTCO")) return "Costco";
   if (upper.includes("WALMART") || upper.includes("WAL-MART")) return "Walmart";
   if (upper.includes("TARGET")) return "Target";
@@ -78,12 +76,8 @@ function simplifyStoreName(store) {
   if (upper.includes("TRADER JOE")) return "TraderJoes";
   if (upper.includes("SAFEWAY")) return "Safeway";
 
-  // Fallback: take the first "word-like" token and TitleCase it
-  // Examples:
-  // "Costco Wholesale W Katy 1167" -> "Costco" (would've matched above anyway)
-  // "HEB #123" -> "Heb"
   const token = raw
-    .replace(/[^a-zA-Z0-9 ]+/g, " ") // remove punctuation to spaces
+    .replace(/[^a-zA-Z0-9 ]+/g, " ")
     .trim()
     .split(/\s+/)[0];
 
@@ -93,7 +87,6 @@ function simplifyStoreName(store) {
 
 /**
  * Convert YYYY-MM-DD -> MM-DD-YYYY
- * If missing/invalid, return "UnknownDate"
  */
 function formatReceiptDateMMDDYYYY(purchaseDate) {
   const s = String(purchaseDate ?? "").trim();
@@ -106,8 +99,6 @@ function formatReceiptDateMMDDYYYY(purchaseDate) {
 /**
  * Final format:
  *   <Store>_<MM-DD-YYYY>_<UniqueID>
- * Example:
- *   Costco_01-18-2026_c57e3c2cf07d243e
  */
 function buildReceiptId({ store, purchaseDate, uniqueId }) {
   const storePart = simplifyStoreName(store);
@@ -121,9 +112,29 @@ function shouldProcessKey(key) {
   return true;
 }
 
+async function resolveUserIdFromS3({ bucket, key }) {
+  // 1) Try metadata (best)
+  try {
+    const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    const meta = head?.Metadata || {};
+    if (meta.userid) return String(meta.userid);
+    if (meta.userId) return String(meta.userId);
+  } catch (e) {
+    console.log("HeadObject metadata lookup failed (continuing):", String(e?.message || e));
+  }
+
+  // 2) Fallback: parse from key receipts/<userId>/...
+  const parts = String(key || "").split("/");
+  const idx = parts.indexOf("receipts");
+  if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
+
+  // Or: prefix/<userId>/...
+  if (parts.length >= 2) return parts[1];
+
+  return "";
+}
+
 function buildReceiptSchema() {
-  // CHANGE:
-  // - totals are now modeled as separate "summaryLines" so we can store them as line items.
   return {
     type: "object",
     additionalProperties: false,
@@ -133,15 +144,11 @@ function buildReceiptSchema() {
         additionalProperties: false,
         properties: {
           store: { type: ["string", "null"] },
-          purchaseDate: {
-            type: ["string", "null"],
-            description: "YYYY-MM-DD if present; otherwise null",
-          },
+          purchaseDate: { type: ["string", "null"], description: "YYYY-MM-DD if present; otherwise null" },
           currency: { type: ["string", "null"], description: "e.g., USD" },
         },
         required: ["store", "purchaseDate", "currency"],
       },
-      // Regular purchasable items only
       lines: {
         type: "array",
         items: {
@@ -155,21 +162,12 @@ function buildReceiptSchema() {
             category: { type: ["string", "null"] },
             rawText: { type: ["string", "null"] },
           },
-          required: [
-            "lineId",
-            "productCode",
-            "productDescription",
-            "amount",
-            "category",
-            "rawText",
-          ],
+          required: ["lineId", "productCode", "productDescription", "amount", "category", "rawText"],
         },
       },
-      // Summary lines that must exist as separate line items
       summaryLines: {
         type: "array",
-        description:
-          "Must include exactly these types: SUBTOTAL, TAX, TOTAL (amount can be null if missing).",
+        description: "Must include exactly these types: SUBTOTAL, TAX, TOTAL (amount can be null if missing).",
         items: {
           type: "object",
           additionalProperties: false,
@@ -213,10 +211,8 @@ async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
           "Category requirement (IMPORTANT):\n" +
           "- For EVERY object in 'lines', you MUST provide a category.\n" +
           "- Do NOT leave 'category' null or empty.\n" +
-          "- You must infer the most accurate category from the item description/code and receipt context.\n" +
-          "- Use short, human-readable categories (1–3 words) like: Produce, Dairy, Meat, Bakery, Snacks, Beverages,\n" +
-          "  Frozen, Pantry, Household, Personal Care, Pharmacy, Electronics, Clothing, Home, Automotive, Pet, etc.\n" +
-          "- If you are genuinely unsure, set category to \"Uncategorized\" (never null).\n" +
+          "- Infer the most accurate category.\n" +
+          "- If unsure, set category to \"Uncategorized\" (never null).\n" +
           "\n" +
           "Missing fields:\n" +
           "- If a field besides 'category' is missing/unclear, use null.\n",
@@ -224,10 +220,7 @@ async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
       {
         role: "user",
         content: [
-          {
-            type: "input_text",
-            text: "Extract receipt line items and summary totals from this receipt image.",
-          },
+          { type: "input_text", text: "Extract receipt line items and summary totals from this receipt image." },
           { type: "input_image", image_url: dataUrl },
         ],
       },
@@ -247,7 +240,6 @@ async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
 }
 
 function normalizeSummaryLines(summaryLines) {
-  // Ensure we always have all 3, even if model returns only 1-2 (defensive).
   const base = [
     { type: "SUBTOTAL", amount: null, rawText: null },
     { type: "TAX", amount: null, rawText: null },
@@ -269,12 +261,30 @@ function normalizeSummaryLines(summaryLines) {
   return ["SUBTOTAL", "TAX", "TOTAL"].map((t) => map.get(t));
 }
 
-async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted }) {
+async function batchWriteAll(table, requests) {
+  // BatchWrite max 25; also handle UnprocessedItems with retries
+  for (let i = 0; i < requests.length; i += 25) {
+    let chunk = requests.slice(i, i + 25);
+
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const resp = await ddb.send(new BatchWriteCommand({ RequestItems: { [table]: chunk } }));
+      const unprocessed = resp?.UnprocessedItems?.[table] || [];
+      if (!unprocessed.length) break;
+
+      chunk = unprocessed;
+      const backoff = 200 * Math.pow(2, attempt); // 200,400,800...
+      console.log(`BatchWrite unprocessed=${unprocessed.length}, retrying in ${backoff}ms`);
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+}
+
+async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, userId }) {
   const table = requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
   const purchaseDate = extracted?.receipt?.purchaseDate ?? null;
 
-  // META row stays (useful for status + linking back to S3)
+  // META row
   await ddb.send(
     new PutCommand({
       TableName: table,
@@ -282,6 +292,7 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted }
         pk: `RECEIPT#${receiptId}`,
         sk: `META#${receiptId}`,
         receiptId,
+        userId, // ✅ include
         date: purchaseDate,
         store: extracted?.receipt?.store ?? null,
         currency: extracted?.receipt?.currency ?? "USD",
@@ -296,7 +307,6 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted }
   const itemLines = Array.isArray(extracted?.lines) ? extracted.lines : [];
   const summaryLines = normalizeSummaryLines(extracted?.summaryLines);
 
-  // Build ITEM rows for purchasable items
   const itemPutReqs = itemLines.map((ln, idx) => {
     const lineId = Number.isInteger(ln?.lineId) ? ln.lineId : idx + 1;
     return {
@@ -305,6 +315,7 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted }
           pk: `RECEIPT#${receiptId}`,
           sk: `ITEM#${String(lineId).padStart(4, "0")}`,
           receiptId,
+          userId, // ✅ include
           date: purchaseDate,
           productCode: ln?.productCode ?? null,
           productDescription: ln?.productDescription ?? null,
@@ -318,17 +329,16 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted }
     };
   });
 
-  // Append SUBTOTAL/TAX/TOTAL as separate "ITEM" rows at the end
-  // Use high sort keys so they always appear after normal items.
   const summaryPutReqs = summaryLines.map((s, i) => ({
     PutRequest: {
       Item: {
         pk: `RECEIPT#${receiptId}`,
-        sk: `ITEM#9${String(i + 1).padStart(3, "0")}`, // ITEM#9001, ITEM#9002, ITEM#9003
+        sk: `ITEM#9${String(i + 1).padStart(3, "0")}`, // ITEM#9001..9003
         receiptId,
+        userId, // ✅ include
         date: purchaseDate,
         productCode: null,
-        productDescription: s.type, // SUBTOTAL / TAX / TOTAL as the description
+        productDescription: s.type,
         amount: s.amount ?? null,
         category: "SUMMARY",
         itemCount: 1,
@@ -339,15 +349,10 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted }
   }));
 
   const putReqs = [...itemPutReqs, ...summaryPutReqs];
-
-  // BatchWrite max 25 per request
-  for (let i = 0; i < putReqs.length; i += 25) {
-    const chunk = putReqs.slice(i, i + 25);
-    await ddb.send(new BatchWriteCommand({ RequestItems: { [table]: chunk } }));
-  }
+  await batchWriteAll(table, putReqs);
 }
 
-async function markFailed({ receiptId, bucket, s3Key, errorMessage }) {
+async function markFailed({ receiptId, bucket, s3Key, errorMessage, userId }) {
   const table = requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
 
@@ -358,6 +363,7 @@ async function markFailed({ receiptId, bucket, s3Key, errorMessage }) {
         pk: `RECEIPT#${receiptId}`,
         sk: `META#${receiptId}`,
         receiptId,
+        userId: userId || null, // ✅ include
         s3Bucket: bucket,
         s3Key,
         status: "FAILED",
@@ -368,21 +374,15 @@ async function markFailed({ receiptId, bucket, s3Key, errorMessage }) {
   );
 }
 
-// -------------------- Handler (keep LAST) --------------------
+/* -------------------- Handler -------------------- */
 
-export const handler = async (event) => {
-  console.log("EVENT:", JSON.stringify(event));
+async function processRecord(rec) {
+  const bucket = rec?.s3?.bucket?.name;
+  const key = decodeS3Key(rec?.s3?.object?.key);
 
-  const rec = event?.Records?.[0];
-  console.log("RECORD0:", JSON.stringify(rec));
-
-  if (!rec?.s3?.bucket?.name || !rec?.s3?.object?.key) {
-    console.log("Not an S3 event. Exiting with error.");
-    throw new Error("This Lambda is S3-triggered only. Expected an S3 ObjectCreated event.");
+  if (!bucket || !key) {
+    throw new Error("Bad S3 event record: missing bucket or key");
   }
-
-  const bucket = rec.s3.bucket.name;
-  const key = decodeS3Key(rec.s3.object.key);
 
   console.log("Parsed S3 bucket/key:", bucket, key);
 
@@ -395,10 +395,12 @@ export const handler = async (event) => {
   }
 
   const uniqueId = buildUniqueIdFromS3(bucket, key);
-
-  // Provisional ID used for early logging and failures before extraction completes
-  let receiptId = `S3-${uniqueId}`;
+  let receiptId = `S3-${uniqueId}`; // provisional
   console.log("provisional receiptId:", receiptId);
+
+  // ✅ resolve userId once
+  const userId = await resolveUserIdFromS3({ bucket, key });
+  console.log("Resolved userId:", userId || "(missing)");
 
   try {
     console.log("Calling S3 GetObject...");
@@ -411,7 +413,6 @@ export const handler = async (event) => {
     const mimeType = guessMimeType(obj.ContentType, key);
     console.log("Guessed mimeType:", mimeType);
 
-    // Images only (for now)
     if (mimeType === "application/pdf" || key.toLowerCase().endsWith(".pdf")) {
       throw new Error("PDF uploaded but PDF-to-image is not implemented. Upload an image for now.");
     }
@@ -421,28 +422,19 @@ export const handler = async (event) => {
 
     console.log("Calling OpenAI...");
     const extracted = await extractReceiptFromImageBytes({ imageBytes: bytes, mimeType });
-    console.log(
-      "OpenAI extraction done. Lines:",
-      Array.isArray(extracted.lines) ? extracted.lines.length : 0
-    );
+    console.log("OpenAI extraction done. Lines:", Array.isArray(extracted.lines) ? extracted.lines.length : 0);
 
-    // Build final receiptId: <StoreName>-<ReceiptDate>-<UniqueID>
     const store = extracted?.receipt?.store ?? null;
     const purchaseDate = extracted?.receipt?.purchaseDate ?? null;
 
-    receiptId = buildReceiptId({
-      store,
-      purchaseDate,
-      uniqueId,
-    });
-
+    receiptId = buildReceiptId({ store, purchaseDate, uniqueId });
     console.log("final receiptId:", receiptId);
 
     console.log("Writing to DynamoDB table:", process.env.RECEIPT_LEDGER_TABLE);
-    await writeToReceiptLedgerTable({ receiptId, bucket, s3Key: key, extracted });
+    await writeToReceiptLedgerTable({ receiptId, bucket, s3Key: key, extracted, userId });
 
     console.log("DynamoDB write complete.");
-    return { ok: true, receiptId, bucket, key, lines: (extracted?.lines?.length || 0) + 3 };
+    return { ok: true, receiptId, bucket, key, userId, lines: (extracted?.lines?.length || 0) + 3 };
   } catch (err) {
     console.error("FAILED:", err);
     await markFailed({
@@ -450,7 +442,25 @@ export const handler = async (event) => {
       bucket,
       s3Key: key,
       errorMessage: err?.stack || String(err),
+      userId,
     });
     throw err;
   }
+}
+
+export const handler = async (event) => {
+  console.log("EVENT:", JSON.stringify(event));
+
+  const records = Array.isArray(event?.Records) ? event.Records : [];
+  if (!records.length) {
+    throw new Error("This Lambda is S3-triggered only. Expected an S3 ObjectCreated event.");
+  }
+
+  // Process all records sequentially (safer for OpenAI + DynamoDB)
+  const results = [];
+  for (const rec of records) {
+    results.push(await processRecord(rec));
+  }
+
+  return { ok: true, results };
 };
