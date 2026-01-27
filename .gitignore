@@ -38,3 +38,6 @@ samconfig.toml
 # dependencies
 node_modules/
 **/node_modules/
+
+# Secrets
+backend/keys.json

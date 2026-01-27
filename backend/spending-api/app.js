@@ -20,7 +20,6 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
-    // Include Authorization because we now use Cognito JWT
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
@@ -49,7 +48,6 @@ function parseBody(event) {
 }
 
 function getUserIdFromJwt(event) {
-  // HTTP API JWT authorizer puts claims here
   const claims = event?.requestContext?.authorizer?.jwt?.claims || {};
   const sub = claims.sub;
   if (!sub) {
@@ -96,6 +94,22 @@ function normalizeDateYYYYMMDD(input) {
   if (roundTrip !== d) throw new Error("Invalid calendar date");
 
   return d;
+}
+
+function addDays(iso, days) {
+  const dt = new Date(`${iso}T00:00:00Z`);
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function dateRange(startISO, endISO) {
+  const out = [];
+  let cur = startISO;
+  while (cur <= endISO) {
+    out.push(cur);
+    cur = addDays(cur, 1);
+  }
+  return out;
 }
 
 /**
@@ -175,7 +189,6 @@ function assertOwned(item, userId) {
     throw err;
   }
   if (!item.userId) {
-    // legacy item without ownership
     const err = new Error("Forbidden");
     err.statusCode = 403;
     throw err;
@@ -185,6 +198,99 @@ function assertOwned(item, userId) {
     err.statusCode = 403;
     throw err;
   }
+}
+
+/* ---------------- Dashboard helpers ---------------- */
+
+function canonCategory(s) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[\/_,.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// map near-duplicates to a canonical display label
+function normalizeCategory(raw) {
+  const c = canonCategory(raw);
+
+  if (!c) return "Uncategorized";
+
+  // tax always wins
+  if (c.includes("tax")) return "Tax";
+
+  // common merges (expand as you see your data)
+  const map = [
+    { keys: ["pantry", "snack", "snacks"], label: "Pantry & Snacks" },
+    { keys: ["produce", "fruit", "vegetable"], label: "Produce" },
+    { keys: ["dairy", "milk", "egg"], label: "Dairy" },
+    { keys: ["meat", "seafood"], label: "Meat & Seafood" },
+    { keys: ["beverage", "drink"], label: "Beverages" },
+    { keys: ["bakery", "bread"], label: "Bakery" },
+    { keys: ["frozen"], label: "Frozen" },
+    { keys: ["household", "paper", "home supply", "clean"], label: "Household" },
+    { keys: ["personal care", "health", "beauty"], label: "Personal Care" },
+    { keys: ["pharmacy", "medicine", "vitamin"], label: "Pharmacy" },
+    { keys: ["deli"], label: "Deli" },
+    { keys: ["prepared", "ready to eat"], label: "Prepared Foods" },
+  ];
+
+  for (const m of map) {
+    if (m.keys.some((k) => c.includes(k))) return m.label;
+  }
+
+  // title-case fallback
+  return c
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+function shouldExcludeLine(item) {
+  const desc = String(item?.productDescription || "").trim().toUpperCase();
+  if (!desc) return false;
+
+  // exclude typical non-item summary rows
+  if (desc.includes("SUBTOTAL")) return true;
+  if (desc === "TOTAL" || desc.includes(" TOTAL")) return true;
+  if (desc.includes("BALANCE DUE")) return true;
+  if (desc.includes("AMOUNT DUE")) return true;
+
+  return false;
+}
+
+function isTaxLine(item) {
+  const desc = String(item?.productDescription || "").trim().toUpperCase();
+  const cat = String(item?.category || "");
+  return desc.includes("TAX") || canonCategory(cat).includes("tax");
+}
+
+async function queryAllForDate(userId, dISO) {
+  // Query GSI1 for a given date; paginate to get all
+  const pk = `DATE#${dISO}`;
+  let lastKey = undefined;
+  const all = [];
+
+  do {
+    const resp = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: "GSI1",
+        KeyConditionExpression: "gsi1pk = :pk",
+        ExpressionAttributeValues: { ":pk": pk, ":uid": userId },
+        FilterExpression: "#uid = :uid",
+        ExpressionAttributeNames: { "#uid": "userId" },
+        ExclusiveStartKey: lastKey,
+      })
+    );
+
+    if (resp.Items?.length) all.push(...resp.Items);
+    lastKey = resp.LastEvaluatedKey;
+  } while (lastKey);
+
+  return all;
 }
 
 /* -------------------- Handlers -------------------- */
@@ -207,7 +313,7 @@ async function listSpending(event) {
     }
   }
 
-  // Optional date query via GSI1 (if you have it)
+  // Optional date query via GSI1
   const date = (qs.date || "").trim();
   if (date) {
     const d = normalizeDateYYYYMMDD(date);
@@ -218,7 +324,6 @@ async function listSpending(event) {
         IndexName: "GSI1",
         KeyConditionExpression: "gsi1pk = :pk",
         ExpressionAttributeValues: { ":pk": `DATE#${d}`, ":uid": userId },
-        // Enforce user isolation even on GSI query
         FilterExpression: "#uid = :uid",
         ExpressionAttributeNames: { "#uid": "userId" },
         Limit: limit,
@@ -233,7 +338,7 @@ async function listSpending(event) {
     return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
   }
 
-  // Fallback: Scan and filter by userId (fine for small scale)
+  // Fallback: Scan and filter by userId
   const resp = await ddb.send(
     new ScanCommand({
       TableName: TABLE_NAME,
@@ -250,6 +355,71 @@ async function listSpending(event) {
     : null;
 
   return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
+}
+
+async function spendingDashboard(event) {
+  requireTableName();
+  const userId = getUserIdFromJwt(event);
+  const qs = event.queryStringParameters || {};
+
+  // default last 30 days
+  const today = new Date().toISOString().slice(0, 10);
+  const defaultStart = addDays(today, -29);
+
+  const start = normalizeDateYYYYMMDD(qs.start || defaultStart);
+  const end = normalizeDateYYYYMMDD(qs.end || today);
+  if (start > end) throw new Error("start must be <= end");
+
+  const filterCategoryRaw = String(qs.category || "").trim();
+  const filterCategory =
+    !filterCategoryRaw || filterCategoryRaw.toLowerCase() === "all"
+      ? "All"
+      : normalizeCategory(filterCategoryRaw);
+
+  // Pull all items for the date range (server-side aggregation)
+  const days = dateRange(start, end);
+
+  let totalSpend = 0;
+  const byCategory = new Map();
+
+  for (const d of days) {
+    const items = await queryAllForDate(userId, d);
+
+    for (const it of items) {
+      if (shouldExcludeLine(it)) continue;
+
+      const amt = Number(it.amount);
+      if (!Number.isFinite(amt)) continue;
+
+      // tax handling
+      const cat = isTaxLine(it) ? "Tax" : normalizeCategory(it.category);
+
+      if (filterCategory !== "All" && cat !== filterCategory) continue;
+
+      totalSpend += amt;
+      byCategory.set(cat, (byCategory.get(cat) || 0) + amt);
+    }
+  }
+  // Return ALL categories sorted by spend (no "Others")
+  const chart = Array.from(byCategory.entries())
+    .map(([category, amount]) => ({ category, amount: Number(amount.toFixed(2)) }))
+    .sort((a, b) => b.amount - a.amount);
+
+  // categories for filter dropdown (include All first)
+  const categories = ["All", ...chart.map((x) => x.category)];
+
+return json(200, {
+  start,
+  end,
+  category: filterCategory,
+  totalSpend: Number(totalSpend.toFixed(2)),
+  chart,          // now includes ALL categories
+  categories,
+  meta: {
+    days: days.length,
+    excluded: "SUBTOTAL/TOTAL rows removed; Tax bucketed separately",
+  },
+});
 }
 
 // receipt -> pk=RECEIPT#receipt
@@ -301,7 +471,7 @@ async function createItem(event) {
     category: typeof body.category === "string" ? body.category.trim() : "",
     gsi1pk: d ? `DATE#${d}` : "DATE#UNKNOWN",
     gsi1sk: `${pk}#${sk}`,
-    userId, // ✅ ownership set by auth, not client
+    userId,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -317,7 +487,7 @@ async function createItem(event) {
   return json(201, { ok: true, item });
 }
 
-// OLD update: receipt + lineId => LINE#000002
+// OLD update: receipt + lineId
 async function updateItemByReceiptLine(event) {
   requireTableName();
   const userId = getUserIdFromJwt(event);
@@ -329,7 +499,6 @@ async function updateItemByReceiptLine(event) {
   const pk = `RECEIPT#${receipt}`;
   const sk = `LINE#${pad6(lineId)}`;
 
-  // ✅ ownership check
   const existing = await getItemOrNull(pk, sk);
   assertOwned(existing, userId);
 
@@ -351,7 +520,7 @@ async function updateItemByReceiptLine(event) {
   return json(200, { ok: true, item: resp.Attributes });
 }
 
-// ✅ NEW update: true pk/sk (supports ITEM#0001 etc)
+// ✅ pk/sk update
 async function updateItemByPkSk(event) {
   requireTableName();
   const userId = getUserIdFromJwt(event);
@@ -361,7 +530,6 @@ async function updateItemByPkSk(event) {
   if (!pk) throw new Error("Missing pk");
   if (!sk) throw new Error("Missing sk");
 
-  // ✅ ownership check
   const existing = await getItemOrNull(pk, sk);
   assertOwned(existing, userId);
 
@@ -395,7 +563,6 @@ async function deleteItemByReceiptLine(event) {
   const pk = `RECEIPT#${receipt}`;
   const sk = `LINE#${pad6(lineId)}`;
 
-  // ✅ ownership check
   const existing = await getItemOrNull(pk, sk);
   assertOwned(existing, userId);
 
@@ -410,7 +577,7 @@ async function deleteItemByReceiptLine(event) {
   return json(200, { ok: true });
 }
 
-// ✅ NEW delete: true pk/sk
+// ✅ pk/sk delete
 async function deleteItemByPkSk(event) {
   requireTableName();
   const userId = getUserIdFromJwt(event);
@@ -420,7 +587,6 @@ async function deleteItemByPkSk(event) {
   if (!pk) throw new Error("Missing pk");
   if (!sk) throw new Error("Missing sk");
 
-  // ✅ ownership check
   const existing = await getItemOrNull(pk, sk);
   assertOwned(existing, userId);
 
@@ -444,6 +610,10 @@ exports.handler = async (event) => {
 
     const rawPath = event?.rawPath || "";
 
+    // ✅ Dashboard aggregates
+    if (method === "GET" && rawPath === "/spending/dashboard")
+      return await spendingDashboard(event);
+
     // List / create
     if (method === "GET" && rawPath === "/spending") return await listSpending(event);
     if (method === "POST" && rawPath === "/spending") return await createItem(event);
@@ -452,7 +622,7 @@ exports.handler = async (event) => {
     if (method === "GET" && rawPath.startsWith("/spending/receipt/"))
       return await getReceipt(event);
 
-    // ✅ pk/sk update/delete routes
+    // pk/sk update/delete
     if (method === "PATCH" && rawPath.startsWith("/spending/item/"))
       return await updateItemByPkSk(event);
 
