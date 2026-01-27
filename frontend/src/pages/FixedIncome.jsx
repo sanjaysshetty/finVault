@@ -107,20 +107,16 @@ const DEFAULT_FORM = {
 
 /* ---------------- API wiring ---------------- */
 function getApiBase() {
-  // ✅ standardize on one env var
   const envBase = (import.meta?.env?.VITE_API_BASE_URL || "").trim();
   if (envBase) return envBase.replace(/\/+$/, "");
 
-  // optional runtime override (if you ever set it)
   const winBase = (window?.__FINVAULT_API_BASE_URL || "").trim?.() || "";
   if (winBase) return winBase.replace(/\/+$/, "");
 
-  // allow relative fallback (but URL builder will use origin)
   return "";
 }
 
 function getAccessToken() {
-  // ✅ JWT authorizer expects access_token
   return (
     sessionStorage.getItem("finvault.accessToken") ||
     sessionStorage.getItem("access_token") ||
@@ -132,9 +128,6 @@ function getAccessToken() {
 function buildApiUrl(path) {
   const p = path.startsWith("/") ? path : `/${path}`;
   const base = getApiBase();
-
-  // ✅ If base is missing, use current origin so `new URL()` never throws.
-  // Note: that would call your Vite dev server, so keep VITE_API_BASE_URL set.
   return new URL(p, base || window.location.origin);
 }
 
@@ -161,8 +154,9 @@ async function apiFetch(path, { method = "GET", body } = {}) {
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    // If you see HTML here, you're still hitting Vite or a proxy.
-    throw new Error(`API returned non-JSON (${res.status}). First chars: ${text.slice(0, 30)}`);
+    throw new Error(
+      `API returned non-JSON (${res.status}). First chars: ${text.slice(0, 30)}`
+    );
   }
 
   if (!res.ok) {
@@ -178,12 +172,17 @@ function normalizeApiRow(item) {
     id: item.assetId || item.id,
   };
 }
+
 /* ---------------- Component ---------------- */
 
 export default function FixedIncome() {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
+
+  // ✅ NEW: hide Add card by default
+  const [showForm, setShowForm] = useState(false);
+
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState("startDate");
@@ -199,11 +198,7 @@ export default function FixedIncome() {
     apiFetch("/assets/fixedincome")
       .then((res) => {
         if (!alive) return;
-        const list = Array.isArray(res?.items)
-          ? res.items
-          : Array.isArray(res)
-          ? res
-          : [];
+        const list = Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
         setRows(list.map(normalizeApiRow));
       })
       .catch((e) => {
@@ -299,10 +294,23 @@ export default function FixedIncome() {
     return { invested, current, interest, maturity };
   }, [enrichedRows]);
 
-  function resetForm() {
+  function resetForm({ hide } = {}) {
     setForm(DEFAULT_FORM);
     setEditingId(null);
     setError("");
+    if (hide) setShowForm(false);
+  }
+
+  function openCreateForm() {
+    setError("");
+    setEditingId(null);
+    setForm(DEFAULT_FORM);
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function closeForm() {
+    resetForm({ hide: true });
   }
 
   function startEdit(r) {
@@ -311,13 +319,19 @@ export default function FixedIncome() {
     setForm({
       name: r.name || "",
       principal: String(r.principal ?? ""),
-      annualRatePct: String(((safeNum(r.annualRate, 0) * 100) || 0).toFixed(4)).replace(/\.?0+$/, ""),
+      annualRatePct: String(((safeNum(r.annualRate, 0) * 100) || 0).toFixed(4)).replace(
+        /\.?0+$/,
+        ""
+      ),
       startDate: r.startDate || todayISO(),
       termMonths: r.termMonths ?? 12,
       interestType: r.interestType || "SIMPLE",
       compoundFrequency: r.compoundFrequency || "YEARLY",
       notes: r.notes || "",
     });
+
+    // ✅ ensure the card is visible when editing
+    setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -327,8 +341,10 @@ export default function FixedIncome() {
 
     if (!form.name.trim()) throw new Error("Name is required");
     if (!form.startDate) throw new Error("Start date is required");
-    if (!Number.isFinite(principal) || principal <= 0) throw new Error("Principal must be a positive number");
-    if (!Number.isFinite(annualRatePct) || annualRatePct < 0) throw new Error("Annual rate must be valid (percent)");
+    if (!Number.isFinite(principal) || principal <= 0)
+      throw new Error("Principal must be a positive number");
+    if (!Number.isFinite(annualRatePct) || annualRatePct < 0)
+      throw new Error("Annual rate must be valid (percent)");
     const termMonths = clamp(parseInt(form.termMonths, 10) || 0, 1, 600);
 
     const annualRate = annualRatePct / 100;
@@ -370,12 +386,12 @@ export default function FixedIncome() {
           prev.map((r) => (r.id === editingId ? normalizeApiRow({ ...r, ...updated }) : r))
         );
         await refreshList({ keepEditing: false });
-        resetForm();
+        resetForm({ hide: true });
       } else {
         const created = await apiFetch("/assets/fixedincome", { method: "POST", body: payload });
         setRows((prev) => [normalizeApiRow(created), ...prev]);
         await refreshList({ keepEditing: false });
-        resetForm();
+        resetForm({ hide: true });
       }
     } catch (err) {
       setError(err?.message || "Save failed");
@@ -393,7 +409,7 @@ export default function FixedIncome() {
       setSaving(true);
       await apiFetch(`/assets/fixedincome/${encodeURIComponent(id)}`, { method: "DELETE" });
       setRows((prev) => prev.filter((r) => r.id !== id));
-      if (editingId === id) resetForm();
+      if (editingId === id) resetForm({ hide: true });
     } catch (err) {
       setError(err?.message || "Delete failed");
     } finally {
@@ -439,166 +455,188 @@ export default function FixedIncome() {
         <SummaryCard title="Maturity Amount" value={formatMoney(summary.maturity)} hint="Stored on create/update" />
       </div>
 
-      <div style={{ ...panel, marginTop: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-          <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
-            {editingId ? "Edit Fixed Income" : "Add Fixed Income"}
-          </div>
-          {editingId ? (
-            <button type="button" onClick={resetForm} style={btnSecondary} disabled={saving}>
-              Cancel
-            </button>
-          ) : null}
-        </div>
+      {/* ✅ Form card is now hidden by default */}
+      {showForm ? (
+        <div style={{ ...panel, marginTop: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
+              {editingId ? "Edit Fixed Income" : "Add Fixed Income"}
+            </div>
 
-        {error ? (
-          <div style={{ marginTop: 10, ...callout }}>
-            <div style={{ fontWeight: 900, color: THEME.title }}>Error</div>
-            <div style={{ marginTop: 4, color: THEME.pageText }}>{error}</div>
-          </div>
-        ) : null}
+            <div style={{ display: "flex", gap: 10 }}>
+              {editingId ? (
+                <button type="button" onClick={() => resetForm({ hide: true })} style={btnSecondary} disabled={saving}>
+                  Cancel
+                </button>
+              ) : null}
 
-        {loading ? <div style={{ marginTop: 10, color: THEME.muted, fontSize: 13 }}>Loading records…</div> : null}
-
-        <form onSubmit={onSubmit} style={{ marginTop: 12, display: "grid", gap: 10 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
-            <Field label="Name">
-              <input
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="e.g., CD - Chase 12M"
-                style={input}
-                disabled={saving}
-              />
-            </Field>
-            <Field label="Principal (USD)">
-              <input
-                value={form.principal}
-                onChange={(e) => setForm((f) => ({ ...f, principal: e.target.value }))}
-                placeholder="10000"
-                inputMode="decimal"
-                style={input}
-                disabled={saving}
-              />
-            </Field>
-            <Field label="Annual Rate (%)">
-              <input
-                value={form.annualRatePct}
-                onChange={(e) => setForm((f) => ({ ...f, annualRatePct: e.target.value }))}
-                placeholder="5.25"
-                inputMode="decimal"
-                style={input}
-                disabled={saving}
-              />
-            </Field>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
-            <Field label="Start Date">
-              <input
-                type="date"
-                value={form.startDate}
-                onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
-                style={input}
-                disabled={saving}
-              />
-            </Field>
-            <Field label="Term (Months)">
-              <input
-                value={form.termMonths}
-                onChange={(e) => setForm((f) => ({ ...f, termMonths: e.target.value }))}
-                inputMode="numeric"
-                style={input}
-                disabled={saving}
-              />
-            </Field>
-            <Field label="Interest Type">
-              <select
-                value={form.interestType}
-                onChange={(e) => setForm((f) => ({ ...f, interestType: e.target.value }))}
-                style={input}
-                disabled={saving}
-              >
-                <option value="SIMPLE">Simple</option>
-                <option value="COMPOUND">Compound</option>
-              </select>
-            </Field>
-            <Field label="Compound Frequency">
-              <select
-                value={form.compoundFrequency}
-                onChange={(e) => setForm((f) => ({ ...f, compoundFrequency: e.target.value }))}
-                style={{ ...input, opacity: form.interestType === "COMPOUND" ? 1 : 0.5 }}
-                disabled={saving || form.interestType !== "COMPOUND"}
-              >
-                <option value="YEARLY">Yearly</option>
-                <option value="QUARTERLY">Quarterly</option>
-                <option value="MONTHLY">Monthly</option>
-                <option value="DAILY">Daily</option>
-              </select>
-            </Field>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "3fr 1fr", gap: 10 }}>
-            <Field label="Notes (optional)">
-              <input
-                value={form.notes}
-                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                placeholder="e.g., auto-renew off"
-                style={input}
-                disabled={saving}
-              />
-            </Field>
-
-            <div style={{ ...miniPanel }}>
-              <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>Preview</div>
-              <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
-                <MiniRow
-                  label="Maturity Date"
-                  value={
-                    form.startDate
-                      ? addMonths(form.startDate, clamp(parseInt(form.termMonths, 10) || 0, 1, 600))
-                      : "-"
-                  }
-                />
-                <MiniRow
-                  label="Stored Maturity"
-                  value={() => {
-                    const principal = safeNum(form.principal, NaN);
-                    const rate = safeNum(form.annualRatePct, NaN) / 100;
-                    const termMonths = clamp(parseInt(form.termMonths, 10) || 0, 1, 600);
-                    if (!Number.isFinite(principal) || !Number.isFinite(rate) || !form.startDate) return "-";
-                    const maturityDate = addMonths(form.startDate, termMonths);
-                    const calc = computeValue({
-                      principal,
-                      annualRate: rate,
-                      startDate: form.startDate,
-                      asOfDate: maturityDate,
-                      interestType: form.interestType,
-                      compoundFrequency: form.compoundFrequency,
-                    });
-                    return formatMoney(calc.value);
-                  }}
-                />
-              </div>
+              <button type="button" onClick={closeForm} style={btnSecondary} disabled={saving}>
+                Close
+              </button>
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 4 }}>
-            <button type="button" onClick={resetForm} style={btnSecondary} disabled={saving}>
-              Reset
-            </button>
-            <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.75 : 1 }} disabled={saving}>
-              {saving ? "Saving…" : editingId ? "Save Changes" : "Add Record"}
-            </button>
-          </div>
-        </form>
-      </div>
+          {error ? (
+            <div style={{ marginTop: 10, ...callout }}>
+              <div style={{ fontWeight: 900, color: THEME.title }}>Error</div>
+              <div style={{ marginTop: 4, color: THEME.pageText }}>{error}</div>
+            </div>
+          ) : null}
 
+          {loading ? (
+            <div style={{ marginTop: 10, color: THEME.muted, fontSize: 13 }}>Loading records…</div>
+          ) : null}
+
+          <form onSubmit={onSubmit} style={{ marginTop: 12, display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+              <Field label="Name">
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="e.g., CD - Chase 12M"
+                  style={input}
+                  disabled={saving}
+                />
+              </Field>
+              <Field label="Principal (USD)">
+                <input
+                  value={form.principal}
+                  onChange={(e) => setForm((f) => ({ ...f, principal: e.target.value }))}
+                  placeholder="10000"
+                  inputMode="decimal"
+                  style={input}
+                  disabled={saving}
+                />
+              </Field>
+              <Field label="Annual Rate (%)">
+                <input
+                  value={form.annualRatePct}
+                  onChange={(e) => setForm((f) => ({ ...f, annualRatePct: e.target.value }))}
+                  placeholder="5.25"
+                  inputMode="decimal"
+                  style={input}
+                  disabled={saving}
+                />
+              </Field>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
+              <Field label="Start Date">
+                <input
+                  type="date"
+                  value={form.startDate}
+                  onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
+                  style={input}
+                  disabled={saving}
+                />
+              </Field>
+              <Field label="Term (Months)">
+                <input
+                  value={form.termMonths}
+                  onChange={(e) => setForm((f) => ({ ...f, termMonths: e.target.value }))}
+                  inputMode="numeric"
+                  style={input}
+                  disabled={saving}
+                />
+              </Field>
+              <Field label="Interest Type">
+                <select
+                  value={form.interestType}
+                  onChange={(e) => setForm((f) => ({ ...f, interestType: e.target.value }))}
+                  style={input}
+                  disabled={saving}
+                >
+                  <option value="SIMPLE">Simple</option>
+                  <option value="COMPOUND">Compound</option>
+                </select>
+              </Field>
+              <Field label="Compound Frequency">
+                <select
+                  value={form.compoundFrequency}
+                  onChange={(e) => setForm((f) => ({ ...f, compoundFrequency: e.target.value }))}
+                  style={{ ...input, opacity: form.interestType === "COMPOUND" ? 1 : 0.5 }}
+                  disabled={saving || form.interestType !== "COMPOUND"}
+                >
+                  <option value="YEARLY">Yearly</option>
+                  <option value="QUARTERLY">Quarterly</option>
+                  <option value="MONTHLY">Monthly</option>
+                  <option value="DAILY">Daily</option>
+                </select>
+              </Field>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "3fr 1fr", gap: 10 }}>
+              <Field label="Notes (optional)">
+                <input
+                  value={form.notes}
+                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                  placeholder="e.g., auto-renew off"
+                  style={input}
+                  disabled={saving}
+                />
+              </Field>
+
+              <div style={{ ...miniPanel }}>
+                <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>Preview</div>
+                <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+                  <MiniRow
+                    label="Maturity Date"
+                    value={
+                      form.startDate
+                        ? addMonths(form.startDate, clamp(parseInt(form.termMonths, 10) || 0, 1, 600))
+                        : "-"
+                    }
+                  />
+                  <MiniRow
+                    label="Stored Maturity"
+                    value={() => {
+                      const principal = safeNum(form.principal, NaN);
+                      const rate = safeNum(form.annualRatePct, NaN) / 100;
+                      const termMonths = clamp(parseInt(form.termMonths, 10) || 0, 1, 600);
+                      if (!Number.isFinite(principal) || !Number.isFinite(rate) || !form.startDate) return "-";
+                      const maturityDate = addMonths(form.startDate, termMonths);
+                      const calc = computeValue({
+                        principal,
+                        annualRate: rate,
+                        startDate: form.startDate,
+                        asOfDate: maturityDate,
+                        interestType: form.interestType,
+                        compoundFrequency: form.compoundFrequency,
+                      });
+                      return formatMoney(calc.value);
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 4 }}>
+              <button type="button" onClick={() => resetForm()} style={btnSecondary} disabled={saving}>
+                Reset
+              </button>
+              <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.75 : 1 }} disabled={saving}>
+                {saving ? "Saving…" : editingId ? "Save Changes" : "Add Record"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {/* Records table */}
       <div style={{ ...panel, marginTop: 14, paddingBottom: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>All Records</div>
 
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={openCreateForm}
+              style={btnPrimary}
+              disabled={saving}
+            >
+              Add Fixed Income Record
+            </button>
+
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -636,7 +674,7 @@ export default function FixedIncome() {
           <div style={{ padding: 14, color: THEME.muted }}>Loading…</div>
         ) : filteredSortedRows.length === 0 ? (
           <div style={{ padding: 14, color: THEME.muted }}>
-            No fixed income records yet. Add one above to see the table and summary cards.
+            No fixed income records yet. Click “Add Fixed Income Record” to create one.
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
@@ -666,7 +704,9 @@ export default function FixedIncome() {
                   <tr key={r.id} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
                     <Td>
                       <div style={{ fontWeight: 900, color: THEME.title }}>{r.name}</div>
-                      {r.notes ? <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>{r.notes}</div> : null}
+                      {r.notes ? (
+                        <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>{r.notes}</div>
+                      ) : null}
                       <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <Pill text={r.interestType === "COMPOUND" ? `Compound · ${r.compoundFrequency}` : "Simple"} />
                         <Pill text={`${r.termMonths} months`} />
@@ -747,9 +787,9 @@ function Th({ children, align, onClick, active }) {
   );
 }
 
-function Td({ children, align }) {
+function Td({ children, align, colSpan }) {
   return (
-    <td style={{ padding: "12px 10px", verticalAlign: "top" }} align={align || "left"}>
+    <td style={{ padding: "12px 10px", verticalAlign: "top" }} align={align || "left"} colSpan={colSpan}>
       {children}
     </td>
   );

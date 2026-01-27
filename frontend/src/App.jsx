@@ -11,6 +11,9 @@ import Options from "./pages/Options";
 import FixedIncome from "./pages/FixedIncome";
 import SpendingDash from "./pages/SpendingDash";
 
+import Crypto from "./pages/Crypto";
+import NAV from "./pages/NAV";
+
 import AuthCallback from "./auth/AuthCallback";
 import RequireAuth from "./auth/RequireAuth";
 
@@ -49,6 +52,10 @@ export default function App() {
           <Route path="/assets/bullion" element={<Bullion />} />
           <Route path="/assets/options" element={<Options />} />
           <Route path="/assets/fixedincome" element={<FixedIncome />} />
+          <Route path="/assets/crypto" element={<Crypto />} />
+
+          {/* Net Asset Value */}
+          <Route path="/nav/dashboard" element={<NAV />} />
 
           {/* Spending */}
           <Route path="/spending/dashboard" element={<SpendingDash />} />

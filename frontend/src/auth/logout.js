@@ -10,9 +10,10 @@ export function logout() {
   const domain = import.meta.env.VITE_COGNITO_DOMAIN;
   const clientId = import.meta.env.VITE_COGNITO_CLIENT_ID;
 
-  // Vite base handles /app/
-  const base = import.meta.env.BASE_URL || "/";
-  const logoutUri = new URL(base, window.location.origin).toString();
+  // ✅ Use explicit env logout URI (works for both local + prod)
+  const logoutUri =
+    import.meta.env.VITE_COGNITO_LOGOUT_URI ||
+    new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
 
   const url =
     `${domain}/logout` +

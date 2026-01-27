@@ -29,6 +29,7 @@ function Item({ to, label }) {
 export default function SideNav() {
   // default open like your wireframe
   const [openAssets, setOpenAssets] = useState(true);
+  const [openNav, setOpenNav] = useState(true);
   const [openSpending, setOpenSpending] = useState(true);
 
   // (Optional) you can auto-open based on current route later
@@ -43,9 +44,18 @@ export default function SideNav() {
       >
         <Item to="/assets/portfolio" label="Portfolio" />
         <Item to="/assets/stocks" label="Stocks" />
+        <Item to="/assets/crypto" label="Crypto" />
         <Item to="/assets/bullion" label="Bullion" />
         <Item to="/assets/options" label="Options" />
         <Item to="/assets/fixedincome" label="Fixed Income" />
+      </Section>
+
+      <Section
+        title="Net Asset Value"
+        open={openNav}
+        onToggle={() => setOpenNav((v) => !v)}
+      >
+        <Item to="/nav/dashboard" label="NAV" />
       </Section>
 
       <Section
