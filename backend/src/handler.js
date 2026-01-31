@@ -28,7 +28,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 4000) {
 
 /* -------------------- Query helpers -------------------- */
 function getQuery(event) {
-  // HttpApi v2 -> event.queryStringParameters is typical
   return event?.queryStringParameters || {};
 }
 
@@ -43,12 +42,11 @@ function parseCsvSymbols(s) {
 
 /* -------------------- GoldAPI -------------------- */
 async function fetchMetal(metal, currency, apiKey) {
-  // 🔹 TEMP STUB FOR TESTING
   if (process.env.USE_METAL_PRICE_STUB === "true") {
     return {
       timestamp: 1769454792,
-      metal: metal,
-      currency: currency,
+      metal,
+      currency,
       exchange: "FOREXCOM",
       symbol: `FOREXCOM:${metal}${currency}`,
       prev_close_price: 4986.45,
@@ -160,27 +158,7 @@ async function fetchRhBestBidAsk(symbols) {
 }
 
 /* -------------------- Finnhub stock quotes -------------------- */
-/**
- * Finnhub quote endpoint returns:
- * { c: current, d: change, dp: percentChange, h: high, l: low, o: open, pc: prevClose, t: timestamp }
- */
 async function fetchFinnhubQuote(symbol, apiKey) {
-  // Optional stub for testing
-  /*
-  if (process.env.USE_STOCK_PRICE_STUB === "true") {
-    return {
-      c: 193.22,
-      d: 1.11,
-      dp: 0.58,
-      h: 195.0,
-      l: 191.5,
-      o: 192.3,
-      pc: 192.11,
-      t: Math.floor(Date.now() / 1000),
-      _stub: true,
-    };
-  }
-  */
   const url = `${FINNHUB_BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(apiKey)}`;
   const resp = await fetchWithTimeout(url, {}, 3500);
 
@@ -190,7 +168,6 @@ async function fetchFinnhubQuote(symbol, apiKey) {
   }
 
   const data = await resp.json();
-  // Finnhub returns zeros if the symbol is invalid / no data
   if (!data || typeof data.c !== "number") {
     throw new Error(`Finnhub ${symbol}: invalid response`);
   }
@@ -201,7 +178,6 @@ async function fetchFinnhubQuotes(symbols, apiKey) {
   const results = {};
   const errors = {};
 
-  // small parallelism with allSettled
   const settled = await Promise.allSettled(
     symbols.map(async (sym) => {
       const q = await fetchFinnhubQuote(sym, apiKey);
@@ -215,7 +191,6 @@ async function fetchFinnhubQuotes(symbols, apiKey) {
         change: q.d,
         changePct: q.dp,
         timestamp: q.t,
-        _stub: q._stub,
       };
     })
   );
@@ -238,47 +213,51 @@ exports.handler = async (event) => {
   const currency = "USD";
   const errors = {};
 
-  // ✅ Existing behavior: Gold/Silver require GOLDAPI_KEY
-  const goldKey = process.env.GOLDAPI_KEY;
-  if (!goldKey) {
-    return {
-      statusCode: 500,
-      headers: corsHeaders(),
-      body: JSON.stringify({ error: "Missing GOLDAPI_KEY env var" }),
-    };
-  }
+  // ✅ Parse query FIRST (fixes your "q used before init" issue)
+  const q = getQuery(event);
 
   // Optional request: /prices?stocks=AAPL,MSFT
-  const q = getQuery(event);
-  const stockSymbols = parseCsvSymbols(q.stocks || q.symbols); // supports either name
+  const stockSymbols = parseCsvSymbols(q.stocks || q.symbols);
+
+  // Optional request: /prices?crypto=BTC-USD,ETH-USD,DOGE-USD
+  const cryptoSymbols = parseCsvSymbols(q.crypto).map((s) =>
+    s.includes("-") ? s : `${s}-USD`
+  );
 
   let gold = null;
   let silver = null;
   let crypto = null;
   let stocks = undefined;
 
-  /* ---- Gold ---- */
-  try {
-    gold = await fetchMetal("XAU", currency, goldKey);
-  } catch (e) {
-    errors.gold = String(e?.message || e);
-  }
+  // ✅ Do NOT hard-fail if GOLDAPI key is missing (keep crypto/stocks working)
+  const goldKey = process.env.GOLDAPI_KEY;
+  if (!goldKey) {
+    errors.gold = "Missing GOLDAPI_KEY env var";
+    errors.silver = "Missing GOLDAPI_KEY env var";
+  } else {
+    try {
+      gold = await fetchMetal("XAU", currency, goldKey);
+    } catch (e) {
+      errors.gold = String(e?.message || e);
+    }
 
-  /* ---- Silver ---- */
-  try {
-    silver = await fetchMetal("XAG", currency, goldKey);
-  } catch (e) {
-    errors.silver = String(e?.message || e);
+    try {
+      silver = await fetchMetal("XAG", currency, goldKey);
+    } catch (e) {
+      errors.silver = String(e?.message || e);
+    }
   }
 
   /* ---- Crypto ---- */
   try {
-    crypto = await fetchRhBestBidAsk(["BTC-USD", "ETH-USD"]);
+    const defaultCrypto = ["BTC-USD", "ETH-USD"];
+    const requestedCrypto = cryptoSymbols.length ? cryptoSymbols : defaultCrypto;
+    crypto = await fetchRhBestBidAsk(requestedCrypto);
   } catch (e) {
     errors.crypto = String(e?.message || e);
   }
 
-  /* ---- Stocks (optional; does NOT break existing clients) ---- */
+  /* ---- Stocks (optional) ---- */
   if (stockSymbols.length) {
     const finnhubKey = process.env.FINNHUB_API_KEY;
     if (!finnhubKey) {
