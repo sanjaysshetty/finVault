@@ -1,0 +1,12 @@
+{
+  "name": "category-curator",
+  "version": "1.0.0",
+  "description": "DynamoDB Streams -> Category normalization + aggregates",
+  "main": "curator.js",
+  "type": "module",
+  "dependencies": {
+    "openai": "^4.28.0",
+    "@aws-sdk/client-dynamodb": "^3.535.0",
+    "@aws-sdk/util-dynamodb": "^3.535.0"
+  }
+}
