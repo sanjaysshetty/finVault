@@ -35,6 +35,20 @@ function formatMoney(n) {
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
+function formatSpot(n) {
+  const x = safeNum(n, 0);
+  if (!Number.isFinite(x) || x === 0) return "$0.00";
+  const abs = Math.abs(x);
+  const digits =
+    abs > 0 && abs < 0.01 ? 10 : abs > 0 && abs < 1 ? 6 : 2;
+  return x.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
 /* ---------------- API ---------------- */
 
 function getApiBase() {
@@ -80,91 +94,95 @@ async function apiFetch(path, { method = "GET", body } = {}) {
   }
 
   if (!res.ok) {
-    throw new Error(data?.error || data?.message || `Request failed (${res.status})`);
+    throw new Error(
+      data?.error || data?.message || `Request failed (${res.status})`
+    );
   }
 
   return data;
 }
 
-/* ---------------- Prices parsing (re-use your existing /prices crypto response) ---------------- */
+/* ---------------- Prices parsing (dynamic; no hardcoded symbols) ---------------- */
 
 /**
- * Your prices lambda returns `crypto` from Robinhood best_bid_ask.
- * There are a few possible shapes depending on RH response. We handle common cases.
- * We compute a "spot" per symbol as mid((bid+ask)/2) if available, else best available.
+ * Your /prices lambda returns `crypto` (Robinhood best_bid_ask or a map).
+ * We parse ALL symbols we can find and return a map: { "BTC-USD": 43000.12, ... }.
  */
 function extractCryptoSpots(pricesResponse) {
-  const result = {
-    "BTC-USD": 0,
-    "ETH-USD": 0,
-  };
-
   const crypto = pricesResponse?.crypto;
-  if (!crypto) return result;
+  if (!crypto) return {};
 
   // Possible shapes:
   // 1) { results: [ { symbol: "BTC-USD", bid: "...", ask: "..." }, ... ] }
   // 2) [ { symbol: "BTC-USD", bid_inclusive_of_sell_spread: ..., ask_inclusive_of_buy_spread: ... }, ... ]
   // 3) { "BTC-USD": {...}, "ETH-USD": {...} }
   const arr =
-    Array.isArray(crypto) ? crypto :
-    Array.isArray(crypto?.results) ? crypto.results :
-    Array.isArray(crypto?.data) ? crypto.data :
-    null;
+    Array.isArray(crypto)
+      ? crypto
+      : Array.isArray(crypto?.results)
+      ? crypto.results
+      : Array.isArray(crypto?.data)
+      ? crypto.data
+      : null;
+
+  const out = {};
+
+  const writeSpot = (sym, spot) => {
+    const s = String(sym || "").toUpperCase().trim();
+    if (!s) return;
+
+    const val = safeNum(spot, 0);
+    // Dynamic precision so tiny coins don't render as 0.00
+    const abs = Math.abs(val);
+    const fixed =
+      abs > 0 && abs < 0.01 ? 10 : abs > 0 && abs < 1 ? 6 : 2;
+
+    out[s] = Number(val.toFixed(fixed));
+  };
 
   const readOne = (obj) => {
     const sym = obj?.symbol || obj?.instrument_id || obj?.pair || "";
     if (!sym) return;
 
     const bid =
-      safeNum(obj?.bid, NaN) ??
-      safeNum(obj?.best_bid, NaN);
-
+      safeNum(obj?.bid, NaN) ?? safeNum(obj?.best_bid, NaN);
     const ask =
-      safeNum(obj?.ask, NaN) ??
-      safeNum(obj?.best_ask, NaN);
+      safeNum(obj?.ask, NaN) ?? safeNum(obj?.best_ask, NaN);
 
-    const bid2 =
-      safeNum(obj?.bid_inclusive_of_sell_spread, NaN);
+    const bid2 = safeNum(obj?.bid_inclusive_of_sell_spread, NaN);
+    const ask2 = safeNum(obj?.ask_inclusive_of_buy_spread, NaN);
 
-    const ask2 =
-      safeNum(obj?.ask_inclusive_of_buy_spread, NaN);
-
-    const b = Number.isFinite(bid) ? bid : (Number.isFinite(bid2) ? bid2 : NaN);
-    const a = Number.isFinite(ask) ? ask : (Number.isFinite(ask2) ? ask2 : NaN);
+    const b = Number.isFinite(bid) ? bid : Number.isFinite(bid2) ? bid2 : NaN;
+    const a = Number.isFinite(ask) ? ask : Number.isFinite(ask2) ? ask2 : NaN;
 
     let spot = 0;
     if (Number.isFinite(b) && Number.isFinite(a)) spot = (b + a) / 2;
     else if (Number.isFinite(a)) spot = a;
     else if (Number.isFinite(b)) spot = b;
 
-    if (sym === "BTC-USD" || sym === "ETH-USD") {
-      result[sym] = round2(spot);
-    }
+    writeSpot(sym, spot);
   };
 
   if (arr) {
     arr.forEach(readOne);
-    return result;
+    return out;
   }
 
   if (typeof crypto === "object") {
-    // map form
-    Object.keys(result).forEach((sym) => {
-      const obj = crypto[sym];
+    Object.entries(crypto).forEach(([sym, obj]) => {
       if (!obj) return;
       readOne({ ...obj, symbol: sym });
     });
   }
 
-  return result;
+  return out;
 }
 
 /* ---------------- Domain calcs ---------------- */
 
 const DEFAULT_FORM = {
   type: "BUY",
-  symbol: "BTC-USD", // use same symbols as prices lambda
+  symbol: "",
   date: todayISO(),
   quantity: "",
   unitPrice: "",
@@ -173,16 +191,35 @@ const DEFAULT_FORM = {
 };
 
 function normalizeTx(item) {
+  const raw = String(item.symbol || "").toUpperCase().trim();
+  const symbol = raw ? (raw.includes("-") ? raw : `${raw}-USD`) : "";
+
   return {
     ...item,
     id: item.txId || item.assetId || item.id,
-    symbol: String(item.symbol || "").toUpperCase(),
+    symbol,
     type: String(item.type || "BUY").toUpperCase(),
   };
 }
 
+function buildCryptoSymbolListFromTx(txList, formSymbol) {
+  const wanted = new Set();
+
+  (txList || []).forEach((t) => {
+    const raw = String(t.symbol || "").toUpperCase().trim();
+    if (!raw) return;
+    wanted.add(raw.includes("-") ? raw : `${raw}-USD`);
+  });
+
+  const f = String(formSymbol || "").toUpperCase().trim();
+  if (f) wanted.add(f.includes("-") ? f : `${f}-USD`);
+
+  const list = Array.from(wanted);
+  return (list.length ? list : ["BTC-USD", "ETH-USD"]).slice(0, 25);
+}
+
 /**
- * Moving-average cost method per coin.
+ * Moving-average cost method per symbol.
  * Realized P/L is computed at each SELL using current avg cost basis.
  */
 function computeCryptoMetrics(transactions, spotMap) {
@@ -193,7 +230,7 @@ function computeCryptoMetrics(transactions, spotMap) {
   );
 
   for (const t of txs) {
-    const sym = String(t.symbol || "").toUpperCase();
+    const sym = String(t.symbol || "").toUpperCase().trim();
     if (!sym) continue;
 
     const type = String(t.type || "BUY").toUpperCase();
@@ -201,7 +238,9 @@ function computeCryptoMetrics(transactions, spotMap) {
     const px = safeNum(t.unitPrice, 0);
     const fees = safeNum(t.fees, 0);
 
-    if (!bySym[sym]) bySym[sym] = { qty: 0, cost: 0, avg: 0, realized: 0, buys: 0, sells: 0 };
+    if (!bySym[sym]) {
+      bySym[sym] = { qty: 0, cost: 0, avg: 0, realized: 0, buys: 0, sells: 0 };
+    }
     const s = bySym[sym];
 
     if (type === "BUY") {
@@ -226,7 +265,7 @@ function computeCryptoMetrics(transactions, spotMap) {
 
   const holdings = Object.entries(bySym)
     .map(([sym, s]) => {
-      const spot = safeNum(spotMap[sym], 0);
+      const spot = safeNum(spotMap?.[sym], 0);
       const mv = s.qty * spot;
       const unrl = (spot - (s.avg || 0)) * s.qty;
       return {
@@ -268,7 +307,7 @@ function computeCryptoMetrics(transactions, spotMap) {
 
 export default function Crypto() {
   const [tx, setTx] = useState([]);
-  const [spots, setSpots] = useState({ "BTC-USD": 0, "ETH-USD": 0 });
+  const [spots, setSpots] = useState({});
   const [spotStatus, setSpotStatus] = useState("");
 
   const [form, setForm] = useState(DEFAULT_FORM);
@@ -283,12 +322,24 @@ export default function Crypto() {
   const [sortKey, setSortKey] = useState("date");
   const [sortDir, setSortDir] = useState("desc");
 
-  const symbols = useMemo(() => {
-    const set = new Set(tx.map((t) => String(t.symbol || "").toUpperCase()).filter(Boolean));
+  const availableSymbols = useMemo(() => {
+    const set = new Set();
+
+    tx.forEach((t) => {
+      const s = String(t.symbol || "").toUpperCase().trim();
+      if (s) set.add(s);
+    });
+
+    Object.keys(spots || {}).forEach((s) => {
+      const sym = String(s || "").toUpperCase().trim();
+      if (sym) set.add(sym);
+    });
+
     const fSym = String(form.symbol || "").toUpperCase().trim();
     if (fSym) set.add(fSym);
+
     return Array.from(set).sort();
-  }, [tx, form.symbol]);
+  }, [tx, spots, form.symbol]);
 
   const metrics = useMemo(() => computeCryptoMetrics(tx, spots), [tx, spots]);
 
@@ -341,11 +392,22 @@ export default function Crypto() {
         const txRes = await apiFetch("/assets/crypto/transactions");
         if (!alive) return;
 
-        const list = Array.isArray(txRes?.items) ? txRes.items : Array.isArray(txRes) ? txRes : [];
+        const list = Array.isArray(txRes?.items)
+          ? txRes.items
+          : Array.isArray(txRes)
+          ? txRes
+          : [];
+
         const norm = list.map(normalizeTx);
         setTx(norm);
 
-        await refreshSpots();
+        // Pick a good default symbol for the form (first from tx, else empty)
+        if (!form.symbol) {
+          const first = norm.map((t) => t.symbol).filter(Boolean).sort()[0] || "";
+          if (first) setForm((f) => ({ ...f, symbol: first }));
+        }
+
+        await refreshSpots(norm);
       } catch (e) {
         if (!alive) return;
         setError(e?.message || "Failed to load crypto transactions");
@@ -360,28 +422,63 @@ export default function Crypto() {
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+  // Skip initial empty state
+  if (!tx || tx.length === 0) return;
+
+  refreshSpots(tx);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [tx]);
 
   async function refreshTxList() {
     const txRes = await apiFetch("/assets/crypto/transactions");
-    const list = Array.isArray(txRes?.items) ? txRes.items : Array.isArray(txRes) ? txRes : [];
+    const list = Array.isArray(txRes?.items)
+      ? txRes.items
+      : Array.isArray(txRes)
+      ? txRes
+      : [];
     setTx(list.map(normalizeTx));
   }
 
-  async function refreshSpots() {
-    try {
-      setSpotStatus("Refreshing spot prices…");
-      const prices = await apiFetch("/prices");
-      const spotMap = extractCryptoSpots(prices);
-      setSpots((prev) => ({ ...prev, ...spotMap }));
-      setSpotStatus("Spot prices refreshed.");
-    } catch (e) {
-      setSpotStatus(e?.message ? `Spot refresh failed: ${e.message}` : "Spot refresh failed.");
+async function refreshSpots(txOverride) {
+  try {
+    setSpotStatus("Refreshing spot prices…");
+
+    // Use txOverride if provided (first-load), else use state `tx`
+    const baseTx = Array.isArray(txOverride) ? txOverride : tx;
+
+    const symbols = buildCryptoSymbolListFromTx(baseTx, form.symbol);
+    const prices = await apiFetch(
+      `/prices?crypto=${encodeURIComponent(symbols.join(","))}`
+    );
+
+    const spotMap = extractCryptoSpots(prices);
+    setSpots((prev) => ({ ...prev, ...spotMap }));
+
+    // If form symbol is empty, pick one from prices
+    if (!String(form.symbol || "").trim()) {
+      const keys = Object.keys(spotMap || {}).sort();
+      if (keys[0]) setForm((f) => ({ ...f, symbol: keys[0] }));
     }
+
+    setSpotStatus("Spot prices refreshed.");
+  } catch (e) {
+    setSpotStatus(
+      e?.message ? `Spot refresh failed: ${e.message}` : "Spot refresh failed."
+    );
   }
+}
+
 
   function resetForm() {
-    setForm(DEFAULT_FORM);
+    setForm((prev) => ({
+      ...DEFAULT_FORM,
+      // keep current symbol if user already picked one
+      symbol: prev.symbol || "",
+    }));
     setEditingId(null);
     setError("");
   }
@@ -394,7 +491,10 @@ export default function Crypto() {
   function openCreateForm() {
     setError("");
     setEditingId(null);
-    setForm(DEFAULT_FORM);
+    setForm((prev) => ({
+      ...DEFAULT_FORM,
+      symbol: prev.symbol || availableSymbols[0] || "",
+    }));
     setShowForm(true);
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
@@ -404,7 +504,7 @@ export default function Crypto() {
     setEditingId(t.id);
     setForm({
       type: String(t.type || "BUY").toUpperCase(),
-      symbol: String(t.symbol || "BTC-USD").toUpperCase(),
+      symbol: String(t.symbol || "").toUpperCase(),
       date: t.date || todayISO(),
       quantity: String(t.quantity ?? ""),
       unitPrice: String(t.unitPrice ?? ""),
@@ -420,13 +520,15 @@ export default function Crypto() {
     const quantity = safeNum(form.quantity, NaN);
     const unitPrice = safeNum(form.unitPrice, NaN);
     const fees = safeNum(form.fees, 0);
-    const type = String(form.type).toUpperCase();
+    const type = String(form.type || "").toUpperCase();
 
     if (!symbol) throw new Error("Symbol is required (e.g., BTC-USD)");
     if (!form.date) throw new Error("Date is required");
     if (!["BUY", "SELL"].includes(type)) throw new Error("Type must be BUY or SELL");
-    if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be a positive number");
-    if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new Error("Unit Price must be a positive number");
+    if (!Number.isFinite(quantity) || quantity <= 0)
+      throw new Error("Quantity must be a positive number");
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0)
+      throw new Error("Unit Price must be a positive number");
     if (!Number.isFinite(fees) || fees < 0) throw new Error("Fees must be valid");
 
     return {
@@ -449,12 +551,15 @@ export default function Crypto() {
       const payload = buildPayloadFromForm();
 
       if (editingId) {
-        await apiFetch(`/assets/crypto/transactions/${encodeURIComponent(editingId)}`, {
-          method: "PATCH",
+        await apiFetch(
+          `/assets/crypto/transactions/${encodeURIComponent(editingId)}`,
+          { method: "PATCH", body: payload }
+        );
+      } else {
+        await apiFetch("/assets/crypto/transactions", {
+          method: "POST",
           body: payload,
         });
-      } else {
-        await apiFetch("/assets/crypto/transactions", { method: "POST", body: payload });
       }
 
       await refreshTxList();
@@ -474,7 +579,9 @@ export default function Crypto() {
 
     try {
       setSaving(true);
-      await apiFetch(`/assets/crypto/transactions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await apiFetch(`/assets/crypto/transactions/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
       await refreshTxList();
       if (editingId === id) closeForm();
     } catch (err) {
@@ -488,43 +595,103 @@ export default function Crypto() {
 
   return (
     <div style={{ padding: 16, color: THEME.pageText }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
         <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: THEME.title, letterSpacing: "0.2px" }}>
+          <div
+            style={{
+              fontSize: 22,
+              fontWeight: 900,
+              color: THEME.title,
+              letterSpacing: "0.2px",
+            }}
+          >
             Crypto
           </div>
           <div style={{ marginTop: 6, fontSize: 13, color: THEME.muted }}>
-            Track BTC/ETH transactions, holdings, and realized/unrealized performance.
+            Track crypto transactions, holdings, and realized/unrealized performance.
           </div>
         </div>
         <div style={{ fontSize: 12, color: THEME.muted, textAlign: "right" }}>
-          As of <span style={{ color: THEME.pageText, fontWeight: 700 }}>{asOfDate}</span>
+          As of{" "}
+          <span style={{ color: THEME.pageText, fontWeight: 700 }}>
+            {asOfDate}
+          </span>
         </div>
       </div>
 
       {/* Summary cards */}
-      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(4, minmax(180px, 1fr))", gap: 12 }}>
-        <SummaryCard title="Total Holding Value" value={formatMoney(metrics.totals.holdingValue)} hint="Based on latest spot prices" />
-        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(metrics.totals.unrealized)} hint="Spot vs. avg cost" />
-        <SummaryCard title="Realized Gain/Loss" value={formatMoney(metrics.totals.realized)} hint="From sell transactions" />
-        <SummaryCard title="Total P/L" value={formatMoney(metrics.totals.totalPL)} hint="Realized + Unrealized" />
+      <div
+        style={{
+          marginTop: 14,
+          display: "grid",
+          gridTemplateColumns: "repeat(4, minmax(180px, 1fr))",
+          gap: 12,
+        }}
+      >
+        <SummaryCard
+          title="Total Holding Value"
+          value={formatMoney(metrics.totals.holdingValue)}
+          hint="Based on latest spot prices"
+        />
+        <SummaryCard
+          title="Unrealized Gain/Loss"
+          value={formatMoney(metrics.totals.unrealized)}
+          hint="Spot vs. avg cost"
+        />
+        <SummaryCard
+          title="Realized Gain/Loss"
+          value={formatMoney(metrics.totals.realized)}
+          hint="From sell transactions"
+        />
+        <SummaryCard
+          title="Total P/L"
+          value={formatMoney(metrics.totals.totalPL)}
+          hint="Realized + Unrealized"
+        />
       </div>
 
       {/* Holdings (full width) */}
       <div style={{ ...panel, marginTop: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
           <div>
-            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>Holdings Overview</div>
+            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
+              Holdings Overview
+            </div>
             <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>
-              {spotStatus || `Spot prices from /prices (BTC-USD, ETH-USD).`}
+              {spotStatus || "Spot prices from /prices."}
             </div>
           </div>
 
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button type="button" onClick={refreshSpots} style={btnSecondary} disabled={saving || loading}>
+            <button
+              type="button"
+              onClick={refreshSpots}
+              style={btnSecondary}
+              disabled={saving || loading}
+            >
               Refresh Spot
             </button>
-            <button type="button" onClick={openCreateForm} style={btnPrimary} disabled={saving || loading}>
+            <button
+              type="button"
+              onClick={openCreateForm}
+              style={btnPrimary}
+              disabled={saving || loading}
+            >
               Add Crypto Transaction
             </button>
           </div>
@@ -556,17 +723,33 @@ export default function Crypto() {
                 </tr>
               ) : (
                 metrics.holdings.map((h) => (
-                  <tr key={h.symbol} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
+                  <tr
+                    key={h.symbol}
+                    style={{ borderTop: `1px solid ${THEME.rowBorder}` }}
+                  >
                     <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>{h.symbol}</div>
+                      <div style={{ fontWeight: 900, color: THEME.title }}>
+                        {h.symbol}
+                      </div>
                       <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>
                         Buys: {h.buys} · Sells: {h.sells}
                       </div>
+                      {(!h.spot || h.spot === 0) ? (
+                        <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>
+                          Spot missing for this symbol
+                        </div>
+                      ) : null}
                     </Td>
-                    <Td>{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 8 })}</Td>
+                    <Td>
+                      {safeNum(h.qty, 0).toLocaleString(undefined, {
+                        maximumFractionDigits: 8,
+                      })}
+                    </Td>
                     <Td>{formatMoney(h.avgCost)}</Td>
-                    <Td>{formatMoney(h.spot)}</Td>
-                    <Td style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(h.marketValue)}</Td>
+                    <Td>{formatSpot(h.spot)}</Td>
+                    <Td style={{ fontWeight: 900, color: THEME.title }}>
+                      {formatMoney(h.marketValue)}
+                    </Td>
                     <Td>{formatMoney(h.unrealized)}</Td>
                     <Td>{formatMoney(h.realized)}</Td>
                   </tr>
@@ -580,11 +763,23 @@ export default function Crypto() {
       {/* Add/Edit transaction (hidden by default) */}
       {showForm ? (
         <div style={{ ...panel, marginTop: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "center",
+            }}
+          >
             <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
               {editingId ? "Edit Crypto Transaction" : "Add Crypto Transaction"}
             </div>
-            <button type="button" onClick={closeForm} style={btnSecondary} disabled={saving}>
+            <button
+              type="button"
+              onClick={closeForm}
+              style={btnSecondary}
+              disabled={saving}
+            >
               Close
             </button>
           </div>
@@ -596,20 +791,39 @@ export default function Crypto() {
             </div>
           ) : null}
 
-          <form onSubmit={onSubmit} style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <form
+            onSubmit={onSubmit}
+            style={{ marginTop: 12, display: "grid", gap: 10 }}
+          >
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               <Field label="Type">
-                <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} style={input} disabled={saving}>
+                <select
+                  value={form.type}
+                  onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+                  style={input}
+                  disabled={saving}
+                >
                   <option value="BUY">Buy</option>
                   <option value="SELL">Sell</option>
                 </select>
               </Field>
 
               <Field label="Symbol">
-                <select value={form.symbol} onChange={(e) => setForm((f) => ({ ...f, symbol: e.target.value }))} style={input} disabled={saving}>
-                  <option value="BTC-USD">BTC-USD</option>
-                  <option value="ETH-USD">ETH-USD</option>
-                </select>
+                <input
+                  value={form.symbol}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, symbol: e.target.value.toUpperCase() }))
+                  }
+                  placeholder="e.g., BTC-USD"
+                  style={input}
+                  disabled={saving}
+                  list="finvault-crypto-symbols"
+                />
+                <datalist id="finvault-crypto-symbols">
+                  {availableSymbols.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
               </Field>
 
               <Field label="Date">
@@ -669,11 +883,22 @@ export default function Crypto() {
                 />
               </Field>
 
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "end" }}>
-                <button type="button" onClick={() => resetForm()} style={btnSecondary} disabled={saving}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  justifyContent: "flex-end",
+                  alignItems: "end",
+                }}
+              >
+                <button type="button" onClick={resetForm} style={btnSecondary} disabled={saving}>
                   Reset
                 </button>
-                <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.75 : 1 }} disabled={saving}>
+                <button
+                  type="submit"
+                  style={{ ...btnPrimary, opacity: saving ? 0.75 : 1 }}
+                  disabled={saving}
+                >
                   {saving ? "Saving…" : editingId ? "Save Changes" : "Add Transaction"}
                 </button>
               </div>
@@ -684,8 +909,17 @@ export default function Crypto() {
 
       {/* Transactions */}
       <div style={{ ...panel, marginTop: 14, paddingBottom: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>Transactions</div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+          }}
+        >
+          <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
+            Transactions
+          </div>
 
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <input
@@ -695,14 +929,24 @@ export default function Crypto() {
               style={{ ...input, width: 240 }}
               disabled={loading}
             />
-            <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} style={{ ...input, width: 190 }} disabled={loading}>
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value)}
+              style={{ ...input, width: 190 }}
+              disabled={loading}
+            >
               <option value="date">Sort: Date</option>
               <option value="symbol">Sort: Symbol</option>
               <option value="type">Sort: Type</option>
               <option value="quantity">Sort: Quantity</option>
               <option value="unitPrice">Sort: Unit Price</option>
             </select>
-            <button type="button" onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))} style={btnSecondary} disabled={loading}>
+            <button
+              type="button"
+              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+              style={btnSecondary}
+              disabled={loading}
+            >
               {sortDir === "asc" ? "Asc" : "Desc"}
             </button>
           </div>
@@ -713,7 +957,9 @@ export default function Crypto() {
         {loading ? (
           <div style={{ padding: 14, color: THEME.muted }}>Loading…</div>
         ) : filteredSortedTx.length === 0 ? (
-          <div style={{ padding: 14, color: THEME.muted }}>No crypto transactions yet. Add a buy/sell above.</div>
+          <div style={{ padding: 14, color: THEME.muted }}>
+            No crypto transactions yet. Add a buy/sell above.
+          </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -742,24 +988,54 @@ export default function Crypto() {
                     <tr key={t.id} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
                       <Td>{t.date || "-"}</Td>
                       <Td>
-                        <span style={{ fontWeight: 900, color: THEME.title }}>{type}</span>
+                        <span style={{ fontWeight: 900, color: THEME.title }}>
+                          {type}
+                        </span>
                       </Td>
                       <Td>{String(t.symbol || "").toUpperCase()}</Td>
-                      <Td>{qty.toLocaleString(undefined, { maximumFractionDigits: 8 })}</Td>
+                      <Td>
+                        {qty.toLocaleString(undefined, { maximumFractionDigits: 8 })}
+                      </Td>
                       <Td>{formatMoney(px)}</Td>
                       <Td>{formatMoney(fees)}</Td>
-                      <Td style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(net)}</Td>
+                      <Td style={{ fontWeight: 900, color: THEME.title }}>
+                        {formatMoney(net)}
+                      </Td>
                       <Td align="right">
-                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingRight: 8 }}>
-                          <button type="button" onClick={() => startEdit(t)} style={btnSecondarySmall} disabled={saving}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 8,
+                            justifyContent: "flex-end",
+                            paddingRight: 8,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => startEdit(t)}
+                            style={btnSecondarySmall}
+                            disabled={saving}
+                          >
                             Edit
                           </button>
-                          <button type="button" onClick={() => onDelete(t.id)} style={btnDangerSmall} disabled={saving}>
+                          <button
+                            type="button"
+                            onClick={() => onDelete(t.id)}
+                            style={btnDangerSmall}
+                            disabled={saving}
+                          >
                             Delete
                           </button>
                         </div>
                         {t.notes ? (
-                          <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted, paddingRight: 8 }}>
+                          <div
+                            style={{
+                              marginTop: 6,
+                              fontSize: 12,
+                              color: THEME.muted,
+                              paddingRight: 8,
+                            }}
+                          >
                             {t.notes}
                           </div>
                         ) : null}
@@ -781,9 +1057,17 @@ export default function Crypto() {
 function SummaryCard({ title, value, hint }) {
   return (
     <div style={panel}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{title}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.title }}>{value}</div>
-      {hint ? <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>{hint}</div> : null}
+      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>
+        {title}
+      </div>
+      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.title }}>
+        {value}
+      </div>
+      {hint ? (
+        <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>
+          {hint}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -791,7 +1075,9 @@ function SummaryCard({ title, value, hint }) {
 function Field({ label, children }) {
   return (
     <label style={{ display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{label}</div>
+      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>
+        {label}
+      </div>
       {children}
     </label>
   );
@@ -816,7 +1102,11 @@ function Th({ children, align }) {
 
 function Td({ children, align, colSpan }) {
   return (
-    <td style={{ padding: "12px 10px", verticalAlign: "top" }} align={align || "left"} colSpan={colSpan}>
+    <td
+      style={{ padding: "12px 10px", verticalAlign: "top" }}
+      align={align || "left"}
+      colSpan={colSpan}
+    >
       {children}
     </td>
   );
