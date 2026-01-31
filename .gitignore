@@ -41,3 +41,6 @@ node_modules/
 
 # Secrets
 backend/keys.json
+
+# Local-only files
+local/
