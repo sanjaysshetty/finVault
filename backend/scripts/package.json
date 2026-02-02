@@ -8,10 +8,12 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.971.0",
-    "@aws-sdk/lib-dynamodb": "^3.971.0",
+    "@aws-sdk/client-dynamodb": "^3.981.0",
+    "@aws-sdk/lib-dynamodb": "^3.981.0",
+    "openai": "^6.17.0",
+    "p-limit": "^7.2.0",
     "xlsx": "^0.18.5"
-  }
+  },
+  "description": ""
 }

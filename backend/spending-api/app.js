@@ -14,7 +14,8 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 });
 
 // ✅ default table name so GET /spending doesn't 500 if env var missing
-const TABLE_NAME = process.env.TABLE_NAME || "ReceiptLedger";
+const TABLE_NAME = process.env.TABLE_NAME || "StoreReceiptLedger";
+const DATE_INDEX_NAME = process.env.DATE_INDEX_NAME || "UserDateIndex";
 
 function corsHeaders() {
   return {
@@ -138,6 +139,9 @@ function buildUpdateExpression(input) {
     const d = normalizeDateYYYYMMDD(input.date);
     if (d) {
       allowed.date = d;
+      // NOTE: This assumes you have a date-based GSI (gsi1pk).
+      // If your GSI1 is now curationKey/curationSort, this still won’t break updates,
+      // but date queries will fall back to Scan.
       allowed.gsi1pk = `DATE#${d}`;
     }
   }
@@ -161,14 +165,53 @@ function buildUpdateExpression(input) {
     sets.push(`${nameKey} = ${valueKey}`);
   }
 
-  ExpressionAttributeNames["#updatedAt"] = "updatedAt";
-  ExpressionAttributeValues[":updatedAt"] = new Date().toISOString();
-  sets.push("#updatedAt = :updatedAt");
-
   return {
     UpdateExpression: `SET ${sets.join(", ")}`,
     ExpressionAttributeNames,
     ExpressionAttributeValues,
+  };
+}
+
+/**
+ * ✅ Adds curation “dirty” flags to ANY update.
+ * We keep these on the RAW row so the nightly batch can find deltas without streams.
+ */
+function addCurationToUpdate(exprObj, pk, sk) {
+  const now = new Date().toISOString();
+
+  const names = exprObj.ExpressionAttributeNames || {};
+  const values = exprObj.ExpressionAttributeValues || {};
+
+  names["#updatedAt"] = "updatedAt";
+  values[":updatedAt"] = now;
+
+  names["#needsCuration"] = "needsCuration";
+  values[":needsCuration"] = true;
+
+  names["#curationKey"] = "curationKey";
+  values[":curationKey"] = "CURATION";
+
+  names["#curationSort"] = "curationSort";
+  values[":curationSort"] = `NEEDS#${now}#${pk}#${sk}`;
+
+  // Append to existing UpdateExpression
+  const base = exprObj.UpdateExpression || "SET";
+  const suffix = [
+    "#updatedAt = :updatedAt",
+    "#needsCuration = :needsCuration",
+    "#curationKey = :curationKey",
+    "#curationSort = :curationSort",
+  ].join(", ");
+
+  const joined =
+    base.trim().toUpperCase() === "SET"
+      ? `SET ${suffix}`
+      : `${base}, ${suffix}`;
+
+  return {
+    UpdateExpression: joined,
+    ExpressionAttributeNames: names,
+    ExpressionAttributeValues: values,
   };
 }
 
@@ -221,7 +264,6 @@ function normalizeCategory(raw) {
   // tax always wins
   if (c.includes("tax")) return "Tax";
 
-  // common merges (expand as you see your data)
   const map = [
     { keys: ["pantry", "snack", "snacks"], label: "Pantry & Snacks" },
     { keys: ["produce", "fruit", "vegetable"], label: "Produce" },
@@ -252,7 +294,6 @@ function shouldExcludeLine(item) {
   const desc = String(item?.productDescription || "").trim().toUpperCase();
   if (!desc) return false;
 
-  // exclude typical non-item summary rows
   if (desc.includes("SUBTOTAL")) return true;
   if (desc === "TOTAL" || desc.includes(" TOTAL")) return true;
   if (desc.includes("BALANCE DUE")) return true;
@@ -267,30 +308,101 @@ function isTaxLine(item) {
   return desc.includes("TAX") || canonCategory(cat).includes("tax");
 }
 
+async function queryAllForDateRange(userId, startISO, endISO) {
+  // Preferred: Query a GSI with pk=userId, sk=date (YYYY-MM-DD)
+  let lastKey = undefined;
+  const all = [];
+
+  try {
+    do {
+      const resp = await ddb.send(
+        new QueryCommand({
+          TableName: TABLE_NAME,
+          IndexName: DATE_INDEX_NAME,
+          KeyConditionExpression: "#uid = :uid AND #date BETWEEN :s AND :e",
+          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
+          ExpressionAttributeValues: { ":uid": userId, ":s": startISO, ":e": endISO },
+          ExclusiveStartKey: lastKey,
+        })
+      );
+
+      if (resp.Items?.length) all.push(...resp.Items);
+      lastKey = resp.LastEvaluatedKey;
+    } while (lastKey);
+
+    return all;
+  } catch (e) {
+    // Fallback scan by user + date range (works but slower)
+    const msg = String(e?.message || e);
+    console.log("Date range query failed; falling back to Scan. Error:", msg);
+
+    let scanLast = undefined;
+    do {
+      const sresp = await ddb.send(
+        new ScanCommand({
+          TableName: TABLE_NAME,
+          FilterExpression: "#uid = :uid AND #date BETWEEN :s AND :e",
+          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
+          ExpressionAttributeValues: { ":uid": userId, ":s": startISO, ":e": endISO },
+          ExclusiveStartKey: scanLast,
+        })
+      );
+
+      if (sresp.Items?.length) all.push(...sresp.Items);
+      scanLast = sresp.LastEvaluatedKey;
+    } while (scanLast);
+
+    return all;
+  }
+}
+
 async function queryAllForDate(userId, dISO) {
-  // Query GSI1 for a given date; paginate to get all
+  // Prefer date-GSI query; if GSI schema changed, fall back to Scan.
   const pk = `DATE#${dISO}`;
   let lastKey = undefined;
   const all = [];
 
-  do {
-    const resp = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_NAME,
-        IndexName: "GSI1",
-        KeyConditionExpression: "gsi1pk = :pk",
-        ExpressionAttributeValues: { ":pk": pk, ":uid": userId },
-        FilterExpression: "#uid = :uid",
-        ExpressionAttributeNames: { "#uid": "userId" },
-        ExclusiveStartKey: lastKey,
-      })
-    );
+  try {
+    do {
+      const resp = await ddb.send(
+        new QueryCommand({
+          TableName: TABLE_NAME,
+          IndexName: "GSI1",
+          KeyConditionExpression: "gsi1pk = :pk",
+          ExpressionAttributeValues: { ":pk": pk, ":uid": userId },
+          FilterExpression: "#uid = :uid",
+          ExpressionAttributeNames: { "#uid": "userId" },
+          ExclusiveStartKey: lastKey,
+        })
+      );
 
-    if (resp.Items?.length) all.push(...resp.Items);
-    lastKey = resp.LastEvaluatedKey;
-  } while (lastKey);
+      if (resp.Items?.length) all.push(...resp.Items);
+      lastKey = resp.LastEvaluatedKey;
+    } while (lastKey);
 
-  return all;
+    return all;
+  } catch (e) {
+    // fallback scan by date + user
+    const msg = String(e?.message || e);
+    console.log("GSI1 date query failed; falling back to Scan. Error:", msg);
+
+    let scanLast = undefined;
+    do {
+      const sresp = await ddb.send(
+        new ScanCommand({
+          TableName: TABLE_NAME,
+          FilterExpression: "#uid = :uid AND #date = :d",
+          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
+          ExpressionAttributeValues: { ":uid": userId, ":d": dISO },
+          ExclusiveStartKey: scanLast,
+        })
+      );
+      if (sresp.Items?.length) all.push(...sresp.Items);
+      scanLast = sresp.LastEvaluatedKey;
+    } while (scanLast);
+
+    return all;
+  }
 }
 
 /* -------------------- Handlers -------------------- */
@@ -313,29 +425,51 @@ async function listSpending(event) {
     }
   }
 
-  // Optional date query via GSI1
+  // Optional date query via GSI1 (preferred). If GSI is not date-based, fallback to Scan.
   const date = (qs.date || "").trim();
   if (date) {
     const d = normalizeDateYYYYMMDD(date);
 
-    const resp = await ddb.send(
-      new QueryCommand({
-        TableName: TABLE_NAME,
-        IndexName: "GSI1",
-        KeyConditionExpression: "gsi1pk = :pk",
-        ExpressionAttributeValues: { ":pk": `DATE#${d}`, ":uid": userId },
-        FilterExpression: "#uid = :uid",
-        ExpressionAttributeNames: { "#uid": "userId" },
-        Limit: limit,
-        ExclusiveStartKey: exclusiveStartKey,
-      })
-    );
+    try {
+      const resp = await ddb.send(
+        new QueryCommand({
+          TableName: TABLE_NAME,
+          IndexName: "GSI1",
+          KeyConditionExpression: "gsi1pk = :pk",
+          ExpressionAttributeValues: { ":pk": `DATE#${d}`, ":uid": userId },
+          FilterExpression: "#uid = :uid",
+          ExpressionAttributeNames: { "#uid": "userId" },
+          Limit: limit,
+          ExclusiveStartKey: exclusiveStartKey,
+        })
+      );
 
-    const nextTokenOut = resp.LastEvaluatedKey
-      ? Buffer.from(JSON.stringify(resp.LastEvaluatedKey), "utf8").toString("base64")
-      : null;
+      const nextTokenOut = resp.LastEvaluatedKey
+        ? Buffer.from(JSON.stringify(resp.LastEvaluatedKey), "utf8").toString("base64")
+        : null;
 
-    return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
+      return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      console.log("GSI1 date list query failed; falling back to Scan. Error:", msg);
+
+      const resp = await ddb.send(
+        new ScanCommand({
+          TableName: TABLE_NAME,
+          FilterExpression: "#uid = :uid AND #date = :d",
+          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
+          ExpressionAttributeValues: { ":uid": userId, ":d": d },
+          Limit: limit,
+          ExclusiveStartKey: exclusiveStartKey,
+        })
+      );
+
+      const nextTokenOut = resp.LastEvaluatedKey
+        ? Buffer.from(JSON.stringify(resp.LastEvaluatedKey), "utf8").toString("base64")
+        : null;
+
+      return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
+    }
   }
 
   // Fallback: Scan and filter by userId
@@ -362,7 +496,6 @@ async function spendingDashboard(event) {
   const userId = getUserIdFromJwt(event);
   const qs = event.queryStringParameters || {};
 
-  // default last 30 days
   const today = new Date().toISOString().slice(0, 10);
   const defaultStart = addDays(today, -29);
 
@@ -376,50 +509,98 @@ async function spendingDashboard(event) {
       ? "All"
       : normalizeCategory(filterCategoryRaw);
 
-  // Pull all items for the date range (server-side aggregation)
-  const days = dateRange(start, end);
+  const items = await queryAllForDateRange(userId, start, end);
 
   let totalSpend = 0;
   const byCategory = new Map();
 
-  for (const d of days) {
-    const items = await queryAllForDate(userId, d);
+  for (const it of items) {
+    if (shouldExcludeLine(it)) continue;
 
-    for (const it of items) {
-      if (shouldExcludeLine(it)) continue;
+    const amt = Number(it.amount);
+    if (!Number.isFinite(amt)) continue;
 
-      const amt = Number(it.amount);
-      if (!Number.isFinite(amt)) continue;
+    const cat = isTaxLine(it) ? "Tax" : normalizeCategory(it.category);
 
-      // tax handling
-      const cat = isTaxLine(it) ? "Tax" : normalizeCategory(it.category);
+    if (filterCategory !== "All" && cat !== filterCategory) continue;
 
-      if (filterCategory !== "All" && cat !== filterCategory) continue;
-
-      totalSpend += amt;
-      byCategory.set(cat, (byCategory.get(cat) || 0) + amt);
-    }
+    totalSpend += amt;
+    byCategory.set(cat, (byCategory.get(cat) || 0) + amt);
   }
-  // Return ALL categories sorted by spend (no "Others")
+
   const chart = Array.from(byCategory.entries())
     .map(([category, amount]) => ({ category, amount: Number(amount.toFixed(2)) }))
     .sort((a, b) => b.amount - a.amount);
 
-  // categories for filter dropdown (include All first)
   const categories = ["All", ...chart.map((x) => x.category)];
 
-return json(200, {
-  start,
-  end,
-  category: filterCategory,
-  totalSpend: Number(totalSpend.toFixed(2)),
-  chart,          // now includes ALL categories
-  categories,
-  meta: {
-    days: days.length,
-    excluded: "SUBTOTAL/TOTAL rows removed; Tax bucketed separately",
-  },
-});
+  return json(200, {
+    start,
+    end,
+    category: filterCategory,
+    totalSpend: Number(totalSpend.toFixed(2)),
+    chart: chart.slice(0, 10),
+    categories,
+  });
+}
+
+async function spendingDashboardDetails(event) {
+  requireTableName();
+  const userId = getUserIdFromJwt(event);
+  const qs = event.queryStringParameters || {};
+
+  const today = new Date().toISOString().slice(0, 10);
+  const defaultStart = addDays(today, -29);
+
+  const start = normalizeDateYYYYMMDD(qs.start || defaultStart);
+  const end = normalizeDateYYYYMMDD(qs.end || today);
+  if (start > end) throw new Error("start must be <= end");
+
+  const rawCat = String(qs.category || "").trim();
+  if (!rawCat) throw new Error("category is required");
+
+  const category = normalizeCategory(rawCat);
+
+  const items = await queryAllForDateRange(userId, start, end);
+
+  const out = [];
+  let total = 0;
+
+  for (const it of items) {
+    if (shouldExcludeLine(it)) continue;
+
+    const amt = Number(it.amount);
+    if (!Number.isFinite(amt)) continue;
+
+    const cat = isTaxLine(it) ? "Tax" : normalizeCategory(it.category);
+    if (cat !== category) continue;
+
+    total += amt;
+
+    out.push({
+      pk: it.pk,
+      sk: it.sk,
+      date: it.date || "",
+      receipt: it.receipt || "",
+      lineId: it.lineId ?? "",
+      productCode: it.productCode || "",
+      productDescription: it.productDescription || "",
+      amount: amt,
+      category: cat,
+    });
+  }
+
+  // Sort for a nice UX: largest first
+  out.sort((a, b) => Number(b.amount) - Number(a.amount));
+
+  return json(200, {
+    start,
+    end,
+    category,
+    total: Number(total.toFixed(2)),
+    count: out.length,
+    items: out,
+  });
 }
 
 // receipt -> pk=RECEIPT#receipt
@@ -458,6 +639,8 @@ async function createItem(event) {
 
   const d = body.date ? normalizeDateYYYYMMDD(body.date) : "";
 
+  const now = new Date().toISOString();
+
   const item = {
     pk,
     sk,
@@ -472,8 +655,13 @@ async function createItem(event) {
     gsi1pk: d ? `DATE#${d}` : "DATE#UNKNOWN",
     gsi1sk: `${pk}#${sk}`,
     userId,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: now,
+
+    // ✅ curation queue markers (batch-based)
+    updatedAt: now,
+    needsCuration: true,
+    curationKey: "CURATION",
+    curationSort: `NEEDS#${now}#${pk}#${sk}`,
   };
 
   await ddb.send(
@@ -502,16 +690,16 @@ async function updateItemByReceiptLine(event) {
   const existing = await getItemOrNull(pk, sk);
   assertOwned(existing, userId);
 
-  const { UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues } =
-    buildUpdateExpression(body);
+  let expr = buildUpdateExpression(body);
+  expr = addCurationToUpdate(expr, pk, sk);
 
   const resp = await ddb.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { pk, sk },
-      UpdateExpression,
-      ExpressionAttributeNames,
-      ExpressionAttributeValues,
+      UpdateExpression: expr.UpdateExpression,
+      ExpressionAttributeNames: expr.ExpressionAttributeNames,
+      ExpressionAttributeValues: expr.ExpressionAttributeValues,
       ConditionExpression: "attribute_exists(pk) AND attribute_exists(sk)",
       ReturnValues: "ALL_NEW",
     })
@@ -535,16 +723,16 @@ async function updateItemByPkSk(event) {
 
   const body = parseBody(event);
 
-  const { UpdateExpression, ExpressionAttributeNames, ExpressionAttributeValues } =
-    buildUpdateExpression(body);
+  let expr = buildUpdateExpression(body);
+  expr = addCurationToUpdate(expr, pk, sk);
 
   const resp = await ddb.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { pk, sk },
-      UpdateExpression,
-      ExpressionAttributeNames,
-      ExpressionAttributeValues,
+      UpdateExpression: expr.UpdateExpression,
+      ExpressionAttributeNames: expr.ExpressionAttributeNames,
+      ExpressionAttributeValues: expr.ExpressionAttributeValues,
       ConditionExpression: "attribute_exists(pk) AND attribute_exists(sk)",
       ReturnValues: "ALL_NEW",
     })
@@ -611,6 +799,9 @@ exports.handler = async (event) => {
     const rawPath = event?.rawPath || "";
 
     // ✅ Dashboard aggregates
+    if (method === "GET" && rawPath === "/spending/dashboard/details")
+      return await spendingDashboardDetails(event);
+
     if (method === "GET" && rawPath === "/spending/dashboard")
       return await spendingDashboard(event);
 
@@ -640,15 +831,21 @@ exports.handler = async (event) => {
   } catch (e) {
     const msg = String(e?.message || e);
 
-    const code = e?.statusCode || (
-      msg.includes("Unauthorized") ? 401 :
-      msg.includes("Forbidden") ? 403 :
-      msg.includes("ConditionalCheckFailed") ? 404 :
-      msg.includes("Invalid JSON") ? 400 :
-      msg.includes("No editable fields") ? 400 :
-      msg.includes("Missing") || msg.includes("Invalid") ? 400 :
-      500
-    );
+    const code =
+      e?.statusCode ||
+      (msg.includes("Unauthorized")
+        ? 401
+        : msg.includes("Forbidden")
+        ? 403
+        : msg.includes("ConditionalCheckFailed")
+        ? 404
+        : msg.includes("Invalid JSON")
+        ? 400
+        : msg.includes("No editable fields")
+        ? 400
+        : msg.includes("Missing") || msg.includes("Invalid")
+        ? 400
+        : 500);
 
     if (code === 404) return json(404, { error: "Item not found" });
     if (code === 401) return json(401, { error: "Unauthorized" });
