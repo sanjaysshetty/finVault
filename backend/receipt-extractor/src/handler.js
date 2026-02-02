@@ -134,6 +134,18 @@ async function resolveUserIdFromS3({ bucket, key }) {
   return "";
 }
 
+/**
+ * Batch curation keys (for querying NEEDS rows via GSI1)
+ * GSI1: curationKey (HASH) + curationSort (RANGE)
+ */
+function makeCurationFields({ nowIso, pk, sk }) {
+  return {
+    needsCuration: true,
+    curationKey: "CURATION",
+    curationSort: `NEEDS#${nowIso}#${pk}#${sk}`,
+  };
+}
+
 function buildReceiptSchema() {
   return {
     type: "object",
@@ -284,7 +296,7 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, 
   const now = new Date().toISOString();
   const purchaseDate = extracted?.receipt?.purchaseDate ?? null;
 
-  // META row
+  // META row (NOT part of curation queue)
   await ddb.send(
     new PutCommand({
       TableName: table,
@@ -309,11 +321,13 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, 
 
   const itemPutReqs = itemLines.map((ln, idx) => {
     const lineId = Number.isInteger(ln?.lineId) ? ln.lineId : idx + 1;
+    const pk = `RECEIPT#${receiptId}`;
+    const sk = `ITEM#${String(lineId).padStart(4, "0")}`;
     return {
       PutRequest: {
         Item: {
-          pk: `RECEIPT#${receiptId}`,
-          sk: `ITEM#${String(lineId).padStart(4, "0")}`,
+          pk,
+          sk,
           receiptId,
           userId, // ✅ include
           date: purchaseDate,
@@ -324,29 +338,39 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, 
           itemCount: 1,
           rawText: ln?.rawText ?? null,
           updatedAt: now,
+
+          // ✅ batch curation markers (GSI1 queryable)
+          ...makeCurationFields({ nowIso: now, pk, sk }),
         },
       },
     };
   });
 
-  const summaryPutReqs = summaryLines.map((s, i) => ({
-    PutRequest: {
-      Item: {
-        pk: `RECEIPT#${receiptId}`,
-        sk: `ITEM#9${String(i + 1).padStart(3, "0")}`, // ITEM#9001..9003
-        receiptId,
-        userId, // ✅ include
-        date: purchaseDate,
-        productCode: null,
-        productDescription: s.type,
-        amount: s.amount ?? null,
-        category: "SUMMARY",
-        itemCount: 1,
-        rawText: s.rawText ?? s.type,
-        updatedAt: now,
+  const summaryPutReqs = summaryLines.map((s, i) => {
+    const pk = `RECEIPT#${receiptId}`;
+    const sk = `ITEM#9${String(i + 1).padStart(3, "0")}`; // ITEM#9001..9003
+    return {
+      PutRequest: {
+        Item: {
+          pk,
+          sk,
+          receiptId,
+          userId, // ✅ include
+          date: purchaseDate,
+          productCode: null,
+          productDescription: s.type,
+          amount: s.amount ?? null,
+          category: "SUMMARY",
+          itemCount: 1,
+          rawText: s.rawText ?? s.type,
+          updatedAt: now,
+
+          // ✅ batch curation markers (GSI1 queryable)
+          ...makeCurationFields({ nowIso: now, pk, sk }),
+        },
       },
-    },
-  }));
+    };
+  });
 
   const putReqs = [...itemPutReqs, ...summaryPutReqs];
   await batchWriteAll(table, putReqs);
@@ -356,6 +380,7 @@ async function markFailed({ receiptId, bucket, s3Key, errorMessage, userId }) {
   const table = requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
 
+  // META failure row (NOT part of curation queue)
   await ddb.send(
     new PutCommand({
       TableName: table,

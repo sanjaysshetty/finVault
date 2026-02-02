@@ -9,6 +9,24 @@ const ID_TOKEN_KEY = "finvault.idToken";
 const REFRESH_KEY = "finvault.refreshToken";
 const PKCE_VERIFIER_KEY = "finvault.pkce.verifier";
 
+/** PKCE storage helpers: session for normal flow + local fallback for mobile */
+function pkceSet(verifier) {
+  sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+  localStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+}
+
+function pkceGet() {
+  return (
+    sessionStorage.getItem(PKCE_VERIFIER_KEY) ||
+    localStorage.getItem(PKCE_VERIFIER_KEY)
+  );
+}
+
+function pkceClear() {
+  sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+  localStorage.removeItem(PKCE_VERIFIER_KEY);
+}
+
 function b64UrlEncode(bytes) {
   return btoa(String.fromCharCode(...bytes))
     .replace(/\+/g, "-")
@@ -40,7 +58,7 @@ export function logout() {
   sessionStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(ID_TOKEN_KEY);
   sessionStorage.removeItem(REFRESH_KEY);
-  sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+  pkceClear();
 
   const url =
     `${COGNITO_DOMAIN}/logout?` +
@@ -54,7 +72,7 @@ export function logout() {
 
 export async function login() {
   const verifier = randomString(64);
-  sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+  pkceSet(verifier);
 
   const challenge = b64UrlEncode(await sha256(verifier));
 
@@ -77,8 +95,13 @@ export async function handleAuthCallback() {
   const code = params.get("code");
   if (!code) throw new Error("Missing authorization code");
 
-  const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
-  if (!verifier) throw new Error("Missing PKCE verifier (try login again)");
+  const verifier = pkceGet();
+  if (!verifier) {
+    // Mobile/in-app browser sometimes loses sessionStorage between redirects
+    // Clear any stale state and restart login.
+    pkceClear();
+    throw new Error("Missing PKCE verifier (mobile lost session). Please tap Login again.");
+  }
 
   const tokenUrl = `${COGNITO_DOMAIN}/oauth2/token`;
 
@@ -104,9 +127,10 @@ export async function handleAuthCallback() {
   if (json.id_token) sessionStorage.setItem(ID_TOKEN_KEY, json.id_token);
   if (json.refresh_token) sessionStorage.setItem(REFRESH_KEY, json.refresh_token);
 
-  // Clean up
-  sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+  // Clean up verifier from both stores
+  pkceClear();
 
-  // Optional: remove ?code=... from URL
-  window.history.replaceState({}, document.title, "/");
+  // Remove ?code=... from URL safely (works for / and /app)
+  const base = window.location.pathname.startsWith("/app") ? "/app" : "";
+  window.history.replaceState({}, document.title, `${base}/`);
 }

@@ -87,67 +87,169 @@ async function apiFetch(path, { method = "GET", body } = {}) {
 
 /* ---------------- Horizontal bar chart (no external libs) ---------------- */
 
-function HorizontalBarChart({ data }) {
+function HorizontalBarChart({ data, expanded, onToggle, detailsByCategory, loadingCat }) {
   const max = useMemo(() => {
     return data.reduce((m, x) => Math.max(m, Number(x.amount || 0)), 0) || 1;
   }, [data]);
 
   return (
-    <div style={{ display: "grid", gap: 10 }}>
+    <div style={{ display: "grid", gap: 12 }}>
       {data.map((d) => {
         const amt = Number(d.amount || 0);
         const pct = clamp((amt / max) * 100, 0, 100);
 
-        return (
-          <div
-            key={d.category}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "240px 1fr 130px",
-              gap: 12,
-              alignItems: "center",
-            }}
-          >
-            <div
-              style={{
-                fontWeight: 800,
-                color: THEME.pageText,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-              title={d.category}
-            >
-              {d.category}
-            </div>
+        const isOpen = !!expanded[d.category];
+        const det = detailsByCategory[d.category];
 
-            {/* Track */}
+        return (
+          <div key={d.category} style={{ display: "grid", gap: 10 }}>
             <div
               style={{
-                height: 14,
-                borderRadius: 999,
-                border: `1px solid ${THEME.panelBorder}`,
-                background: "rgba(255,255,255,0.06)", // a bit brighter track
-                overflow: "hidden",
-                boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.15)",
+                display: "grid",
+                gridTemplateColumns: "240px 1fr 130px",
+                gap: 12,
+                alignItems: "center",
               }}
-              title={`${d.category}: ${formatMoney(amt)}`}
             >
-              {/* Fill */}
+              {/* Category label + expand/collapse */}
               <div
                 style={{
-                  width: `${pct}%`,
-                  height: "100%",
-                  background: "rgba(34,211,238,0.65)", // cyan w/ contrast
-                  borderRight: "1px solid rgba(34,211,238,0.95)",
-                  boxShadow: "0 0 14px rgba(34,211,238,0.25)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  minWidth: 0,
                 }}
-              />
+                title={d.category}
+              >
+                <button
+                  type="button"
+                  onClick={() => onToggle(d.category)}
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: 10,
+                    border: `1px solid ${THEME.inputBorder}`,
+                    background: "rgba(255,255,255,0.06)",
+                    color: THEME.title,
+                    fontWeight: 900,
+                    cursor: "pointer",
+                    lineHeight: "24px",
+                  }}
+                  aria-label={isOpen ? `Collapse ${d.category}` : `Expand ${d.category}`}
+                >
+                  {isOpen ? "–" : "+"}
+                </button>
+
+                <div
+                  style={{
+                    fontWeight: 800,
+                    color: THEME.pageText,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {d.category}
+                </div>
+              </div>
+
+              {/* Track */}
+              <div
+                style={{
+                  height: 14,
+                  borderRadius: 999,
+                  border: `1px solid ${THEME.panelBorder}`,
+                  background: "rgba(255,255,255,0.06)",
+                  overflow: "hidden",
+                  boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.15)",
+                }}
+                title={`${d.category}: ${formatMoney(amt)}`}
+              >
+                {/* Fill */}
+                <div
+                  style={{
+                    width: `${pct}%`,
+                    height: "100%",
+                    background: "rgba(34,211,238,0.65)",
+                    borderRight: "1px solid rgba(34,211,238,0.95)",
+                    boxShadow: "0 0 14px rgba(34,211,238,0.25)",
+                  }}
+                />
+              </div>
+
+              <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
+                {formatMoney(amt)}
+              </div>
             </div>
 
-            <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
-              {formatMoney(amt)}
-            </div>
+            {/* Drilldown */}
+            {isOpen ? (
+              <div
+                style={{
+                  border: `1px solid ${THEME.rowBorder}`,
+                  borderRadius: 12,
+                  padding: 12,
+                  background: "rgba(255,255,255,0.03)",
+                }}
+              >
+                {loadingCat === d.category ? (
+                  <div style={{ color: THEME.muted }}>Loading line items…</div>
+                ) : !det ? (
+                  <div style={{ color: THEME.muted }}>No details loaded.</div>
+                ) : det.error ? (
+                  <div style={{ color: THEME.muted }}>Error: {det.error}</div>
+                ) : det.items?.length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <div style={{ fontWeight: 900, color: THEME.title }}>
+                        {d.category} line items
+                      </div>
+                      <div style={{ color: THEME.muted, fontSize: 12 }}>
+                        {det.count} items · {formatMoney(det.total)}
+                      </div>
+                    </div>
+
+                    <div style={{ borderTop: `1px solid ${THEME.rowBorder}` }} />
+
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {det.items.slice(0, 80).map((it) => (
+                        <div
+                          key={`${it.pk}||${it.sk}`}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "110px 1fr 110px",
+                            gap: 10,
+                            alignItems: "start",
+                            padding: "8px 0",
+                            borderBottom: `1px solid ${THEME.rowBorder}`,
+                          }}
+                        >
+                          <div style={{ color: THEME.muted, fontSize: 12 }}>{it.date || ""}</div>
+                          <div style={{ color: THEME.pageText, fontWeight: 700 }}>
+                            {it.productDescription || "(no description)"}
+                            {it.productCode ? (
+                              <div style={{ color: THEME.muted, fontSize: 12, marginTop: 2 }}>
+                                Code: {it.productCode}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
+                            {formatMoney(Number(it.amount || 0))}
+                          </div>
+                        </div>
+                      ))}
+                      {det.items.length > 80 ? (
+                        <div style={{ color: THEME.muted, fontSize: 12 }}>
+                          Showing top 80 items. Narrow your date range to see fewer.
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ color: THEME.muted }}>No line items in this category.</div>
+                )}
+              </div>
+            ) : null}
           </div>
         );
       })}
@@ -183,6 +285,11 @@ export default function SpendingDash() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState({});
+
+  const [detailsByCategory, setDetailsByCategory] = useState({});
+  const [loadingCat, setLoadingCat] = useState("");
+
 
   // apply preset to dates (except CUSTOM)
   useEffect(() => {
@@ -203,6 +310,38 @@ export default function SpendingDash() {
       setEnd(t);
     }
   }, [preset]);
+
+  async function loadCategoryDetails(cat) {
+  setLoadingCat(cat);
+  try {
+    const qs = new URLSearchParams({ start, end, category: cat }).toString();
+    const res = await apiFetch(`/spending/dashboard/details?${qs}`);
+
+    setDetailsByCategory((prev) => ({
+      ...prev,
+      [cat]: { ...res, error: "" },
+    }));
+  } catch (e) {
+    setDetailsByCategory((prev) => ({
+      ...prev,
+      [cat]: { error: e?.message || "Failed to load details", items: [], count: 0, total: 0 },
+    }));
+  } finally {
+    setLoadingCat("");
+  }
+}
+
+function toggleCategory(cat) {
+  setExpanded((prev) => {
+    const next = { ...prev, [cat]: !prev[cat] };
+    return next;
+  });
+
+  // If opening and we don't have details yet, fetch them
+  if (!expanded[cat] && !detailsByCategory[cat]) {
+    loadCategoryDetails(cat);
+  }
+}
 
   async function loadDashboard({ s = start, e = end, c = category } = {}) {
     setLoading(true);
@@ -236,6 +375,12 @@ export default function SpendingDash() {
   // initial load + reload when filters change
   useEffect(() => {
     loadDashboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [start, end, category]);
+
+  useEffect(() => {
+    setExpanded({});
+    setDetailsByCategory({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [start, end, category]);
 
@@ -359,7 +504,13 @@ export default function SpendingDash() {
           ) : chart.length === 0 ? (
             <div style={{ color: THEME.muted }}>No spend data for the selected period.</div>
           ) : (
-            <HorizontalBarChart data={chart} />
+            <HorizontalBarChart
+              data={chart}
+              expanded={expanded}
+              onToggle={toggleCategory}
+              detailsByCategory={detailsByCategory}
+              loadingCat={loadingCat}
+            />
           )}
         </div>
       </div>
