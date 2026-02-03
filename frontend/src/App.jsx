@@ -10,7 +10,7 @@ import Bullion from "./pages/Bullion";
 import Options from "./pages/Options";
 import FixedIncome from "./pages/FixedIncome";
 import SpendingDash from "./pages/SpendingDash";
-
+import Futures from "./pages/Futures";
 import Crypto from "./pages/Crypto";
 import NAV from "./pages/NAV";
 
@@ -51,6 +51,7 @@ export default function App() {
           <Route path="/assets/stocks" element={<Stocks />} />
           <Route path="/assets/bullion" element={<Bullion />} />
           <Route path="/assets/options" element={<Options />} />
+          <Route path="/assets/futures" element={<Futures />} />
           <Route path="/assets/fixedincome" element={<FixedIncome />} />
           <Route path="/assets/crypto" element={<Crypto />} />
 

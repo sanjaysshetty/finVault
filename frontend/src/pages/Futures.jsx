@@ -30,7 +30,7 @@ export default function Options() {
           color: "#94A3B8",
         }}
       >
-        Options tracking is under development
+        Futures tracking is under development
       </div>
     </div>
   );

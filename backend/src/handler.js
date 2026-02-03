@@ -1,8 +1,9 @@
 const nacl = require("tweetnacl");
+const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 
-const GOLDAPI_BASE = "https://www.goldapi.io/api";
 const RH_BASE = "https://trading.robinhood.com";
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
+const YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 
 /* -------------------- CORS -------------------- */
 function corsHeaders() {
@@ -37,47 +38,129 @@ function parseCsvSymbols(s) {
     .split(",")
     .map((x) => x.trim().toUpperCase())
     .filter(Boolean)
-    .slice(0, 25); // safety cap
+    .slice(0, 25);
 }
 
-/* -------------------- GoldAPI -------------------- */
-async function fetchMetal(metal, currency, apiKey) {
-  if (process.env.USE_METAL_PRICE_STUB === "true") {
-    return {
-      timestamp: 1769454792,
-      metal,
-      currency,
-      exchange: "FOREXCOM",
-      symbol: `FOREXCOM:${metal}${currency}`,
-      prev_close_price: 4986.45,
-      open_price: 4986.45,
-      low_price: 4986.45,
-      high_price: 5111.01,
-      open_time: 1769385600,
-      price: metal === "XAU" ? 5058.84 : 24.5,
-      ch: 72.39,
-      chp: 1.45,
-      ask: 5061.22,
-      bid: 5060.31,
-      price_gram_24k: 162.6455,
-      price_gram_22k: 149.0917,
-      price_gram_21k: 142.3148,
-      price_gram_20k: 135.5379,
-      price_gram_18k: 121.9841,
-      price_gram_16k: 108.4303,
-      price_gram_14k: 94.8765,
-      price_gram_10k: 67.769,
-      _stub: true,
-    };
-  }
+/* -------------------- S3 helpers (metals) -------------------- */
+const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
+const METALS_BUCKET = process.env.METALS_BUCKET || "daily-metal-prices-1152";
 
-  const url = `${GOLDAPI_BASE}/${metal}/${currency}`;
+const s3 = new S3Client({ region: REGION });
+
+function isoDateUTC(d = new Date()) {
+  return d.toISOString().slice(0, 10);
+}
+
+async function streamToString(body) {
+  return await new Promise((resolve, reject) => {
+    const chunks = [];
+    body.on("data", (chunk) => chunks.push(chunk));
+    body.on("error", reject);
+    body.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+  });
+}
+
+function metalPrefix(metal) {
+  return `metals/${metal}/`;
+}
+
+function metalKeyForDate(metal, isoDate) {
+  return `${metalPrefix(metal)}${isoDate}.json`;
+}
+
+async function getJsonFromS3(bucket, key) {
+  const resp = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const text = await streamToString(resp.Body);
+  return JSON.parse(text);
+}
+
+async function listLatestKey(bucket, prefix) {
+  let token = undefined;
+  let best = null;
+
+  do {
+    const resp = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: token,
+        MaxKeys: 1000,
+      })
+    );
+
+    const contents = resp.Contents || [];
+    for (const obj of contents) {
+      if (!obj || !obj.Key || !obj.LastModified) continue;
+      if (!best || obj.LastModified > best.LastModified) best = obj;
+    }
+
+    token = resp.IsTruncated ? resp.NextContinuationToken : undefined;
+  } while (token);
+
+  return best?.Key || null;
+}
+
+/**
+ * fetchMetal
+ * - returns today's JSON if present
+ * - otherwise returns the latest JSON in the bucket for that metal
+ */
+async function fetchMetal(metal, currency, apiKey) {
+  const today = isoDateUTC();
+  const todayKey = metalKeyForDate(metal, today);
+
+  try {
+    const data = await getJsonFromS3(METALS_BUCKET, todayKey);
+    return data;
+  } catch (e) {
+    const msg = String(e?.name || e?.message || e);
+
+    const isNotFound = msg.includes("NoSuchKey") || msg.includes("NotFound") || msg.includes("404");
+    if (!isNotFound) {
+      throw new Error(`S3 read failed for ${todayKey}: ${String(e?.message || e)}`);
+    }
+
+    const prefix = metalPrefix(metal);
+    const latestKey = await listLatestKey(METALS_BUCKET, prefix);
+    if (!latestKey) {
+      throw new Error(`No metal price files found in s3://${METALS_BUCKET}/${prefix}`);
+    }
+
+    const latest = await getJsonFromS3(METALS_BUCKET, latestKey);
+    return { ...latest, fallbackUsed: true, fallbackKey: latestKey };
+  }
+}
+
+/* -------------------- Yahoo Indices (server-side, no CORS) -------------------- */
+
+function toNum(x) {
+  const n = typeof x === "string" ? Number(x) : x;
+  return Number.isFinite(n) ? n : null;
+}
+
+function lastTwoFinite(nums) {
+  const arr = (nums || []).map(toNum).filter((n) => Number.isFinite(n));
+  if (arr.length < 2) return { last: arr.at(-1) ?? null, prev: null };
+  return { last: arr.at(-1), prev: arr.at(-2) };
+}
+
+/**
+ * fetchYahooIndex
+ * Returns: { symbol, price, prevClose, timestamp }
+ *
+ * Fix: compute prevClose from daily close series first (more reliable),
+ * then fall back to meta.previousClose/chartPreviousClose.
+ */
+async function fetchYahooIndex(symbol) {
+  // Use daily bars to make prevClose stable/predictable
+  const url = `${YAHOO_CHART_BASE}/${encodeURIComponent(symbol)}?interval=1d&range=5d`;
+
   const resp = await fetchWithTimeout(
     url,
     {
       headers: {
-        "x-access-token": apiKey,
-        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0",
+        Accept: "application/json",
       },
     },
     3500
@@ -85,10 +168,37 @@ async function fetchMetal(metal, currency, apiKey) {
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    throw new Error(`GoldAPI ${metal} ${resp.status}: ${text}`);
+    throw new Error(`Yahoo ${symbol} ${resp.status}: ${text}`);
   }
 
-  return resp.json();
+  const json = await resp.json();
+  const result = json?.chart?.result?.[0] || null;
+  const meta = result?.meta || null;
+
+  // Daily closes array (interval=1d)
+  const closes = result?.indicators?.quote?.[0]?.close || [];
+  const { last: lastClose, prev: prevCloseFromSeries } = lastTwoFinite(closes);
+
+  // Current price: prefer regularMarketPrice; fall back to last daily close
+  const price =
+    toNum(meta?.regularMarketPrice) ??
+    toNum(meta?.regularMarketPreviousClose) ?? // sometimes appears
+    toNum(lastClose) ??
+    null;
+
+  // Prev close: prefer series-derived (most stable), then meta
+  const prevClose =
+    toNum(prevCloseFromSeries) ??
+    toNum(meta?.previousClose) ??
+    toNum(meta?.chartPreviousClose) ??
+    null;
+
+  const timestamp =
+    toNum(meta?.regularMarketTime) ??
+    toNum(result?.timestamp?.slice(-1)?.[0]) ??
+    null;
+
+  return { symbol, price, prevClose, timestamp };
 }
 
 /* -------------------- Robinhood signing -------------------- */
@@ -213,39 +323,51 @@ exports.handler = async (event) => {
   const currency = "USD";
   const errors = {};
 
-  // ✅ Parse query FIRST (fixes your "q used before init" issue)
   const q = getQuery(event);
 
-  // Optional request: /prices?stocks=AAPL,MSFT
   const stockSymbols = parseCsvSymbols(q.stocks || q.symbols);
-
-  // Optional request: /prices?crypto=BTC-USD,ETH-USD,DOGE-USD
-  const cryptoSymbols = parseCsvSymbols(q.crypto).map((s) =>
-    s.includes("-") ? s : `${s}-USD`
-  );
+  const cryptoSymbols = parseCsvSymbols(q.crypto).map((s) => (s.includes("-") ? s : `${s}-USD`));
 
   let gold = null;
   let silver = null;
+  let copper = null;
+
+  let sp500 = null;
+  let nasdaq = null;
+
   let crypto = null;
   let stocks = undefined;
 
-  // ✅ Do NOT hard-fail if GOLDAPI key is missing (keep crypto/stocks working)
-  const goldKey = process.env.GOLDAPI_KEY;
-  if (!goldKey) {
-    errors.gold = "Missing GOLDAPI_KEY env var";
-    errors.silver = "Missing GOLDAPI_KEY env var";
-  } else {
-    try {
-      gold = await fetchMetal("XAU", currency, goldKey);
-    } catch (e) {
-      errors.gold = String(e?.message || e);
-    }
+  // Metals from S3
+  try {
+    gold = await fetchMetal("XAU", currency, "ignored");
+  } catch (e) {
+    errors.gold = String(e?.message || e);
+  }
 
-    try {
-      silver = await fetchMetal("XAG", currency, goldKey);
-    } catch (e) {
-      errors.silver = String(e?.message || e);
-    }
+  try {
+    silver = await fetchMetal("XAG", currency, "ignored");
+  } catch (e) {
+    errors.silver = String(e?.message || e);
+  }
+
+  try {
+    copper = await fetchMetal("XCU", currency, "ignored");
+  } catch (e) {
+    errors.copper = String(e?.message || e);
+  }
+
+  // Indices from Yahoo (server-side)
+  try {
+    sp500 = await fetchYahooIndex("^GSPC");
+  } catch (e) {
+    errors.sp500 = String(e?.message || e);
+  }
+
+  try {
+    nasdaq = await fetchYahooIndex("^IXIC");
+  } catch (e) {
+    errors.nasdaq = String(e?.message || e);
   }
 
   /* ---- Crypto ---- */
@@ -275,8 +397,11 @@ exports.handler = async (event) => {
 
   const responseBody = {
     currency,
+    sp500,
+    nasdaq,
     gold,
     silver,
+    copper,
     crypto,
     ...(stocks ? { stocks } : {}),
     errors: Object.keys(errors).length ? errors : undefined,

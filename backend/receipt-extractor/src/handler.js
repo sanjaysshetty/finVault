@@ -72,6 +72,12 @@ function simplifyStoreName(store) {
   if (upper.includes("TARGET")) return "Target";
   if (upper.includes("KROGER")) return "Kroger";
   if (upper.includes("WHOLE FOODS")) return "WholeFoods";
+  if (upper.includes("99")) return "99 Ranch";
+  if (upper.includes("HEB")) return "HEB";
+  if (upper.includes("H")) return "HEB";
+  if (upper.includes("TRIVENI")) return "Triveni";
+  if (upper.includes("IBC")) return "IBC";
+  if (upper.includes("KEEMAT")) return "Keemat";
   if (upper.includes("ALDI")) return "Aldi";
   if (upper.includes("TRADER JOE")) return "TraderJoes";
   if (upper.includes("SAFEWAY")) return "Safeway";
