@@ -35,6 +35,12 @@ function formatMoney(n) {
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
+function plColor(v) {
+  // Mimic Portfolio.jsx gain/loss coloring
+  return safeNum(v, 0) < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
+}
+
+
 /* ---------------- API (same pattern as Bullion/FixedIncome) ---------------- */
 
 function getApiBase() {
@@ -469,8 +475,8 @@ export default function Stocks() {
       {/* Summary cards */}
       <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(4, minmax(180px, 1fr))", gap: 12 }}>
         <SummaryCard title="Total Holding Value" value={formatMoney(metrics.totals.holdingValue)} hint="Based on latest quotes" />
-        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(metrics.totals.unrealized)} hint="Spot vs. avg cost" />
-        <SummaryCard title="Realized Gain/Loss" value={formatMoney(metrics.totals.realized)} hint="From sell transactions" />
+        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(metrics.totals.unrealized)} hint="Spot vs. avg cost"  valueColor={plColor(metrics.totals.unrealized)} />
+        <SummaryCard title="Realized Gain/Loss" value={formatMoney(metrics.totals.realized)} hint="From sell transactions"  valueColor={plColor(metrics.totals.realized)} />
         <SummaryCard title="Total P/L" value={formatMoney(metrics.totals.totalPL)} hint="Realized + Unrealized" />
       </div>
 
@@ -531,8 +537,8 @@ export default function Stocks() {
                     <Td>{formatMoney(h.avgCost)}</Td>
                     <Td>{formatMoney(h.spot)}</Td>
                     <Td style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(h.marketValue)}</Td>
-                    <Td>{formatMoney(h.unrealized)}</Td>
-                    <Td>{formatMoney(h.realized)}</Td>
+                    <Td style={{ fontWeight: 900, color: plColor(h.unrealized) }}>{formatMoney(h.unrealized)}</Td>
+                    <Td style={{ fontWeight: 900, color: plColor(h.realized) }}>{formatMoney(h.realized)}</Td>
                   </tr>
                 ))
               )}
@@ -745,11 +751,11 @@ export default function Stocks() {
 
 /* ---------- UI helpers ---------- */
 
-function SummaryCard({ title, value, hint }) {
+function SummaryCard({ title, value, hint, valueColor }) {
   return (
     <div style={panel}>
       <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{title}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.title }}>{value}</div>
+      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: valueColor || THEME.title }}>{value}</div>
       {hint ? <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>{hint}</div> : null}
     </div>
   );
@@ -764,7 +770,7 @@ function Field({ label, children }) {
   );
 }
 
-function Th({ children, align }) {
+function Th({ children, align, style, ...rest }) {
   return (
     <th
       style={{
@@ -773,17 +779,24 @@ function Th({ children, align }) {
         color: THEME.muted,
         fontWeight: 900,
         whiteSpace: "nowrap",
+        ...(style || {}),
       }}
       align={align || "left"}
+      {...rest}
     >
       {children}
     </th>
   );
 }
 
-function Td({ children, align, colSpan }) {
+function Td({ children, align, colSpan, style, ...rest }) {
   return (
-    <td style={{ padding: "12px 10px", verticalAlign: "top" }} align={align || "left"} colSpan={colSpan}>
+    <td
+      style={{ padding: "12px 10px", verticalAlign: "top", ...(style || {}) }}
+      align={align || "left"}
+      colSpan={colSpan}
+      {...rest}
+    >
       {children}
     </td>
   );

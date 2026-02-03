@@ -46,8 +46,11 @@ export default function SideNav() {
         <Item to="/assets/stocks" label="Stocks" />
         <Item to="/assets/crypto" label="Crypto" />
         <Item to="/assets/bullion" label="Bullion" />
-        <Item to="/assets/options" label="Options" />
         <Item to="/assets/fixedincome" label="Fixed Income" />
+
+        {/* ✅ New placeholder route */}
+        <Item to="/assets/futures" label="Futures" />
+        <Item to="/assets/options" label="Options" />
       </Section>
 
       <Section

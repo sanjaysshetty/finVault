@@ -92,6 +92,10 @@ function HorizontalBarChart({ data, expanded, onToggle, detailsByCategory, loadi
     return data.reduce((m, x) => Math.max(m, Number(x.amount || 0)), 0) || 1;
   }, [data]);
 
+  // Column layout for drilldown rows:
+  // Date | Description | Category | Amount
+  const rowCols = "120px minmax(240px, 1fr) 220px 120px";
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       {data.map((d) => {
@@ -211,35 +215,122 @@ function HorizontalBarChart({ data, expanded, onToggle, detailsByCategory, loadi
 
                     <div style={{ borderTop: `1px solid ${THEME.rowBorder}` }} />
 
-                    <div style={{ display: "grid", gap: 8 }}>
-                      {det.items.slice(0, 80).map((it) => (
-                        <div
-                          key={`${it.pk}||${it.sk}`}
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "110px 1fr 110px",
-                            gap: 10,
-                            alignItems: "start",
-                            padding: "8px 0",
-                            borderBottom: `1px solid ${THEME.rowBorder}`,
-                          }}
-                        >
-                          <div style={{ color: THEME.muted, fontSize: 12 }}>{it.date || ""}</div>
-                          <div style={{ color: THEME.pageText, fontWeight: 700 }}>
-                            {it.productDescription || "(no description)"}
-                            {it.productCode ? (
-                              <div style={{ color: THEME.muted, fontSize: 12, marginTop: 2 }}>
-                                Code: {it.productCode}
+                    {/* Column header row */}
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: rowCols,
+                        gap: 10,
+                        padding: "6px 0",
+                        color: THEME.muted,
+                        fontSize: 11,
+                        fontWeight: 900,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      <div>Date</div>
+                      <div>Description</div>
+                      <div>Category</div>
+                      <div style={{ textAlign: "right" }}>Amount</div>
+                    </div>
+
+                    <div style={{ borderTop: `1px solid ${THEME.rowBorder}` }} />
+
+                    <div style={{ display: "grid", gap: 0 }}>
+                      {det.items.slice(0, 80).map((it) => {
+                        const catText =
+                          it.category ||
+                          it.categoryName ||
+                          it.categoryLabel ||
+                          "—";
+
+                        return (
+                          <div
+                            key={`${it.pk}||${it.sk}`}
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: rowCols,
+                              gap: 10,
+                              alignItems: "center",
+                              padding: "10px 0",
+                              borderBottom: `1px solid ${THEME.rowBorder}`,
+                            }}
+                          >
+                            {/* Date */}
+                            <div
+                              style={{
+                                color: THEME.muted,
+                                fontSize: 12,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {it.date || ""}
+                            </div>
+
+                            {/* Product Description */}
+                            <div style={{ minWidth: 0 }}>
+                              <div
+                                style={{
+                                  color: THEME.pageText,
+                                  fontWeight: 800,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                                title={it.productDescription || ""}
+                              >
+                                {it.productDescription || "(no description)"}
                               </div>
-                            ) : null}
+                              {it.productCode ? (
+                                <div
+                                  style={{
+                                    color: THEME.muted,
+                                    fontSize: 12,
+                                    marginTop: 2,
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}
+                                  title={`Code: ${it.productCode}`}
+                                >
+                                  Code: {it.productCode}
+                                </div>
+                              ) : null}
+                            </div>
+
+                            {/* Category */}
+                            <div
+                              style={{
+                                color: THEME.pageText,
+                                fontWeight: 800,
+                                opacity: 0.95,
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                              title={catText}
+                            >
+                              {catText}
+                            </div>
+
+                            {/* Amount */}
+                            <div
+                              style={{
+                                textAlign: "right",
+                                fontWeight: 900,
+                                color: THEME.title,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {formatMoney(Number(it.amount || 0))}
+                            </div>
                           </div>
-                          <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
-                            {formatMoney(Number(it.amount || 0))}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
+
                       {det.items.length > 80 ? (
-                        <div style={{ color: THEME.muted, fontSize: 12 }}>
+                        <div style={{ color: THEME.muted, fontSize: 12, paddingTop: 8 }}>
                           Showing top 80 items. Narrow your date range to see fewer.
                         </div>
                       ) : null}
@@ -290,7 +381,6 @@ export default function SpendingDash() {
   const [detailsByCategory, setDetailsByCategory] = useState({});
   const [loadingCat, setLoadingCat] = useState("");
 
-
   // apply preset to dates (except CUSTOM)
   useEffect(() => {
     const t = todayISO();
@@ -312,36 +402,36 @@ export default function SpendingDash() {
   }, [preset]);
 
   async function loadCategoryDetails(cat) {
-  setLoadingCat(cat);
-  try {
-    const qs = new URLSearchParams({ start, end, category: cat }).toString();
-    const res = await apiFetch(`/spending/dashboard/details?${qs}`);
+    setLoadingCat(cat);
+    try {
+      const qs = new URLSearchParams({ start, end, category: cat }).toString();
+      const res = await apiFetch(`/spending/dashboard/details?${qs}`);
 
-    setDetailsByCategory((prev) => ({
-      ...prev,
-      [cat]: { ...res, error: "" },
-    }));
-  } catch (e) {
-    setDetailsByCategory((prev) => ({
-      ...prev,
-      [cat]: { error: e?.message || "Failed to load details", items: [], count: 0, total: 0 },
-    }));
-  } finally {
-    setLoadingCat("");
+      setDetailsByCategory((prev) => ({
+        ...prev,
+        [cat]: { ...res, error: "" },
+      }));
+    } catch (e) {
+      setDetailsByCategory((prev) => ({
+        ...prev,
+        [cat]: { error: e?.message || "Failed to load details", items: [], count: 0, total: 0 },
+      }));
+    } finally {
+      setLoadingCat("");
+    }
   }
-}
 
-function toggleCategory(cat) {
-  setExpanded((prev) => {
-    const next = { ...prev, [cat]: !prev[cat] };
-    return next;
-  });
+  function toggleCategory(cat) {
+    setExpanded((prev) => {
+      const next = { ...prev, [cat]: !prev[cat] };
+      return next;
+    });
 
-  // If opening and we don't have details yet, fetch them
-  if (!expanded[cat] && !detailsByCategory[cat]) {
-    loadCategoryDetails(cat);
+    // If opening and we don't have details yet, fetch them
+    if (!expanded[cat] && !detailsByCategory[cat]) {
+      loadCategoryDetails(cat);
+    }
   }
-}
 
   async function loadDashboard({ s = start, e = end, c = category } = {}) {
     setLoading(true);

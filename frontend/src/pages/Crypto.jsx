@@ -35,6 +35,12 @@ function formatMoney(n) {
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
+function plColor(v) {
+  // Mimic Portfolio.jsx gain/loss coloring
+  return safeNum(v, 0) < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
+}
+
+
 function formatSpot(n) {
   const x = safeNum(n, 0);
   if (!Number.isFinite(x) || x === 0) return "$0.00";
@@ -644,12 +650,12 @@ async function refreshSpots(txOverride) {
           title="Unrealized Gain/Loss"
           value={formatMoney(metrics.totals.unrealized)}
           hint="Spot vs. avg cost"
-        />
+         valueColor={plColor(metrics.totals.unrealized)} />
         <SummaryCard
           title="Realized Gain/Loss"
           value={formatMoney(metrics.totals.realized)}
           hint="From sell transactions"
-        />
+         valueColor={plColor(metrics.totals.realized)} />
         <SummaryCard
           title="Total P/L"
           value={formatMoney(metrics.totals.totalPL)}
@@ -750,8 +756,8 @@ async function refreshSpots(txOverride) {
                     <Td style={{ fontWeight: 900, color: THEME.title }}>
                       {formatMoney(h.marketValue)}
                     </Td>
-                    <Td>{formatMoney(h.unrealized)}</Td>
-                    <Td>{formatMoney(h.realized)}</Td>
+                    <Td style={{ fontWeight: 900, color: plColor(h.unrealized) }}>{formatMoney(h.unrealized)}</Td>
+                    <Td style={{ fontWeight: 900, color: plColor(h.realized) }}>{formatMoney(h.realized)}</Td>
                   </tr>
                 ))
               )}
@@ -1054,13 +1060,13 @@ async function refreshSpots(txOverride) {
 
 /* ---------- UI helpers ---------- */
 
-function SummaryCard({ title, value, hint }) {
+function SummaryCard({ title, value, hint, valueColor }) {
   return (
     <div style={panel}>
       <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>
         {title}
       </div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.title }}>
+      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: valueColor || THEME.title }}>
         {value}
       </div>
       {hint ? (
@@ -1083,7 +1089,7 @@ function Field({ label, children }) {
   );
 }
 
-function Th({ children, align }) {
+function Th({ children, align, style, ...rest }) {
   return (
     <th
       style={{
@@ -1092,20 +1098,23 @@ function Th({ children, align }) {
         color: THEME.muted,
         fontWeight: 900,
         whiteSpace: "nowrap",
+        ...(style || {}),
       }}
       align={align || "left"}
+      {...rest}
     >
       {children}
     </th>
   );
 }
 
-function Td({ children, align, colSpan }) {
+function Td({ children, align, colSpan, style, ...rest }) {
   return (
     <td
-      style={{ padding: "12px 10px", verticalAlign: "top" }}
+      style={{ padding: "12px 10px", verticalAlign: "top", ...(style || {}) }}
       align={align || "left"}
       colSpan={colSpan}
+      {...rest}
     >
       {children}
     </td>

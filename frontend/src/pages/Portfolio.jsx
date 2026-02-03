@@ -13,7 +13,6 @@ const THEME = {
   inputBorder: "rgba(148, 163, 184, 0.18)",
   primaryBg: "rgba(99, 102, 241, 0.18)",
   primaryBorder: "rgba(99, 102, 241, 0.45)",
-  dangerBg: "rgba(239, 68, 68, 0.12)",
   dangerBorder: "rgba(239, 68, 68, 0.35)",
 };
 
@@ -30,6 +29,11 @@ function formatMoney(n) {
   const x = safeNum(n, 0);
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
+
+function plColor(v) {
+  return safeNum(v, 0) < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
+}
+
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -86,6 +90,77 @@ async function apiFetch(path, { method = "GET", body } = {}) {
   }
 
   return data;
+}
+
+/* ---------------- Crypto spot parsing (replicate Crypto.jsx behavior) ---------------- */
+/**
+ * Builds a spot map: { "BTC-USD": 43000.12, ... }
+ * from /prices response (pricesRes.crypto).
+ */
+function extractCryptoSpots(pricesResponse) {
+  const crypto = pricesResponse?.crypto;
+  if (!crypto) return {};
+
+  const arr =
+    Array.isArray(crypto)
+      ? crypto
+      : Array.isArray(crypto?.results)
+        ? crypto.results
+        : Array.isArray(crypto?.data)
+          ? crypto.data
+          : null;
+
+  const out = {};
+
+  const writeSpot = (sym, spot) => {
+    const s = String(sym || "").toUpperCase().trim();
+    if (!s) return;
+
+    const val = safeNum(spot, 0);
+    if (!(val > 0)) return;
+
+    // Dynamic precision so tiny coins don't render as 0.00
+    const abs = Math.abs(val);
+    const fixed = abs > 0 && abs < 0.01 ? 10 : abs > 0 && abs < 1 ? 6 : 2;
+
+    out[s] = Number(val.toFixed(fixed));
+  };
+
+  const readOne = (obj) => {
+    const sym = obj?.symbol || obj?.instrument_id || obj?.pair || "";
+    if (!sym) return;
+
+    const bid = safeNum(obj?.bid, NaN);
+    const ask = safeNum(obj?.ask, NaN);
+
+    const bid2 = safeNum(obj?.bid_inclusive_of_sell_spread, NaN);
+    const ask2 = safeNum(obj?.ask_inclusive_of_buy_spread, NaN);
+
+    const b = Number.isFinite(bid) ? bid : Number.isFinite(bid2) ? bid2 : NaN;
+    const a = Number.isFinite(ask) ? ask : Number.isFinite(ask2) ? ask2 : NaN;
+
+    let spot = 0;
+    if (Number.isFinite(b) && Number.isFinite(a) && b > 0 && a > 0) spot = (b + a) / 2;
+    else if (Number.isFinite(a) && a > 0) spot = a;
+    else if (Number.isFinite(b) && b > 0) spot = b;
+
+    writeSpot(sym, spot);
+  };
+
+  if (arr) {
+    arr.forEach(readOne);
+    return out;
+  }
+
+  // keyed object fallback
+  if (typeof crypto === "object") {
+    Object.entries(crypto).forEach(([sym, obj]) => {
+      if (!obj) return;
+      readOne({ ...obj, symbol: sym });
+    });
+  }
+
+  return out;
 }
 
 /* ---------------- Domain calcs ---------------- */
@@ -153,7 +228,7 @@ function computeStocks(transactions, quoteMap) {
   );
 
   for (const t of txs) {
-    const symbol = String(t.symbol || "").toUpperCase();
+    const symbol = String(t.symbol || "").toUpperCase().trim();
     if (!symbol) continue;
 
     const type = String(t.type || "BUY").toUpperCase();
@@ -162,7 +237,6 @@ function computeStocks(transactions, quoteMap) {
     const fees = safeNum(t.fees, 0);
 
     if (!bySymbol[symbol]) bySymbol[symbol] = { shares: 0, cost: 0, avg: 0, realized: 0 };
-
     const s = bySymbol[symbol];
 
     if (type === "BUY") {
@@ -201,10 +275,63 @@ function computeStocks(transactions, quoteMap) {
   };
 }
 
+function computeCrypto(transactions, spotMap) {
+  const bySym = {};
+
+  const txs = [...transactions].sort((a, b) =>
+    String(a.date || "").localeCompare(String(b.date || ""))
+  );
+
+  for (const t of txs) {
+    let sym = String(t.symbol || "").toUpperCase().trim();
+    if (!sym) continue;
+    if (!sym.includes("-")) sym = `${sym}-USD`;
+
+    const type = String(t.type || "BUY").toUpperCase();
+    const qty = safeNum(t.quantity, 0);
+    const px = safeNum(t.unitPrice, 0);
+    const fees = safeNum(t.fees, 0);
+
+    if (!bySym[sym]) bySym[sym] = { qty: 0, cost: 0, avg: 0, realized: 0 };
+    const s = bySym[sym];
+
+    if (type === "BUY") {
+      const addCost = qty * px + fees;
+      s.qty += qty;
+      s.cost += addCost;
+      s.avg = s.qty > 0 ? s.cost / s.qty : 0;
+    } else if (type === "SELL") {
+      const sellQty = Math.min(qty, s.qty);
+      const proceeds = sellQty * px - fees;
+      const basis = sellQty * (s.avg || 0);
+      const realized = proceeds - basis;
+
+      s.qty -= sellQty;
+      s.cost -= basis;
+      s.realized += realized;
+      s.avg = s.qty > 0 ? s.cost / s.qty : 0;
+    }
+  }
+
+  let holdingValue = 0;
+  let unrealized = 0;
+  let realized = 0;
+
+  for (const [sym, s] of Object.entries(bySym)) {
+    const spot = safeNum(spotMap?.[sym], 0);
+    holdingValue += s.qty * spot;
+    unrealized += (spot - (s.avg || 0)) * s.qty;
+    realized += s.realized;
+  }
+
+  return {
+    holdingValue: round2(holdingValue),
+    unrealized: round2(unrealized),
+    realized: round2(realized),
+  };
+}
+
 function computeFixedIncome(items) {
-  // Holding Value: sum currentValue
-  // Unrealized: sum (currentValue - principal)
-  // Realized: 0 for now (until you add a "closed/matured" concept)
   let holdingValue = 0;
   let unrealized = 0;
 
@@ -212,7 +339,7 @@ function computeFixedIncome(items) {
     const cv = safeNum(it.currentValue, 0);
     const principal = safeNum(it.principal, 0);
     holdingValue += cv;
-    unrealized += (cv - principal);
+    unrealized += cv - principal;
   }
 
   return {
@@ -231,28 +358,76 @@ export default function Portfolio() {
   const [fixedIncome, setFixedIncome] = useState([]);
   const [bullionTx, setBullionTx] = useState([]);
   const [stockTx, setStockTx] = useState([]);
+  const [cryptoTx, setCryptoTx] = useState([]);
 
   const [spot, setSpot] = useState({ GOLD: 0, SILVER: 0 });
-  const [quotes, setQuotes] = useState({}); // { AAPL: { price, ... } }
+  const [quotes, setQuotes] = useState({}); // stocks: { AAPL: { price, ... } }
+  const [cryptoSpots, setCryptoSpots] = useState({}); // crypto: { "BTC-USD": 43000.12 }
 
   const [status, setStatus] = useState("");
 
   const stockSymbols = useMemo(() => {
-    const set = new Set(stockTx.map((t) => String(t.symbol || "").toUpperCase()).filter(Boolean));
+    const set = new Set(stockTx.map((t) => String(t.symbol || "").toUpperCase().trim()).filter(Boolean));
     return Array.from(set).sort();
   }, [stockTx]);
 
-  const totals = useMemo(() => {
-    const fi = computeFixedIncome(fixedIncome);
-    const b = computeBullion(bullionTx, spot);
-    const s = computeStocks(stockTx, quotes);
+  const cryptoSymbols = useMemo(() => {
+    const set = new Set(
+      cryptoTx
+        .map((t) => String(t.symbol || "").toUpperCase().trim())
+        .filter(Boolean)
+        .map((s) => (s.includes("-") ? s : `${s}-USD`))
+    );
+    return Array.from(set).sort();
+  }, [cryptoTx]);
 
-    const holdingValue = round2(fi.holdingValue + b.holdingValue + s.holdingValue);
-    const unrealized = round2(fi.unrealized + b.unrealized + s.unrealized);
-    const realized = round2(fi.realized + b.realized + s.realized);
+  // Per-asset rollups
+  const rollups = useMemo(() => {
+    const fixedIncomeRollup = computeFixedIncome(fixedIncome);
+    const bullionRollup = computeBullion(bullionTx, spot);
+    const stocksRollup = computeStocks(stockTx, quotes);
+    const cryptoRollup = computeCrypto(cryptoTx, cryptoSpots);
+
+    // Options placeholder only
+    const optionsRollup = { holdingValue: 0, realized: 0, unrealized: 0 };
+
+    return {
+      stocks: stocksRollup,
+      crypto: cryptoRollup,
+      bullion: bullionRollup,
+      fixedIncome: fixedIncomeRollup,
+      options: optionsRollup,
+    };
+  }, [fixedIncome, bullionTx, stockTx, cryptoTx, spot, quotes, cryptoSpots]);
+
+  // Totals (TOP SUMMARY) includes ALL assets incl crypto
+  const totals = useMemo(() => {
+    const holdingValue = round2(
+      rollups.fixedIncome.holdingValue +
+        rollups.bullion.holdingValue +
+        rollups.stocks.holdingValue +
+        rollups.crypto.holdingValue +
+        rollups.options.holdingValue
+    );
+
+    const unrealized = round2(
+      rollups.fixedIncome.unrealized +
+        rollups.bullion.unrealized +
+        rollups.stocks.unrealized +
+        rollups.crypto.unrealized +
+        rollups.options.unrealized
+    );
+
+    const realized = round2(
+      rollups.fixedIncome.realized +
+        rollups.bullion.realized +
+        rollups.stocks.realized +
+        rollups.crypto.realized +
+        rollups.options.realized
+    );
 
     return { holdingValue, unrealized, realized };
-  }, [fixedIncome, bullionTx, stockTx, spot, quotes]);
+  }, [rollups]);
 
   async function refreshAll() {
     setLoading(true);
@@ -260,35 +435,53 @@ export default function Portfolio() {
     setStatus("");
 
     try {
-      // 1) Load all holdings/tx in parallel
-      const [fiRes, bullRes, stockRes] = await Promise.all([
+      // 1) Load holdings/tx
+      const [fiRes, bullRes, stockRes, cryptoRes] = await Promise.all([
         apiFetch("/assets/fixedincome"),
         apiFetch("/assets/bullion/transactions"),
         apiFetch("/assets/stocks/transactions"),
+        apiFetch("/assets/crypto/transactions"),
       ]);
 
       const fiItems = Array.isArray(fiRes) ? fiRes : Array.isArray(fiRes?.items) ? fiRes.items : [];
       const bullItems = Array.isArray(bullRes) ? bullRes : Array.isArray(bullRes?.items) ? bullRes.items : [];
       const stockItems = Array.isArray(stockRes) ? stockRes : Array.isArray(stockRes?.items) ? stockRes.items : [];
+      const cryptoItems = Array.isArray(cryptoRes) ? cryptoRes : Array.isArray(cryptoRes?.items) ? cryptoRes.items : [];
 
       setFixedIncome(fiItems);
       setBullionTx(bullItems);
       setStockTx(stockItems);
+      setCryptoTx(cryptoItems);
 
-      // 2) Prices (metals + crypto + optionally stocks via query)
-      const symbols = Array.from(new Set(stockItems.map((t) => String(t.symbol || "").toUpperCase()).filter(Boolean))).sort();
-      const qs = symbols.length ? `?stocks=${encodeURIComponent(symbols.join(","))}` : "";
+      // 2) Prices (metals + crypto + optional stocks)
+      const symbols = Array.from(new Set(stockItems.map((t) => String(t.symbol || "").toUpperCase().trim()).filter(Boolean))).sort();
+      const cryptoSyms = Array.from(
+        new Set(
+          cryptoItems
+            .map((t) => String(t.symbol || "").toUpperCase().trim())
+            .filter(Boolean)
+            .map((s) => (s.includes("-") ? s : `${s}-USD`))
+        )
+      ).sort();
+
+      const qsParts = [];
+      if (symbols.length) qsParts.push(`stocks=${encodeURIComponent(symbols.join(","))}`);
+      if (cryptoSyms.length) qsParts.push(`crypto=${encodeURIComponent(cryptoSyms.join(","))}`);
+      const qs = qsParts.length ? `?${qsParts.join("&")}` : "";
+
       const pricesRes = await apiFetch(`/prices${qs}`);
 
+      // Metals spots
       const goldPrice = safeNum(pricesRes?.gold?.price, 0);
       const silverPrice = safeNum(pricesRes?.silver?.price, 0);
       setSpot({ GOLD: round2(goldPrice), SILVER: round2(silverPrice) });
 
-      if (symbols.length) {
-        setQuotes(pricesRes?.stocks || {});
-      } else {
-        setQuotes({});
-      }
+      // Stock quotes
+      setQuotes(symbols.length ? (pricesRes?.stocks || {}) : {});
+
+      // Crypto spots (same logic style as Crypto.jsx)
+      const spotMap = extractCryptoSpots(pricesRes);
+      setCryptoSpots(spotMap);
 
       // Status message if any stock quote errors
       const stockErrors = pricesRes?.errors?.stocks;
@@ -323,6 +516,17 @@ export default function Portfolio() {
 
   const asOfDate = todayISO();
 
+  const includedRows = useMemo(
+    () => [
+      { key: "stocks", label: "Stocks", ...rollups.stocks, hint: stockSymbols.length ? `${stockSymbols.length} symbols` : "" },
+      { key: "crypto", label: "Crypto", ...rollups.crypto, hint: cryptoSymbols.length ? `${cryptoSymbols.length} symbols` : "" },
+      { key: "bullion", label: "Bullion", ...rollups.bullion, hint: bullionTx.length ? `${bullionTx.length} tx` : "" },
+      { key: "fixedIncome", label: "Fixed Income", ...rollups.fixedIncome, hint: fixedIncome.length ? `${fixedIncome.length} positions` : "" },
+      { key: "options", label: "Options", ...rollups.options, hint: "placeholder" },
+    ],
+    [rollups, stockSymbols.length, cryptoSymbols.length, bullionTx.length, fixedIncome.length]
+  );
+
   return (
     <div style={{ padding: 16, color: THEME.pageText }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
@@ -331,7 +535,7 @@ export default function Portfolio() {
             Portfolio
           </div>
           <div style={{ marginTop: 6, fontSize: 13, color: THEME.muted }}>
-            Aggregated view across Fixed Income, Stocks, and Bullion.
+            Aggregated view across Fixed Income, Stocks, Crypto, Bullion, and more.
           </div>
         </div>
 
@@ -354,27 +558,137 @@ export default function Portfolio() {
         <div style={{ marginTop: 12, fontSize: 12, color: THEME.muted }}>{status}</div>
       ) : null}
 
-      {/* Summary cards */}
+      {/* Summary cards (includes Crypto unrealized) */}
       <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3, minmax(200px, 1fr))", gap: 12 }}>
-        <SummaryCard title="Total Holding Value" value={formatMoney(totals.holdingValue)} hint="FixedIncome + Stocks + Bullion" />
-        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(totals.unrealized)} hint="Includes FI accrual + mark-to-market" />
-        <SummaryCard title="Realized Gain/Loss" value={formatMoney(totals.realized)} hint="From sell transactions (Stocks/Bullion)" />
+        <SummaryCard title="Total Holding Value" value={formatMoney(totals.holdingValue)} hint="All asset types combined" />
+        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(totals.unrealized)} hint="Includes FI accrual + mark-to-market (Stocks/Crypto/Bullion)"  valueColor={plColor(totals.unrealized)} />
+        <SummaryCard title="Realized Gain/Loss" value={formatMoney(totals.realized)} hint="From sells (Stocks/Crypto/Bullion)"  valueColor={plColor(totals.realized)} />
       </div>
 
-      {/* Optional: small counts line (keeps page from feeling empty) */}
+      {/* Included Assets table */}
       <div style={{ ...panel, marginTop: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 900, color: THEME.title }}>Included Assets</div>
-        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(3, minmax(160px, 1fr))", gap: 10 }}>
-          <MiniStat label="Fixed Income Positions" value={String(fixedIncome.length)} />
-          <MiniStat label="Stock Transactions" value={String(stockTx.length)} />
-          <MiniStat label="Bullion Transactions" value={String(bullionTx.length)} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 900, color: THEME.title }}>Included Assets</div>
+            <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>
+              Rollup by asset type (Latest Value / Realized / Unrealized).
+            </div>
+          </div>
+
+          <div style={{ fontSize: 12, color: THEME.muted }}>
+            Updated <span style={{ color: THEME.pageText, fontWeight: 800 }}>{asOfDate}</span>
+          </div>
         </div>
 
-        {stockSymbols.length ? (
-          <div style={{ marginTop: 10, fontSize: 12, color: THEME.muted }}>
-            Stock symbols priced: <span style={{ color: THEME.pageText, fontWeight: 800 }}>{stockSymbols.join(", ")}</span>
+        <div style={{ marginTop: 12, borderTop: `1px solid ${THEME.rowBorder}` }} />
+
+        <div style={{ marginTop: 10, overflowX: "auto" }}>
+          <div style={{ minWidth: 720 }}>
+            {/* Header */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "220px 1fr 1fr 1fr",
+                gap: 10,
+                padding: "10px 0",
+                color: THEME.muted,
+                fontSize: 11,
+                fontWeight: 900,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+              }}
+            >
+              <div>Asset Type</div>
+              <div style={{ textAlign: "right" }}>Latest Value</div>
+              <div style={{ textAlign: "right" }}>Realized</div>
+              <div style={{ textAlign: "right" }}>Unrealized</div>
+            </div>
+
+            <div style={{ borderTop: `1px solid ${THEME.rowBorder}` }} />
+
+            {/* Rows */}
+            {includedRows.map((r) => {
+              const realizedNeg = safeNum(r.realized, 0) < 0;
+              const unrealizedNeg = safeNum(r.unrealized, 0) < 0;
+
+              return (
+                <div
+                  key={r.key}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "220px 1fr 1fr 1fr",
+                    gap: 10,
+                    padding: "12px 0",
+                    borderBottom: `1px solid ${THEME.rowBorder}`,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 900, color: THEME.title }}>{r.label}</div>
+                    {r.hint ? (
+                      <div style={{ marginTop: 4, fontSize: 12, color: THEME.muted }}>
+                        {r.hint}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
+                    {formatMoney(r.holdingValue)}
+                  </div>
+
+                  <div
+                    style={{
+                      textAlign: "right",
+                      fontWeight: 900,
+                      color: realizedNeg ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)",
+                    }}
+                  >
+                    {formatMoney(r.realized)}
+                  </div>
+
+                  <div
+                    style={{
+                      textAlign: "right",
+                      fontWeight: 900,
+                      color: unrealizedNeg ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)",
+                    }}
+                  >
+                    {formatMoney(r.unrealized)}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Totals row */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "220px 1fr 1fr 1fr",
+                gap: 10,
+                padding: "12px 0",
+                alignItems: "center",
+              }}
+            >
+              <div style={{ fontWeight: 900, color: THEME.pageText }}>Total</div>
+              <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
+                {formatMoney(totals.holdingValue)}
+              </div>
+              <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
+                {formatMoney(totals.realized)}
+              </div>
+              <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
+                {formatMoney(totals.unrealized)}
+              </div>
+            </div>
+
+            {/* Optional: quick hint if crypto spots are missing */}
+            {cryptoSymbols.length && Object.keys(cryptoSpots || {}).length === 0 ? (
+              <div style={{ marginTop: 10, fontSize: 12, color: THEME.muted }}>
+                Note: Crypto prices not returned from /prices right now, so crypto market value will show as $0.00.
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        </div>
       </div>
     </div>
   );
@@ -382,21 +696,12 @@ export default function Portfolio() {
 
 /* ---------------- UI helpers ---------------- */
 
-function SummaryCard({ title, value, hint }) {
+function SummaryCard({ title, value, hint, valueColor }) {
   return (
     <div style={panel}>
       <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{title}</div>
-      <div style={{ marginTop: 6, fontSize: 20, fontWeight: 900, color: THEME.title }}>{value}</div>
+      <div style={{ marginTop: 6, fontSize: 20, fontWeight: 900, color: valueColor || THEME.title }}>{value}</div>
       {hint ? <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>{hint}</div> : null}
-    </div>
-  );
-}
-
-function MiniStat({ label, value }) {
-  return (
-    <div style={{ border: `1px solid ${THEME.rowBorder}`, borderRadius: 12, padding: 12, background: "rgba(2, 6, 23, 0.25)" }}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{label}</div>
-      <div style={{ marginTop: 6, fontSize: 16, fontWeight: 900, color: THEME.title }}>{value}</div>
     </div>
   );
 }

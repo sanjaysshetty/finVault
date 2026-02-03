@@ -15,7 +15,7 @@ export default function Options() {
       <div
         style={{
           fontSize: 36,
-          fontWeight: 900,
+          fontWeight: 900, 
           color: "#F9FAFB",
           letterSpacing: "0.5px",
         }}
