@@ -18,7 +18,6 @@ function getMethod(event) {
 }
 
 function getPath(event) {
-  // Works for HttpApi + RestApi
   return event?.rawPath || event?.requestContext?.http?.path || event?.path || "/";
 }
 
@@ -35,11 +34,31 @@ function pickId(prefix) {
   return `${prefix}-${crypto.randomBytes(10).toString("hex")}`;
 }
 
+function isBlank(v) {
+  return v === undefined || v === null || String(v).trim() === "";
+}
+
+function toISODateOrBlank(v) {
+  if (isBlank(v)) return "";
+  const s = String(v).slice(0, 10);
+  // accept YYYY-MM-DD only
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error("date must be YYYY-MM-DD");
+  return s;
+}
+
+function toNumOrBlank(v) {
+  if (isBlank(v)) return "";
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new Error("must be a number");
+  return n;
+}
+
+function toUpperTrim(v) {
+  return String(v || "").toUpperCase().trim();
+}
+
 /* =========================================================
-   FIXED INCOME
-   Routes:
-   - /assets/fixedincome (GET, POST)
-   - /assets/fixedincome/{assetId} (GET, PATCH, DELETE)
+   FIXED INCOME (unchanged)
 ========================================================= */
 
 const FIXED_BASE = "/assets/fixedincome";
@@ -69,7 +88,6 @@ function validateFixedIncome(body) {
 
   const notes = String(body.notes || "").trim();
 
-  // maturity
   const maturityDate = addMonths(startDate, termMonths);
   const maturityCalc = computeValue({
     principal,
@@ -115,7 +133,6 @@ async function fixedCreate(event) {
   const assetId = body.assetId || pickId("fi");
   const now = new Date().toISOString();
 
-  // current value as-of now (optional convenience fields)
   const curr = computeValue({
     principal: asset.principal,
     annualRate: asset.annualRate,
@@ -202,10 +219,7 @@ async function fixedDelete(event, assetId) {
 }
 
 /* =========================================================
-   BULLION TRANSACTIONS
-   Routes:
-   - /assets/bullion/transactions (GET, POST)
-   - /assets/bullion/transactions/{txId} (PATCH, DELETE)
+   BULLION TRANSACTIONS (unchanged)
 ========================================================= */
 
 const BULL_TX_BASE = "/assets/bullion/transactions";
@@ -316,10 +330,7 @@ async function bullDelete(event, txId) {
 }
 
 /* =========================================================
-   STOCK TRANSACTIONS
-   Routes:
-   - /assets/stocks/transactions (GET, POST)
-   - /assets/stocks/transactions/{txId} (PATCH, DELETE)
+   STOCK TRANSACTIONS (unchanged)
 ========================================================= */
 
 const STOCK_TX_BASE = "/assets/stocks/transactions";
@@ -430,10 +441,7 @@ async function stockDelete(event, txId) {
 }
 
 /* =========================================================
-   CRYPTO TRANSACTIONS
-   Routes:
-   - /assets/crypto/transactions (GET, POST)
-   - /assets/crypto/transactions/{txId} (PATCH, DELETE)
+   CRYPTO TRANSACTIONS (unchanged)
 ========================================================= */
 
 const CRYPTO_TX_BASE = "/assets/crypto/transactions";
@@ -543,6 +551,148 @@ async function cryptoDelete(event, txId) {
   return json(204, null);
 }
 
+/* =========================================================
+   ✅ OPTIONS TRANSACTIONS (EXCEL SHAPE)
+   Routes:
+   - /assets/options/transactions (GET, POST)
+   - /assets/options/transactions/{txId} (PATCH, DELETE)
+========================================================= */
+
+const OPTIONS_TX_BASE = "/assets/options/transactions";
+
+function validateOptionsTx(body) {
+  // This matches your spreadsheet’s input columns (A–L, R):
+  // Type, Open, Expiry, Close, Ticker, Event, K(s), Qty, Fill$, Close$, Fee, Coll, Notes
+
+  const type = toUpperTrim(body.type);
+  const allowedTypes = ["SELL", "BUY", "ASS", "ASSIGNED", "SDI"];
+  if (!allowedTypes.includes(type)) throw new Error(`type must be one of: ${allowedTypes.join(", ")}`);
+
+  const openDate = toISODateOrBlank(body.openDate || body.open);
+  if (!openDate) throw new Error("openDate is required (YYYY-MM-DD)");
+
+  const expiry = toISODateOrBlank(body.expiry || body.expiration || "");
+  const closeDate = toISODateOrBlank(body.closeDate || body.close || "");
+
+  const ticker = toUpperTrim(body.ticker);
+  if (!ticker) throw new Error("ticker is required (e.g., SPY)");
+
+  const event = String(body.event || "").trim();
+  const strikes = String(body.strikes || body.ks || "").trim();
+
+  const qty = toNumOrBlank(body.qty);
+  if (qty === "" || qty <= 0) throw new Error("qty must be a positive number");
+
+  const fill = toNumOrBlank(body.fill);
+  if (fill === "" || fill <= 0) throw new Error("fill must be a positive number");
+
+  // Can be blank for open positions
+  const closePrice = toNumOrBlank(body.closePrice ?? body.close$ ?? body.closeDollar);
+  if (closePrice !== "" && closePrice < 0) throw new Error("closePrice must be >= 0");
+
+  const fee = toNumOrBlank(body.fee);
+  if (fee !== "" && fee < 0) throw new Error("fee must be >= 0");
+
+  const coll = toNumOrBlank(body.coll);
+  if (coll !== "" && coll < 0) throw new Error("coll must be >= 0");
+
+  const notes = String(body.notes || "").trim();
+
+  return {
+    type,
+    openDate,
+    expiry,
+    closeDate,
+    ticker,
+    event,
+    strikes,
+    qty: Number(qty),
+    fill: Number(fill),
+    closePrice: closePrice === "" ? "" : Number(closePrice),
+    fee: fee === "" ? "" : Number(fee),
+    coll: coll === "" ? "" : Number(coll),
+    notes,
+  };
+}
+
+async function optionsList(event) {
+  const userId = getUserIdFromJwt(event);
+  const items = await queryByGSI1(userId, "OPTIONS_TX#");
+  return json(200, items);
+}
+
+async function optionsCreate(event) {
+  const userId = getUserIdFromJwt(event);
+  const body = parseBody(event);
+  if (!body) return badRequest("Invalid JSON body");
+
+  let tx;
+  try {
+    tx = validateOptionsTx(body);
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const txId = body.txId || body.assetId || pickId("otx");
+  const now = new Date().toISOString();
+
+  const item = {
+    userId,
+    assetId: txId,
+    txId,
+    assetType: "OPTIONS_TX",
+    ...tx,
+    gsi1pk: userId,
+    // sort by Open date like your other TX types
+    gsi1sk: `OPTIONS_TX#${tx.openDate}#${txId}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(201, item);
+}
+
+async function optionsUpdate(event, txId) {
+  const userId = getUserIdFromJwt(event);
+  const patch = parseBody(event);
+  if (!patch) return badRequest("Invalid JSON body");
+
+  const existing = await getItem(userId, txId);
+  if (!existing || existing.assetType !== "OPTIONS_TX") return notFound();
+
+  let merged;
+  try {
+    merged = validateOptionsTx({ ...existing, ...patch });
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const now = new Date().toISOString();
+  const item = {
+    ...existing,
+    ...merged,
+    userId,
+    assetId: txId,
+    txId,
+    gsi1pk: userId,
+    gsi1sk: `OPTIONS_TX#${merged.openDate}#${txId}`,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(200, item);
+}
+
+async function optionsDelete(event, txId) {
+  const userId = getUserIdFromJwt(event);
+  const existing = await getItem(userId, txId);
+  if (!existing || existing.assetType !== "OPTIONS_TX") return notFound();
+
+  await deleteItem(userId, txId);
+  return json(204, null);
+}
+
 /* ---------------- main router ---------------- */
 
 module.exports.handler = async (event) => {
@@ -558,7 +708,6 @@ module.exports.handler = async (event) => {
       if (method === "POST") return fixedCreate(event);
       return badRequest(`Unsupported method ${method} for ${FIXED_BASE}`);
     }
-
     if (path.startsWith(`${FIXED_BASE}/`)) {
       const assetId = decodeURIComponent(path.slice(`${FIXED_BASE}/`.length)).trim();
       if (!assetId) return badRequest("assetId is required");
@@ -574,7 +723,6 @@ module.exports.handler = async (event) => {
       if (method === "POST") return bullCreate(event);
       return badRequest(`Unsupported method ${method} for ${BULL_TX_BASE}`);
     }
-
     if (path.startsWith(`${BULL_TX_BASE}/`)) {
       const txId = decodeURIComponent(path.slice(`${BULL_TX_BASE}/`.length)).trim();
       if (!txId) return badRequest("txId is required");
@@ -589,7 +737,6 @@ module.exports.handler = async (event) => {
       if (method === "POST") return stockCreate(event);
       return badRequest(`Unsupported method ${method} for ${STOCK_TX_BASE}`);
     }
-
     if (path.startsWith(`${STOCK_TX_BASE}/`)) {
       const txId = decodeURIComponent(path.slice(`${STOCK_TX_BASE}/`.length)).trim();
       if (!txId) return badRequest("txId is required");
@@ -604,13 +751,26 @@ module.exports.handler = async (event) => {
       if (method === "POST") return cryptoCreate(event);
       return badRequest(`Unsupported method ${method} for ${CRYPTO_TX_BASE}`);
     }
-
     if (path.startsWith(`${CRYPTO_TX_BASE}/`)) {
       const txId = decodeURIComponent(path.slice(`${CRYPTO_TX_BASE}/`.length)).trim();
       if (!txId) return badRequest("txId is required");
       if (method === "PATCH") return cryptoUpdate(event, txId);
       if (method === "DELETE") return cryptoDelete(event, txId);
       return badRequest(`Unsupported method ${method} for ${CRYPTO_TX_BASE}/{txId}`);
+    }
+
+    // ✅ Options TX
+    if (path === OPTIONS_TX_BASE) {
+      if (method === "GET") return optionsList(event);
+      if (method === "POST") return optionsCreate(event);
+      return badRequest(`Unsupported method ${method} for ${OPTIONS_TX_BASE}`);
+    }
+    if (path.startsWith(`${OPTIONS_TX_BASE}/`)) {
+      const txId = decodeURIComponent(path.slice(`${OPTIONS_TX_BASE}/`.length)).trim();
+      if (!txId) return badRequest("txId is required");
+      if (method === "PATCH") return optionsUpdate(event, txId);
+      if (method === "DELETE") return optionsDelete(event, txId);
+      return badRequest(`Unsupported method ${method} for ${OPTIONS_TX_BASE}/{txId}`);
     }
 
     return notFound();

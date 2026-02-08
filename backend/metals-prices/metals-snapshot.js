@@ -11,8 +11,33 @@ if (!GOLDAPI_KEY) throw new Error("Missing GOLDAPI_KEY env var");
 
 const s3 = new S3Client({ region: REGION });
 
-function isoDateUTC(d = new Date()) {
-  return d.toISOString().slice(0, 10);
+/**
+ * Returns weekday name ("Sunday", "Monday", ...) for a Date in America/Chicago.
+ */
+function weekdayCentral(d = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    weekday: "long",
+  }).formatToParts(d);
+  return parts.find((p) => p.type === "weekday")?.value || "";
+}
+
+/**
+ * Returns YYYY-MM-DD for a Date in America/Chicago.
+ * (So your S3 key aligns to “5 AM Central run day”, not UTC.)
+ */
+function isoDateCentral(d = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const y = parts.find((p) => p.type === "year")?.value;
+  const m = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return `${y}-${m}-${day}`;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
@@ -64,28 +89,45 @@ async function putJson(bucket, key, obj) {
 }
 
 export const handler = async () => {
-  const currency = "USD";
-  const dateISO = isoDateUTC();
+  // Determine “today” based on Central time (your schedule is 5 AM Central)
+  const now = new Date();
+  const centralWeekday = weekdayCentral(now);
+  const dateISO = isoDateCentral(now);
 
-  // Metals you requested
+  // ✅ Skip Sundays (based on Central time)
+  if (centralWeekday === "Sunday") {
+    const summary = {
+      bucket: BUCKET,
+      dateISO,
+      skipped: true,
+      reason: "Sunday in America/Chicago (skip GoldAPI call).",
+      results: {},
+      errors: undefined,
+    };
+
+    console.log("Snapshot summary (skipped):", JSON.stringify(summary));
+    return summary;
+  }
+
+  const currency = "USD";
   const metals = ["XAU", "XAG"];
 
   const results = {};
   const errors = {};
 
-  // Fetch sequentially to be gentle on GoldAPI (only 3 calls/day anyway)
+  // Fetch sequentially to be gentle on GoldAPI
   for (const metal of metals) {
     try {
       const data = await fetchGoldApiMetal(metal, currency);
 
-      // Add a few helpful fields so the consumer can show "as-of"
       const payload = {
         ...data,
         metal,
         currency,
-        asOfDate: dateISO,
+        asOfDate: dateISO, // Central-date aligned
         fetchedAt: new Date().toISOString(),
         source: "goldapi.io",
+        timezoneBasis: "America/Chicago",
       };
 
       const key = s3KeyFor(metal, dateISO);
@@ -102,6 +144,7 @@ export const handler = async () => {
   const summary = {
     bucket: BUCKET,
     dateISO,
+    skipped: false,
     results,
     errors: Object.keys(errors).length ? errors : undefined,
   };
