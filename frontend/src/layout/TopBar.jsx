@@ -7,7 +7,7 @@ import { getLoggedInUser } from "../auth/user";
 export default function TopBar() {
   const navigate = useNavigate();
   const user = useMemo(() => getLoggedInUser(), []);
-  const logoSrc = `${import.meta.env.BASE_URL}favicon.svg`;
+  const logoSrc = `${import.meta.env.BASE_URL}favicon-new-1.svg`;
 
   const goHome = () => navigate("/spending/receipts-ledger");
 
