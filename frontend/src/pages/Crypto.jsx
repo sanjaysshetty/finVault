@@ -620,9 +620,6 @@ async function refreshSpots(txOverride) {
           >
             Crypto
           </div>
-          <div style={{ marginTop: 6, fontSize: 13, color: THEME.muted }}>
-            Track crypto transactions, holdings, and realized/unrealized performance.
-          </div>
         </div>
         <div style={{ fontSize: 12, color: THEME.muted, textAlign: "right" }}>
           As of{" "}

@@ -493,7 +493,7 @@ export default function Portfolio() {
             : "Updated."
         );
       } else {
-        setStatus("Updated.");
+       // setStatus("Updated.");
       }
     } catch (e) {
       setError(e?.message || "Failed to load portfolio data");
@@ -533,9 +533,6 @@ export default function Portfolio() {
         <div>
           <div style={{ fontSize: 22, fontWeight: 900, color: THEME.title, letterSpacing: "0.2px" }}>
             Portfolio
-          </div>
-          <div style={{ marginTop: 6, fontSize: 13, color: THEME.muted }}>
-            Aggregated view across Fixed Income, Stocks, Crypto, Bullion, and more.
           </div>
         </div>
 

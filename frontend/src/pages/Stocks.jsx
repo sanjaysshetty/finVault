@@ -479,9 +479,6 @@ export default function Stocks() {
           <div style={{ fontSize: 22, fontWeight: 900, color: THEME.title, letterSpacing: "0.2px" }}>
             Stocks
           </div>
-          <div style={{ marginTop: 6, fontSize: 13, color: THEME.muted }}>
-            Track stock transactions, holdings, and realized/unrealized performance.
-          </div>
         </div>
         <div style={{ fontSize: 12, color: THEME.muted, textAlign: "right" }}>
           As of <span style={{ color: THEME.pageText, fontWeight: 700 }}>{asOfDate}</span>
