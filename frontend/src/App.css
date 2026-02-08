@@ -114,9 +114,10 @@ textarea{
 .app-body{
   flex: 1;
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: auto 1fr;   /* <-- grid follows actual SideNav width */
   min-height: 0;
 }
+
 
 /* =========================
    SIDE NAV (LIGHTER + POLISHED)
