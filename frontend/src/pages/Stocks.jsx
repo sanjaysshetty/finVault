@@ -35,13 +35,29 @@ function formatMoney(n) {
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
+function formatPct(n) {
+  const x = safeNum(n, 0);
+  const sign = x > 0 ? "+" : "";
+  return `${sign}${x.toFixed(2)}%`;
+}
+
+function spotMove(spot, prevClose) {
+  const s = safeNum(spot, 0);
+  const p = safeNum(prevClose, 0);
+  if (!p) {
+    return { pct: 0, color: THEME.pageText, hasPrev: false, change: 0 };
+  }
+  const change = s - p;
+  const pct = (change / p) * 100;
+  const color = pct < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
+  return { pct, color, hasPrev: true, change };
+}
+
 function plColor(v) {
-  // Mimic Portfolio.jsx gain/loss coloring
   return safeNum(v, 0) < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
 }
 
-
-/* ---------------- API (same pattern as Bullion/FixedIncome) ---------------- */
+/* ---------------- API ---------------- */
 
 function getApiBase() {
   const envBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
@@ -116,8 +132,7 @@ function normalizeTx(item) {
 }
 
 /**
- * Moving-average cost method per symbol.
- * Realized P/L is computed at each SELL using current avg cost basis.
+ * Moving-average cost per symbol.
  */
 function computeStockMetrics(transactions, quoteMap) {
   const bySymbol = {};
@@ -164,6 +179,7 @@ function computeStockMetrics(transactions, quoteMap) {
     .map(([symbol, s]) => {
       const q = quoteMap[symbol];
       const spot = safeNum(q?.price, 0);
+      const prevClose = safeNum(q?.prevClose, 0);
       const mv = s.shares * spot;
       const unrl = (spot - (s.avg || 0)) * s.shares;
 
@@ -172,6 +188,7 @@ function computeStockMetrics(transactions, quoteMap) {
         shares: s.shares,
         avgCost: s.avg,
         spot,
+        prevClose,
         marketValue: mv,
         unrealized: unrl,
         realized: s.realized,
@@ -334,7 +351,6 @@ export default function Stocks() {
       const stockMap = res?.stocks || {};
       setQuotes((prev) => ({ ...prev, ...stockMap }));
 
-      // Surface any stock-specific errors (per symbol)
       const stockErrors = res?.errors?.stocks;
       if (stockErrors && typeof stockErrors === "object") {
         const bad = Object.keys(stockErrors);
@@ -404,7 +420,7 @@ export default function Stocks() {
       type,
       symbol,
       date: form.date,
-      shares: Number(shares.toFixed(4)), // allow fractional shares
+      shares: Number(shares.toFixed(4)),
       price: Number(price.toFixed(4)),
       fees: Number(fees.toFixed(2)),
       notes: form.notes?.trim() || "",
@@ -475,12 +491,12 @@ export default function Stocks() {
       {/* Summary cards */}
       <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(4, minmax(180px, 1fr))", gap: 12 }}>
         <SummaryCard title="Total Holding Value" value={formatMoney(metrics.totals.holdingValue)} hint="Based on latest quotes" />
-        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(metrics.totals.unrealized)} hint="Spot vs. avg cost"  valueColor={plColor(metrics.totals.unrealized)} />
-        <SummaryCard title="Realized Gain/Loss" value={formatMoney(metrics.totals.realized)} hint="From sell transactions"  valueColor={plColor(metrics.totals.realized)} />
+        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(metrics.totals.unrealized)} hint="Spot vs. avg cost" valueColor={plColor(metrics.totals.unrealized)} />
+        <SummaryCard title="Realized Gain/Loss" value={formatMoney(metrics.totals.realized)} hint="From sell transactions" valueColor={plColor(metrics.totals.realized)} />
         <SummaryCard title="Total P/L" value={formatMoney(metrics.totals.totalPL)} hint="Realized + Unrealized" />
       </div>
 
-      {/* Holdings (full width) */}
+      {/* Holdings */}
       <div style={{ ...panel, marginTop: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <div>
@@ -510,6 +526,7 @@ export default function Stocks() {
                 <Th>Shares</Th>
                 <Th>Avg Cost</Th>
                 <Th>Spot</Th>
+                <Th>Day G/L</Th>
                 <Th>Market Value</Th>
                 <Th>Unrealized</Th>
                 <Th>Realized</Th>
@@ -518,36 +535,59 @@ export default function Stocks() {
             <tbody>
               {metrics.holdings.length === 0 ? (
                 <tr style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
-                  <Td colSpan={7}>
+                  <Td colSpan={8}>
                     <div style={{ padding: "10px 0", color: THEME.muted }}>
                       No holdings yet. Add a BUY transaction.
                     </div>
                   </Td>
                 </tr>
               ) : (
-                metrics.holdings.map((h) => (
-                  <tr key={h.symbol} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
-                    <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>{h.symbol}</div>
-                      <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>
-                        Buys: {h.buys} · Sells: {h.sells}
-                      </div>
-                    </Td>
-                    <Td>{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</Td>
-                    <Td>{formatMoney(h.avgCost)}</Td>
-                    <Td>{formatMoney(h.spot)}</Td>
-                    <Td style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(h.marketValue)}</Td>
-                    <Td style={{ fontWeight: 900, color: plColor(h.unrealized) }}>{formatMoney(h.unrealized)}</Td>
-                    <Td style={{ fontWeight: 900, color: plColor(h.realized) }}>{formatMoney(h.realized)}</Td>
-                  </tr>
-                ))
+                metrics.holdings.map((h) => {
+                  const mv = spotMove(h.spot, h.prevClose);
+                  const dayGL = mv.hasPrev ? safeNum(h.shares, 0) * mv.change : null;
+
+                  return (
+                    <tr key={h.symbol} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
+                      <Td>
+                        <div style={{ fontWeight: 900, color: THEME.title }}>{h.symbol}</div>
+                        <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>
+                          Buys: {h.buys} · Sells: {h.sells}
+                        </div>
+                      </Td>
+
+                      <Td>{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</Td>
+                      <Td>{formatMoney(h.avgCost)}</Td>
+
+                      {/* Spot (colored) + % change */}
+                      <Td>
+                        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 900, color: mv.color }}>{formatMoney(h.spot)}</span>
+                          {mv.hasPrev ? (
+                            <span style={{ fontSize: 12, fontWeight: 800, color: mv.color }}>
+                              ({formatPct(mv.pct)})
+                            </span>
+                          ) : null}
+                        </div>
+                      </Td>
+
+                      {/* Day G/L (shares * (spot - prevClose)) */}
+                      <Td style={{ fontWeight: 900, color: mv.hasPrev ? plColor(dayGL) : THEME.muted }}>
+                        {mv.hasPrev ? formatMoney(dayGL) : "—"}
+                      </Td>
+
+                      <Td style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(h.marketValue)}</Td>
+                      <Td style={{ fontWeight: 900, color: plColor(h.unrealized) }}>{formatMoney(h.unrealized)}</Td>
+                      <Td style={{ fontWeight: 900, color: plColor(h.realized) }}>{formatMoney(h.realized)}</Td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Add/Edit transaction (hidden by default) */}
+      {/* Add/Edit transaction */}
       {showForm ? (
         <div style={{ ...panel, marginTop: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
@@ -778,10 +818,9 @@ function Th({ children, align, style, ...rest }) {
         fontSize: 12,
         color: THEME.muted,
         fontWeight: 900,
-        whiteSpace: "nowrap",
-        ...(style || {}),
+        textAlign: align || "left",
+        ...style,
       }}
-      align={align || "left"}
       {...rest}
     >
       {children}
@@ -789,11 +828,17 @@ function Th({ children, align, style, ...rest }) {
   );
 }
 
-function Td({ children, align, colSpan, style, ...rest }) {
+function Td({ children, colSpan, align, style, ...rest }) {
   return (
     <td
-      style={{ padding: "12px 10px", verticalAlign: "top", ...(style || {}) }}
-      align={align || "left"}
+      style={{
+        padding: "10px 10px",
+        fontSize: 13,
+        color: THEME.pageText,
+        textAlign: align || "left",
+        verticalAlign: "top",
+        ...style,
+      }}
       colSpan={colSpan}
       {...rest}
     >
@@ -802,24 +847,33 @@ function Td({ children, align, colSpan, style, ...rest }) {
   );
 }
 
-/* ---------- styles ---------- */
+/* ---------- Styles ---------- */
 
 const panel = {
   background: THEME.panelBg,
   border: `1px solid ${THEME.panelBorder}`,
   borderRadius: 14,
   padding: 14,
-  backdropFilter: "blur(6px)",
+  boxShadow: "0 10px 26px rgba(0,0,0,0.22)",
+  backdropFilter: "blur(10px)",
+};
+
+const callout = {
+  background: "rgba(239, 68, 68, 0.12)",
+  border: `1px solid rgba(239, 68, 68, 0.28)`,
+  borderRadius: 12,
+  padding: 12,
 };
 
 const input = {
   width: "100%",
-  padding: "10px 10px",
+  padding: "10px 12px",
   borderRadius: 12,
+  outline: "none",
   border: `1px solid ${THEME.inputBorder}`,
   background: THEME.inputBg,
   color: THEME.pageText,
-  outline: "none",
+  fontSize: 13,
 };
 
 const btnPrimary = {
@@ -835,38 +889,31 @@ const btnPrimary = {
 const btnSecondary = {
   padding: "10px 12px",
   borderRadius: 12,
-  border: `1px solid ${THEME.panelBorder}`,
-  background: "rgba(148, 163, 184, 0.06)",
-  color: THEME.pageText,
+  border: `1px solid ${THEME.inputBorder}`,
+  background: "rgba(2, 6, 23, 0.2)",
+  color: THEME.title,
   fontWeight: 900,
   cursor: "pointer",
 };
 
 const btnSecondarySmall = {
-  padding: "7px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.panelBorder}`,
-  background: "rgba(148, 163, 184, 0.06)",
-  color: THEME.pageText,
-  fontWeight: 900,
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const btnDangerSmall = {
-  padding: "7px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.dangerBorder}`,
-  background: THEME.dangerBg,
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: `1px solid ${THEME.inputBorder}`,
+  background: "rgba(2, 6, 23, 0.2)",
   color: THEME.title,
   fontWeight: 900,
   cursor: "pointer",
   fontSize: 12,
 };
 
-const callout = {
-  padding: 12,
-  borderRadius: 12,
-  background: "rgba(239, 68, 68, 0.10)",
+const btnDangerSmall = {
+  padding: "8px 10px",
+  borderRadius: 10,
   border: `1px solid ${THEME.dangerBorder}`,
+  background: THEME.dangerBg,
+  color: THEME.title,
+  fontWeight: 900,
+  cursor: "pointer",
+  fontSize: 12,
 };

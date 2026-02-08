@@ -1,0 +1,15 @@
+{
+    "Items": [
+        {
+            "txId": {
+                "S": "otx-f10db499a9de21b195a4"
+            },
+            "userId": {
+                "S": "a4989438-e001-7005-babe-0e92e91c028a"
+            }
+        }
+    ],
+    "Count": 1,
+    "ScannedCount": 20,
+    "ConsumedCapacity": null
+}

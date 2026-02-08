@@ -6,7 +6,7 @@ import { getLoggedInUser } from "../auth/user";
 
 export default function TopBar() {
   const navigate = useNavigate();
-  const logoSrc = `${import.meta.env.BASE_URL}favicon.svg`;
+  const logoSrc = `${import.meta.env.BASE_URL}favicon.png`;
 
   const user = useMemo(() => getLoggedInUser(), []);
 
