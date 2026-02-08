@@ -235,13 +235,21 @@ function blankNewRow() {
 
 function normalizeItem(it) {
   const id = it.txId || it.assetId || it.id;
+
+  // Normalize backend key variants so UI is consistent.
+  const rollOver =
+    it.rollOver ?? it.rollover ?? it.roll_over ?? it.rollOverFlag ?? "";
+  const notes = it.notes ?? it.note ?? it.memo ?? "";
+  const closeDate = it.closeDate ?? it.close_date ?? "";
+  const collateral = it.collateral ?? it.coll ?? it.margin ?? "";
+
   return {
     ...it,
     id,
-    // Normalize common backend variants
-    collateral: it.collateral ?? it.coll ?? "",
-    rollOver: it.rollOver ?? it.rollover ?? it.roll_over ?? "",
-    notes: it.notes ?? it.note ?? it.memo ?? "",
+    collateral,
+    rollOver,
+    closeDate,
+    notes,
   };
 }
 
@@ -265,6 +273,8 @@ function toPayload(d) {
     coll: effectiveCollateral, // backward compat
 
     rollOver: String(d.rollOver || "").trim(),
+    rollover: String(d.rollOver || "").trim(), // backend compat
+    roll_over: String(d.rollOver || "").trim(), // backend compat
 
     closeDate: String(d.closeDate || "").slice(0, 10),
     notes: String(d.notes || "").trim(),

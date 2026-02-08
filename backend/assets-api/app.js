@@ -596,6 +596,12 @@ function validateOptionsTx(body) {
   const coll = toNumOrBlank(body.coll);
   if (coll !== "" && coll < 0) throw new Error("coll must be >= 0");
 
+  // Optional: Roll Over / Rollover (string flag or destination)
+  // Accept common variants from UI payload
+  const rollOver = String(
+    body.rollOver ?? body.rollover ?? body.roll_over ?? body["Roll Over"] ?? ""
+  ).trim();
+
   const notes = String(body.notes || "").trim();
 
   return {
@@ -611,6 +617,7 @@ function validateOptionsTx(body) {
     closePrice: closePrice === "" ? "" : Number(closePrice),
     fee: fee === "" ? "" : Number(fee),
     coll: coll === "" ? "" : Number(coll),
+    rollOver,
     notes,
   };
 }
@@ -618,6 +625,22 @@ function validateOptionsTx(body) {
 async function optionsList(event) {
   const userId = getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "OPTIONS_TX#");
+
+  // TEMP DEBUG: verify rollOver is returned by list endpoint
+  try {
+    const count = Array.isArray(items) ? items.length : 0;
+    const sample = count ? items[0] : null;
+    console.log("[OPTIONS_TX][LIST]", {
+      userId,
+      count,
+      sampleTxId: sample?.txId,
+      sampleRollOver: sample?.rollOver,
+      sampleColl: sample?.coll,
+    });
+  } catch (e) {
+    console.log("[OPTIONS_TX][LIST] debug log failed", String(e?.message || e));
+  }
+
   return json(200, items);
 }
 
@@ -625,6 +648,18 @@ async function optionsCreate(event) {
   const userId = getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
+
+  // TEMP DEBUG: log payload keys to confirm rollOver arrives
+  console.log("[OPTIONS_TX][CREATE] payload", {
+    txId: body?.txId || body?.assetId,
+    ticker: body?.ticker,
+    openDate: body?.openDate || body?.open,
+    rollOver: body?.rollOver,
+    rollover: body?.rollover,
+    roll_over: body?.roll_over,
+    coll: body?.coll,
+    notes: body?.notes,
+  });
 
   let tx;
   try {
@@ -650,6 +685,9 @@ async function optionsCreate(event) {
   };
 
   await putItem(item);
+
+  // TEMP DEBUG: confirm saved values
+  console.log("[OPTIONS_TX][CREATE] saved", { txId: item.txId, rollOver: item.rollOver, coll: item.coll });
   return json(201, item);
 }
 
@@ -657,6 +695,16 @@ async function optionsUpdate(event, txId) {
   const userId = getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
+
+  // TEMP DEBUG: log patch keys to confirm rollOver arrives
+  console.log("[OPTIONS_TX][PATCH] payload", {
+    txId,
+    rollOver: patch?.rollOver,
+    rollover: patch?.rollover,
+    roll_over: patch?.roll_over,
+    coll: patch?.coll,
+    notes: patch?.notes,
+  });
 
   const existing = await getItem(userId, txId);
   if (!existing || existing.assetType !== "OPTIONS_TX") return notFound();
@@ -681,6 +729,9 @@ async function optionsUpdate(event, txId) {
   };
 
   await putItem(item);
+
+  // TEMP DEBUG: confirm saved values
+  console.log("[OPTIONS_TX][PATCH] saved", { txId: item.txId, rollOver: item.rollOver, coll: item.coll });
   return json(200, item);
 }
 
