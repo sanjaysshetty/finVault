@@ -41,7 +41,6 @@ function isBlank(v) {
 function toISODateOrBlank(v) {
   if (isBlank(v)) return "";
   const s = String(v).slice(0, 10);
-  // accept YYYY-MM-DD only
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error("date must be YYYY-MM-DD");
   return s;
 }
@@ -80,7 +79,8 @@ function validateFixedIncome(body) {
   if (!Number.isFinite(termMonths) || termMonths <= 0) throw new Error("termMonths must be > 0");
 
   const interestType = String(body.interestType || "SIMPLE").toUpperCase();
-  if (!["SIMPLE", "COMPOUND"].includes(interestType)) throw new Error("interestType must be SIMPLE or COMPOUND");
+  if (!["SIMPLE", "COMPOUND"].includes(interestType))
+    throw new Error("interestType must be SIMPLE or COMPOUND");
 
   const compoundFrequency = String(body.compoundFrequency || "YEARLY").toUpperCase();
   if (!["DAILY", "MONTHLY", "QUARTERLY", "YEARLY"].includes(compoundFrequency))
@@ -130,7 +130,7 @@ async function fixedCreate(event) {
     return badRequest(e.message);
   }
 
-  const assetId = body.assetId || pickId("fi");
+  const assetId = body.assetId || pickId("fix");
   const now = new Date().toISOString();
 
   const curr = computeValue({
@@ -552,21 +552,16 @@ async function cryptoDelete(event, txId) {
 }
 
 /* =========================================================
-   ✅ OPTIONS TRANSACTIONS (EXCEL SHAPE)
-   Routes:
-   - /assets/options/transactions (GET, POST)
-   - /assets/options/transactions/{txId} (PATCH, DELETE)
+   ✅ OPTIONS TRANSACTIONS (EXCEL SHAPE) (unchanged)
 ========================================================= */
 
 const OPTIONS_TX_BASE = "/assets/options/transactions";
 
 function validateOptionsTx(body) {
-  // This matches your spreadsheet’s input columns (A–L, R):
-  // Type, Open, Expiry, Close, Ticker, Event, K(s), Qty, Fill$, Close$, Fee, Coll, Notes
-
   const type = toUpperTrim(body.type);
   const allowedTypes = ["SELL", "BUY", "ASS", "ASSIGNED", "SDI"];
-  if (!allowedTypes.includes(type)) throw new Error(`type must be one of: ${allowedTypes.join(", ")}`);
+  if (!allowedTypes.includes(type))
+    throw new Error(`type must be one of: ${allowedTypes.join(", ")}`);
 
   const openDate = toISODateOrBlank(body.openDate || body.open);
   if (!openDate) throw new Error("openDate is required (YYYY-MM-DD)");
@@ -586,7 +581,6 @@ function validateOptionsTx(body) {
   const fill = toNumOrBlank(body.fill);
   if (fill === "" || fill <= 0) throw new Error("fill must be a positive number");
 
-  // Can be blank for open positions
   const closePrice = toNumOrBlank(body.closePrice ?? body.close$ ?? body.closeDollar);
   if (closePrice !== "" && closePrice < 0) throw new Error("closePrice must be >= 0");
 
@@ -596,8 +590,6 @@ function validateOptionsTx(body) {
   const coll = toNumOrBlank(body.coll);
   if (coll !== "" && coll < 0) throw new Error("coll must be >= 0");
 
-  // Optional: Roll Over / Rollover (string flag or destination)
-  // Accept common variants from UI payload
   const rollOver = String(
     body.rollOver ?? body.rollover ?? body.roll_over ?? body["Roll Over"] ?? ""
   ).trim();
@@ -625,22 +617,6 @@ function validateOptionsTx(body) {
 async function optionsList(event) {
   const userId = getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "OPTIONS_TX#");
-
-  // TEMP DEBUG: verify rollOver is returned by list endpoint
-  try {
-    const count = Array.isArray(items) ? items.length : 0;
-    const sample = count ? items[0] : null;
-    console.log("[OPTIONS_TX][LIST]", {
-      userId,
-      count,
-      sampleTxId: sample?.txId,
-      sampleRollOver: sample?.rollOver,
-      sampleColl: sample?.coll,
-    });
-  } catch (e) {
-    console.log("[OPTIONS_TX][LIST] debug log failed", String(e?.message || e));
-  }
-
   return json(200, items);
 }
 
@@ -648,18 +624,6 @@ async function optionsCreate(event) {
   const userId = getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
-
-  // TEMP DEBUG: log payload keys to confirm rollOver arrives
-  console.log("[OPTIONS_TX][CREATE] payload", {
-    txId: body?.txId || body?.assetId,
-    ticker: body?.ticker,
-    openDate: body?.openDate || body?.open,
-    rollOver: body?.rollOver,
-    rollover: body?.rollover,
-    roll_over: body?.roll_over,
-    coll: body?.coll,
-    notes: body?.notes,
-  });
 
   let tx;
   try {
@@ -678,16 +642,12 @@ async function optionsCreate(event) {
     assetType: "OPTIONS_TX",
     ...tx,
     gsi1pk: userId,
-    // sort by Open date like your other TX types
     gsi1sk: `OPTIONS_TX#${tx.openDate}#${txId}`,
     createdAt: now,
     updatedAt: now,
   };
 
   await putItem(item);
-
-  // TEMP DEBUG: confirm saved values
-  console.log("[OPTIONS_TX][CREATE] saved", { txId: item.txId, rollOver: item.rollOver, coll: item.coll });
   return json(201, item);
 }
 
@@ -695,16 +655,6 @@ async function optionsUpdate(event, txId) {
   const userId = getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
-
-  // TEMP DEBUG: log patch keys to confirm rollOver arrives
-  console.log("[OPTIONS_TX][PATCH] payload", {
-    txId,
-    rollOver: patch?.rollOver,
-    rollover: patch?.rollover,
-    roll_over: patch?.roll_over,
-    coll: patch?.coll,
-    notes: patch?.notes,
-  });
 
   const existing = await getItem(userId, txId);
   if (!existing || existing.assetType !== "OPTIONS_TX") return notFound();
@@ -729,9 +679,6 @@ async function optionsUpdate(event, txId) {
   };
 
   await putItem(item);
-
-  // TEMP DEBUG: confirm saved values
-  console.log("[OPTIONS_TX][PATCH] saved", { txId: item.txId, rollOver: item.rollOver, coll: item.coll });
   return json(200, item);
 }
 
@@ -743,6 +690,225 @@ async function optionsDelete(event, txId) {
   await deleteItem(userId, txId);
   return json(204, null);
 }
+
+/* =========================================================
+   ✅ NAV “MANUAL ASSET BUCKETS”
+   assetTypes:
+   - RETIRE_TX
+   - EDUCATION_TX
+   - OTHERPROP_TX
+   Routes:
+   - /assets/retirement/transactions (GET, POST)
+   - /assets/retirement/transactions/{txId} (PATCH, DELETE)
+   - /assets/education/transactions ...
+   - /assets/property/transactions ...
+========================================================= */
+
+function validateNavBucketTx(body) {
+  const date = toISODateOrBlank(body.date);
+  if (!date) throw new Error("date is required (YYYY-MM-DD)");
+
+  const name = String(body.name || "").trim();
+  if (!name) throw new Error("name is required");
+
+  const amount = toNumOrBlank(body.amount);
+  if (amount === "" || amount < 0) throw new Error("amount must be a number >= 0");
+
+  const notes = String(body.notes || "").trim();
+
+  return {
+    date,
+    name,
+    amount: Number(Number(amount).toFixed(2)),
+    notes,
+  };
+}
+
+function makeNavBucketHandlers({ assetType, idPrefix }) {
+  const prefixForQuery = `${assetType}#`;
+
+  return {
+    async list(event) {
+      const userId = getUserIdFromJwt(event);
+      const items = await queryByGSI1(userId, prefixForQuery);
+      return json(200, items);
+    },
+
+    async create(event) {
+      const userId = getUserIdFromJwt(event);
+      const body = parseBody(event);
+      if (!body) return badRequest("Invalid JSON body");
+
+      let tx;
+      try {
+        tx = validateNavBucketTx(body);
+      } catch (e) {
+        return badRequest(e.message);
+      }
+
+      const txId = body.txId || body.assetId || pickId(idPrefix);
+      const now = new Date().toISOString();
+
+      const item = {
+        userId,
+        assetId: txId,
+        txId,
+        assetType,
+        ...tx,
+        gsi1pk: userId,
+        gsi1sk: `${assetType}#${tx.date}#${txId}`,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await putItem(item);
+      return json(201, item);
+    },
+
+    async update(event, txId) {
+      const userId = getUserIdFromJwt(event);
+      const patch = parseBody(event);
+      if (!patch) return badRequest("Invalid JSON body");
+
+      const existing = await getItem(userId, txId);
+      if (!existing || existing.assetType !== assetType) return notFound();
+
+      let merged;
+      try {
+        merged = validateNavBucketTx({ ...existing, ...patch });
+      } catch (e) {
+        return badRequest(e.message);
+      }
+
+      const now = new Date().toISOString();
+
+      const item = {
+        ...existing,
+        ...merged,
+        userId,
+        assetId: txId,
+        txId,
+        gsi1pk: userId,
+        gsi1sk: `${assetType}#${merged.date}#${txId}`,
+        updatedAt: now,
+      };
+
+      await putItem(item);
+      return json(200, item);
+    },
+
+    async del(event, txId) {
+      const userId = getUserIdFromJwt(event);
+      const existing = await getItem(userId, txId);
+      if (!existing || existing.assetType !== assetType) return notFound();
+
+      await deleteItem(userId, txId);
+      return json(204, null);
+    },
+  };
+}
+
+const RETIRE_TX_BASE = "/assets/retirement/transactions";
+const EDUCATION_TX_BASE = "/assets/education/transactions";
+const OTHERPROP_TX_BASE = "/assets/property/transactions";
+
+const retireHandlers = makeNavBucketHandlers({ assetType: "RETIRE_TX", idPrefix: "rtx" });
+const eduHandlers = makeNavBucketHandlers({ assetType: "EDUCATION_TX", idPrefix: "etx" });
+const propHandlers = makeNavBucketHandlers({ assetType: "OTHERPROP_TX", idPrefix: "ptx" });
+
+/* =========================================================
+   NAV STATE (sections + rows persisted)
+========================================================= */
+
+const NAV_BASE = "/nav";
+const NAV_ASSET_ID = "nav-state";
+const NAV_ASSET_TYPE = "NAV_STATE";
+
+function validateNavState(body) {
+  if (!body || typeof body !== "object") throw new Error("Invalid JSON body");
+
+  const required = ["usaAssets", "usaLiabs", "indiaAssets", "indiaLiabs"];
+  for (const k of required) {
+    if (!Array.isArray(body[k])) throw new Error(`${k} must be an array`);
+  }
+
+  // light validation for items
+  function validateArr(arr, name) {
+    for (const it of arr) {
+      if (!it || typeof it !== "object") throw new Error(`${name} contains invalid item`);
+      if (it.kind !== "section" && it.kind !== "row") throw new Error(`${name} item.kind must be section|row`);
+      if (!it.id) throw new Error(`${name} item.id required`);
+      if (it.kind === "section") {
+        if (typeof it.label !== "string") throw new Error(`${name} section.label must be string`);
+      } else {
+        if (typeof it.label !== "string") throw new Error(`${name} row.label must be string`);
+        // amount can be number or string (frontend uses string input)
+        if (it.amount !== undefined && typeof it.amount !== "number" && typeof it.amount !== "string")
+          throw new Error(`${name} row.amount must be number|string`);
+        if (it.remarks !== undefined && typeof it.remarks !== "string")
+          throw new Error(`${name} row.remarks must be string`);
+        if (it.source !== undefined && typeof it.source !== "string")
+          throw new Error(`${name} row.source must be string`);
+      }
+    }
+  }
+
+  validateArr(body.usaAssets, "usaAssets");
+  validateArr(body.usaLiabs, "usaLiabs");
+  validateArr(body.indiaAssets, "indiaAssets");
+  validateArr(body.indiaLiabs, "indiaLiabs");
+
+  return body;
+}
+
+async function navGet(event) {
+  const userId = getUserIdFromJwt(event);
+  const item = await getItem(userId, NAV_ASSET_ID);
+  if (!item || item.assetType !== NAV_ASSET_TYPE) return json(200, null);
+  return json(200, item.state || null);
+}
+
+async function navPut(event) {
+  const userId = getUserIdFromJwt(event);
+  const body = parseBody(event);
+  if (!body) return badRequest("Invalid JSON body");
+
+  let state;
+  try {
+    state = validateNavState(body);
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const now = new Date().toISOString();
+
+  const item = {
+    userId,
+    assetId: NAV_ASSET_ID,
+    assetType: NAV_ASSET_TYPE,
+    state,
+    gsi1pk: userId,
+    gsi1sk: `NAV_STATE#${NAV_ASSET_ID}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // preserve createdAt if exists
+  const existing = await getItem(userId, NAV_ASSET_ID);
+  if (existing?.createdAt) item.createdAt = existing.createdAt;
+
+  await putItem(item);
+  return json(200, { ok: true });
+}
+
+async function navDelete(event) {
+  const userId = getUserIdFromJwt(event);
+  const existing = await getItem(userId, NAV_ASSET_ID);
+  if (!existing || existing.assetType !== NAV_ASSET_TYPE) return json(204, null);
+  await deleteItem(userId, NAV_ASSET_ID);
+  return json(204, null);
+}
+
 
 /* ---------------- main router ---------------- */
 
@@ -810,7 +976,7 @@ module.exports.handler = async (event) => {
       return badRequest(`Unsupported method ${method} for ${CRYPTO_TX_BASE}/{txId}`);
     }
 
-    // ✅ Options TX
+    // Options TX
     if (path === OPTIONS_TX_BASE) {
       if (method === "GET") return optionsList(event);
       if (method === "POST") return optionsCreate(event);
@@ -822,6 +988,55 @@ module.exports.handler = async (event) => {
       if (method === "PATCH") return optionsUpdate(event, txId);
       if (method === "DELETE") return optionsDelete(event, txId);
       return badRequest(`Unsupported method ${method} for ${OPTIONS_TX_BASE}/{txId}`);
+    }
+
+    // ✅ NAV bucket: Retirement
+    if (path === RETIRE_TX_BASE) {
+      if (method === "GET") return retireHandlers.list(event);
+      if (method === "POST") return retireHandlers.create(event);
+      return badRequest(`Unsupported method ${method} for ${RETIRE_TX_BASE}`);
+    }
+    if (path.startsWith(`${RETIRE_TX_BASE}/`)) {
+      const txId = decodeURIComponent(path.slice(`${RETIRE_TX_BASE}/`.length)).trim();
+      if (!txId) return badRequest("txId is required");
+      if (method === "PATCH") return retireHandlers.update(event, txId);
+      if (method === "DELETE") return retireHandlers.del(event, txId);
+      return badRequest(`Unsupported method ${method} for ${RETIRE_TX_BASE}/{txId}`);
+    }
+
+    // ✅ NAV bucket: Education / 529
+    if (path === EDUCATION_TX_BASE) {
+      if (method === "GET") return eduHandlers.list(event);
+      if (method === "POST") return eduHandlers.create(event);
+      return badRequest(`Unsupported method ${method} for ${EDUCATION_TX_BASE}`);
+    }
+    if (path.startsWith(`${EDUCATION_TX_BASE}/`)) {
+      const txId = decodeURIComponent(path.slice(`${EDUCATION_TX_BASE}/`.length)).trim();
+      if (!txId) return badRequest("txId is required");
+      if (method === "PATCH") return eduHandlers.update(event, txId);
+      if (method === "DELETE") return eduHandlers.del(event, txId);
+      return badRequest(`Unsupported method ${method} for ${EDUCATION_TX_BASE}/{txId}`);
+    }
+
+    // ✅ NAV bucket: Property
+    if (path === OTHERPROP_TX_BASE) {
+      if (method === "GET") return propHandlers.list(event);
+      if (method === "POST") return propHandlers.create(event);
+      return badRequest(`Unsupported method ${method} for ${OTHERPROP_TX_BASE}`);
+    }
+    if (path.startsWith(`${OTHERPROP_TX_BASE}/`)) {
+      const txId = decodeURIComponent(path.slice(`${OTHERPROP_TX_BASE}/`.length)).trim();
+      if (!txId) return badRequest("txId is required");
+      if (method === "PATCH") return propHandlers.update(event, txId);
+      if (method === "DELETE") return propHandlers.del(event, txId);
+      return badRequest(`Unsupported method ${method} for ${OTHERPROP_TX_BASE}/{txId}`);
+    }
+    // NAV
+    if (path === NAV_BASE) {
+      if (method === "GET") return navGet(event);
+      if (method === "PUT") return navPut(event);
+      if (method === "DELETE") return navDelete(event);
+      return badRequest(`Unsupported method ${method} for ${NAV_BASE}`);
     }
 
     return notFound();
