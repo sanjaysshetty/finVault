@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-
-/* ---------------- Theme ---------------- */
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 const THEME = {
   pageText: "#CBD5F5",
@@ -16,57 +14,34 @@ const THEME = {
   dangerBg: "rgba(239, 68, 68, 0.12)",
   dangerBorder: "rgba(239, 68, 68, 0.35)",
 
-  sectionBg: "rgba(30, 41, 59, 0.62)",
-  sectionBorder: "rgba(148, 163, 184, 0.26)",
+  // Section headers (Assets / Liabilities)
+  assetsSectionBg: "rgba(34, 197, 94, 0.18)",
+  assetsSectionBorder: "rgba(34, 197, 94, 0.45)",
+  assetsSectionText: "#BBF7D0",
+
+  liabsSectionBg: "rgba(239, 68, 68, 0.14)",
+  liabsSectionBorder: "rgba(239, 68, 68, 0.38)",
+  liabsSectionText: "#FECACA",
 
   badgeBg: "rgba(148, 163, 184, 0.10)",
   badgeBorder: "rgba(148, 163, 184, 0.25)",
 };
 
-const ASSET_PANEL_TINT = "rgba(34, 197, 94, 0.08)";
-const ASSET_PANEL_BORDER = "rgba(34, 197, 94, 0.18)";
-const LIAB_PANEL_TINT = "rgba(239, 68, 68, 0.08)";
-const LIAB_PANEL_BORDER = "rgba(239, 68, 68, 0.18)";
-
-/**
- * ✅ Fix edit-mode overlap:
- * - Give Actions more fixed room (Cancel/Save wider than Edit/Del)
- * - Reduce Amount a bit
- * - Keep Remarks input constrained (maxWidth: 100%)
- *
- * Head | Amount | Remarks | Actions
- */
-const GRID_COLS = "2.3fr 1.6fr 3.4fr 1.7fr";
-
-// Clamp for most cells
-const CELL_CLAMP = {
-  minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-
-// Amount cell: never ellipsis
-const AMOUNT_NO_ELLIPSIS = {
-  minWidth: 0,
-  overflow: "visible",
-  textOverflow: "clip",
-  whiteSpace: "nowrap",
-};
-
-/* ---------------- helpers ---------------- */
+/* ---------------- utils ---------------- */
 
 function safeNum(v, fallback = 0) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
+
+function clamp(n, lo, hi) {
+  return Math.min(hi, Math.max(lo, n));
+}
+
 function round2(n) {
-  return Number(safeNum(n, 0).toFixed(2));
+  return Math.round(safeNum(n, 0) * 100) / 100;
 }
-function formatMoney(n, currency = "USD") {
-  const x = safeNum(n, 0);
-  return x.toLocaleString(undefined, { style: "currency", currency });
-}
+
 function uid(prefix = "id") {
   return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now()}`;
 }
@@ -112,83 +87,178 @@ async function apiFetch(path, { method = "GET", body } = {}) {
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
-    throw new Error(`API returned non-JSON (${res.status})`);
+    data = text;
   }
 
-  if (!res.ok) throw new Error(data?.error || data?.message || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const msg = (data && (data.message || data.error)) || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+
   return data;
 }
 
-/* ---------------- Stock/Bullion/Crypto logic ---------------- */
+/* ---------------- formatting ---------------- */
 
-// ---- Stocks ----
-function normalizeStockTx(item) {
-  return {
-    ...item,
-    symbol: String(item.symbol || "").toUpperCase().trim(),
-    type: String(item.type || "BUY").toUpperCase(),
-    shares: safeNum(item.shares, 0),
-    price: safeNum(item.price, 0),
-    fees: safeNum(item.fees, 0),
-    date: String(item.date || "").slice(0, 10),
-  };
+function formatMoney(n, currency = "USD") {
+  const x = safeNum(n, 0);
+  try {
+    return x.toLocaleString(undefined, {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  } catch {
+    return `$${x.toFixed(2)}`;
+  }
 }
 
-function computeStocksHoldingValue(transactions, quoteMap) {
-  const bySymbol = {};
-  const txs = [...transactions]
-    .map(normalizeStockTx)
-    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+/* ---------------- UI primitives ---------------- */
 
-  for (const t of txs) {
-    if (!t.symbol) continue;
-    if (!bySymbol[t.symbol]) bySymbol[t.symbol] = { shares: 0, cost: 0, avg: 0 };
-    const s = bySymbol[t.symbol];
+function Card({ children, style }) {
+  return (
+    <div
+      style={{
+        background: THEME.panelBg,
+        border: `1px solid ${THEME.panelBorder}`,
+        borderRadius: 14,
+        padding: 12,
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
-    if (t.type === "BUY") {
-      const addCost = t.shares * t.price + t.fees;
-      s.shares += t.shares;
-      s.cost += addCost;
-      s.avg = s.shares > 0 ? s.cost / s.shares : 0;
-    } else if (t.type === "SELL") {
-      const sellShares = Math.min(t.shares, s.shares);
-      const basis = sellShares * (s.avg || 0);
-      s.shares -= sellShares;
-      s.cost -= basis;
-      s.avg = s.shares > 0 ? s.cost / s.shares : 0;
+function extractItems(res) {
+  if (!res) return [];
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res.items)) return res.items;
+  return [];
+}
+
+function extractCryptoSpots(pricesRes) {
+  const crypto = pricesRes?.crypto;
+  if (!crypto) return {};
+
+  // Possible shapes:
+  // 1) { results: [ {...}, ... ] }  (common)
+  // 2) { data: [ {...}, ... ] }
+  // 3) [ {...}, ... ]
+  // 4) { "BTC-USD": {...} } or { "BTC-USD": 43000.12 }
+  const arr = Array.isArray(crypto)
+    ? crypto
+    : Array.isArray(crypto?.results)
+    ? crypto.results
+    : Array.isArray(crypto?.data)
+    ? crypto.data
+    : null;
+
+  const out = {};
+
+  const writeSpot = (sym, spot) => {
+    const s = String(sym || "").toUpperCase().trim();
+    if (!s) return;
+
+    const val = safeNum(spot, 0);
+    if (!(val > 0)) return;
+
+    // Dynamic precision so tiny coins don't render as 0.00
+    const abs = Math.abs(val);
+    const fixed = abs > 0 && abs < 0.01 ? 10 : abs > 0 && abs < 1 ? 6 : 2;
+    out[s] = Number(val.toFixed(fixed));
+  };
+
+  const readOne = (obj, fallbackSym = "") => {
+    const sym = obj?.symbol || obj?.instrument_id || obj?.pair || fallbackSym || "";
+    if (!sym) return;
+
+    // Some APIs return a direct number (spot)
+    if (typeof obj === "number") {
+      writeSpot(sym, obj);
+      return;
     }
-  }
 
-  let holdingValue = 0;
-  for (const [symbol, s] of Object.entries(bySymbol)) {
-    const spot = safeNum(quoteMap?.[symbol]?.price, 0);
-    holdingValue += s.shares * spot;
-  }
-  return round2(holdingValue);
-}
+    // Allow direct numeric "price/last/mid"
+    const direct =
+      (typeof obj?.price === "number" ? obj.price : NaN) ||
+      (typeof obj?.last === "number" ? obj.last : NaN) ||
+      (typeof obj?.mid === "number" ? obj.mid : NaN);
 
-// ---- Bullion ----
-function normalizeBullTx(item) {
-  return {
-    ...item,
-    type: String(item.type || "").toUpperCase(),
-    metal: String(item.metal || "").toUpperCase(),
-    quantityOz: safeNum(item.quantityOz, 0),
-    unitPrice: safeNum(item.unitPrice, 0),
-    fees: safeNum(item.fees, 0),
-    date: String(item.date || "").slice(0, 10),
+    if (Number.isFinite(direct) && direct > 0) {
+      writeSpot(sym, direct);
+      return;
+    }
+
+    const bid = safeNum(obj?.bid, NaN);
+    const ask = safeNum(obj?.ask, NaN);
+
+    const bid2 = safeNum(obj?.bid_inclusive_of_sell_spread, NaN);
+    const ask2 = safeNum(obj?.ask_inclusive_of_buy_spread, NaN);
+
+    const b = Number.isFinite(bid) ? bid : Number.isFinite(bid2) ? bid2 : NaN;
+    const a = Number.isFinite(ask) ? ask : Number.isFinite(ask2) ? ask2 : NaN;
+
+    let spot = 0;
+    if (Number.isFinite(b) && Number.isFinite(a) && b > 0 && a > 0) spot = (b + a) / 2;
+    else if (Number.isFinite(a) && a > 0) spot = a;
+    else if (Number.isFinite(b) && b > 0) spot = b;
+
+    writeSpot(sym, spot);
   };
+
+  if (arr) {
+    arr.forEach((obj) => readOne(obj));
+    return out;
+  }
+
+  if (typeof crypto === "object") {
+    Object.entries(crypto).forEach(([sym, obj]) => {
+      if (obj === null || obj === undefined) return;
+      if (typeof obj === "number") {
+        writeSpot(sym, obj);
+        return;
+      }
+      readOne(obj, sym);
+    });
+  }
+
+  return out;
 }
 
-function computeBullionHoldingValue(transactions, spot /* { GOLD, SILVER } */) {
+function getCryptoSpot(spotMap, sym) {
+  if (!spotMap || !sym) return 0;
+  const key = String(sym).toUpperCase().trim();
+
+  const direct = safeNum(spotMap[key], NaN);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  const noUsd = key.replace(/-USD$/i, "");
+  const v1 = safeNum(spotMap[noUsd], NaN);
+  if (Number.isFinite(v1) && v1 > 0) return v1;
+
+  const withDash = noUsd.includes("-") ? noUsd : `${noUsd}-USD`;
+  const v2 = safeNum(spotMap[withDash], NaN);
+  if (Number.isFinite(v2) && v2 > 0) return v2;
+
+  const noDash = key.replace(/-/g, "");
+  const v3 = safeNum(spotMap[noDash], NaN);
+  if (Number.isFinite(v3) && v3 > 0) return v3;
+
+  return 0;
+}
+
+function computeBullionHolding(transactions, spot) {
   const state = {
     GOLD: { qty: 0, cost: 0, avg: 0 },
     SILVER: { qty: 0, cost: 0, avg: 0 },
   };
 
-  const txs = [...transactions]
-    .map(normalizeBullTx)
-    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const txs = [...(transactions || [])].sort((a, b) =>
+    String(a.date || "").localeCompare(String(b.date || ""))
+  );
 
   for (const t of txs) {
     const metal = String(t.metal || "GOLD").toUpperCase();
@@ -214,107 +284,76 @@ function computeBullionHoldingValue(transactions, spot /* { GOLD, SILVER } */) {
     }
   }
 
-  const goldMV = state.GOLD.qty * safeNum(spot?.GOLD, 0);
-  const silverMV = state.SILVER.qty * safeNum(spot?.SILVER, 0);
-  return round2(goldMV + silverMV);
+  const goldSpot = safeNum(spot?.GOLD, 0);
+  const silverSpot = safeNum(spot?.SILVER, 0);
+  return round2(state.GOLD.qty * goldSpot + state.SILVER.qty * silverSpot);
 }
 
-// ---- Crypto ----
-function extractCryptoSpots(pricesResponse) {
-  const crypto = pricesResponse?.crypto;
-  if (!crypto) return {};
-
-  const arr =
-    Array.isArray(crypto)
-      ? crypto
-      : Array.isArray(crypto?.results)
-      ? crypto.results
-      : Array.isArray(crypto?.data)
-      ? crypto.data
-      : null;
-
-  const out = {};
-
-  const writeSpot = (sym, spot) => {
-    const s = String(sym || "").toUpperCase().trim();
-    if (!s) return;
-    const val = safeNum(spot, 0);
-
-    const abs = Math.abs(val);
-    const fixed = abs > 0 && abs < 0.01 ? 10 : abs > 0 && abs < 1 ? 6 : 2;
-    out[s] = Number(val.toFixed(fixed));
-  };
-
-  const readOne = (obj) => {
-    const sym = obj?.symbol || obj?.instrument_id || obj?.pair || "";
-    if (!sym) return;
-
-    const bid = safeNum(obj?.bid, NaN) ?? safeNum(obj?.best_bid, NaN);
-    const ask = safeNum(obj?.ask, NaN) ?? safeNum(obj?.best_ask, NaN);
-
-    const bid2 = safeNum(obj?.bid_inclusive_of_sell_spread, NaN);
-    const ask2 = safeNum(obj?.ask_inclusive_of_buy_spread, NaN);
-
-    const b = Number.isFinite(bid) ? bid : Number.isFinite(bid2) ? bid2 : NaN;
-    const a = Number.isFinite(ask) ? ask : Number.isFinite(ask2) ? ask2 : NaN;
-
-    let spot = 0;
-    if (Number.isFinite(b) && Number.isFinite(a)) spot = (b + a) / 2;
-    else if (Number.isFinite(a)) spot = a;
-    else if (Number.isFinite(b)) spot = b;
-
-    writeSpot(sym, spot);
-  };
-
-  if (arr) {
-    arr.forEach(readOne);
-    return out;
-  }
-
-  if (typeof crypto === "object") {
-    Object.entries(crypto).forEach(([sym, obj]) => {
-      if (!obj) return;
-      readOne({ ...obj, symbol: sym });
-    });
-  }
-
-  return out;
-}
-
-function normalizeCryptoTx(item) {
-  const raw = String(item.symbol || "").toUpperCase().trim();
-  const symbol = raw ? (raw.includes("-") ? raw : `${raw}-USD`) : "";
-  return {
-    ...item,
-    symbol,
-    type: String(item.type || "BUY").toUpperCase(),
-    quantity: safeNum(item.quantity, 0),
-    unitPrice: safeNum(item.unitPrice, 0),
-    fees: safeNum(item.fees, 0),
-    date: String(item.date || "").slice(0, 10),
-  };
-}
-
-function computeCryptoHoldingValue(transactions, spotMap) {
-  const bySym = {};
-  const txs = [...transactions]
-    .map(normalizeCryptoTx)
-    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+function computeStocksHolding(transactions, quoteMap) {
+  const bySymbol = {};
+  const txs = [...(transactions || [])].sort((a, b) =>
+    String(a.date || "").localeCompare(String(b.date || ""))
+  );
 
   for (const t of txs) {
-    const sym = String(t.symbol || "").toUpperCase().trim();
+    const symbol = String(t.symbol || "").toUpperCase().trim();
+    if (!symbol) continue;
+    const type = String(t.type || "BUY").toUpperCase();
+    const shares = safeNum(t.shares, 0);
+    const price = safeNum(t.price, 0);
+    const fees = safeNum(t.fees, 0);
+
+    if (!bySymbol[symbol]) bySymbol[symbol] = { shares: 0, cost: 0, avg: 0 };
+    const s = bySymbol[symbol];
+
+    if (type === "BUY") {
+      const addCost = shares * price + fees;
+      s.shares += shares;
+      s.cost += addCost;
+      s.avg = s.shares > 0 ? s.cost / s.shares : 0;
+    } else if (type === "SELL") {
+      const sellShares = Math.min(shares, s.shares);
+      const basis = sellShares * (s.avg || 0);
+      s.shares -= sellShares;
+      s.cost -= basis;
+      s.avg = s.shares > 0 ? s.cost / s.shares : 0;
+    }
+  }
+
+  let holdingValue = 0;
+  for (const [sym, s] of Object.entries(bySymbol)) {
+    const spot = safeNum(quoteMap?.[sym]?.price, 0);
+    holdingValue += s.shares * spot;
+  }
+  return round2(holdingValue);
+}
+
+function computeCryptoHolding(transactions, spotMap) {
+  const bySym = {};
+  const txs = [...(transactions || [])].sort((a, b) =>
+    String(a.date || "").localeCompare(String(b.date || ""))
+  );
+
+  for (const t of txs) {
+    let sym = String(t.symbol || "").toUpperCase().trim();
     if (!sym) continue;
+    if (!sym.includes("-")) sym = `${sym}-USD`;
+
+    const type = String(t.type || "BUY").toUpperCase();
+    const qty = safeNum(t.quantity, 0);
+    const px = safeNum(t.unitPrice, 0);
+    const fees = safeNum(t.fees, 0);
 
     if (!bySym[sym]) bySym[sym] = { qty: 0, cost: 0, avg: 0 };
     const s = bySym[sym];
 
-    if (t.type === "BUY") {
-      const addCost = t.quantity * t.unitPrice + t.fees;
-      s.qty += t.quantity;
+    if (type === "BUY") {
+      const addCost = qty * px + fees;
+      s.qty += qty;
       s.cost += addCost;
       s.avg = s.qty > 0 ? s.cost / s.qty : 0;
-    } else if (t.type === "SELL") {
-      const sellQty = Math.min(t.quantity, s.qty);
+    } else if (type === "SELL") {
+      const sellQty = Math.min(qty, s.qty);
       const basis = sellQty * (s.avg || 0);
       s.qty -= sellQty;
       s.cost -= basis;
@@ -324,410 +363,718 @@ function computeCryptoHoldingValue(transactions, spotMap) {
 
   let holdingValue = 0;
   for (const [sym, s] of Object.entries(bySym)) {
-    holdingValue += s.qty * safeNum(spotMap?.[sym], 0);
+    const spot = getCryptoSpot(spotMap, sym);
+    holdingValue += s.qty * spot;
   }
   return round2(holdingValue);
 }
 
-/* ---------------- Default NAV layout ---------------- */
-
-const DEFAULT_USA_ASSETS = [
-  { kind: "section", id: "sec_mkt", label: "Market Traded Assets" },
-  { kind: "row", id: "usa_schwab", label: "Charles Schwab Trading Acct", amount: 0, remarks: "Charles Schwab", source: "manual" },
-  { kind: "row", id: "usa_stocks", label: "Stocks", amount: 0, remarks: "Robinhood - Sanjay (Excludes Crypto)", source: "synced_stocks" },
-  { kind: "row", id: "usa_bullion", label: "Bullion", amount: 0, remarks: "Bullion holdings", source: "synced_bullion" },
-
-  { kind: "section", id: "sec_edu", label: "Education" },
-  { kind: "row", id: "usa_529", label: "NY 529 Accnt", amount: 0, remarks: "529", source: "manual" },
-
-  { kind: "section", id: "sec_crypto", label: "Crypto" },
-  { kind: "row", id: "usa_crypto", label: "Crypto", amount: 0, remarks: "Robinhood - Sanjay", source: "synced_crypto" },
-
-  { kind: "section", id: "sec_fi", label: "Fixed Income" },
-
-  { kind: "section", id: "sec_ret", label: "Retirement" },
-  { kind: "row", id: "usa_401k", label: "401K", amount: 0, remarks: "PwC Managed", source: "manual" },
-  { kind: "row", id: "usa_wealth", label: "Wealth Builder", amount: 0, remarks: "PwC Managed", source: "manual" },
-
-  { kind: "section", id: "sec_prop", label: "Property" },
-  { kind: "row", id: "usa_vienna", label: "Vienna", amount: 0, remarks: "Current value", source: "manual" },
-  { kind: "row", id: "usa_mercedes_asset", label: "Mercedes", amount: 0, remarks: "", source: "manual" },
-  { kind: "row", id: "usa_triumph_asset", label: "Triumph", amount: 0, remarks: "", source: "manual" },
-];
-
-const DEFAULT_USA_LIABS = [
-  { kind: "section", id: "sec_loans", label: "Loans" },
-  { kind: "row", id: "usa_cfcu", label: "CFCU Loan", amount: 0, remarks: "Vienna - Home Loan with CFCU" },
-  { kind: "row", id: "usa_mercedes_loan", label: "Mercedes Loan", amount: 0, remarks: "Auto loan" },
-  { kind: "row", id: "usa_triumph_loan", label: "Triumph", amount: 0, remarks: "Closed" },
-  { kind: "row", id: "usa_tesla_lease", label: "Tesla Lease", amount: 0, remarks: "Lease ending 12/26" },
-  { kind: "row", id: "usa_citi", label: "Citi", amount: 0, remarks: "Credit card balance" },
-  { kind: "row", id: "usa_discover", label: "Discover", amount: 0, remarks: "Credit card balance" },
-  { kind: "row", id: "usa_apple", label: "Apple", amount: 0, remarks: "Card balance" },
-  { kind: "row", id: "usa_amex", label: "Amex", amount: 0, remarks: "Amex Cards" },
-  { kind: "row", id: "usa_amzn", label: "Amazon Visa", amount: 0, remarks: "Credit Card" },
-  { kind: "row", id: "usa_boa", label: "BoA", amount: 0, remarks: "Credit Card" },
-];
-
-const DEFAULT_INDIA_ASSETS = [{ kind: "section", id: "sec_in_mkt", label: "Market Traded Assets" }];
-const DEFAULT_INDIA_LIABS = [{ kind: "section", id: "sec_in_loans", label: "Loans" }];
-
-/* ---------------- UI atoms ---------------- */
-
-function Pill({ children }) {
-  return (
-    <span
-      style={{
-        fontSize: 11,
-        color: THEME.muted,
-        border: `1px solid ${THEME.badgeBorder}`,
-        background: THEME.badgeBg,
-        padding: "2px 8px",
-        borderRadius: 999,
-        marginLeft: 8,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {children}
-    </span>
-  );
+function fixedIncomeValue(it) {
+  // Support multiple backend schemas; prefer explicit current/market value fields.
+  const candidates = [
+    it?.currentValue,
+    it?.marketValue,
+    it?.value,
+    it?.amount,
+    it?.balance,
+    it?.principal,
+    it?.faceValue,
+  ];
+  for (const v of candidates) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
 }
 
-function Button({ children, onClick, kind = "primary", disabled = false, title = "" }) {
-  const isDanger = kind === "danger";
-  return (
-    <button
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      style={{
-        cursor: disabled ? "not-allowed" : "pointer",
-        padding: "7px 10px",
-        borderRadius: 10,
-        border: `1px solid ${isDanger ? THEME.dangerBorder : THEME.primaryBorder}`,
-        background: isDanger ? THEME.dangerBg : THEME.primaryBg,
-        color: THEME.title,
-        fontWeight: 800,
-        fontSize: 12,
-        opacity: disabled ? 0.55 : 1,
-        whiteSpace: "nowrap",
-        lineHeight: 1.1,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
 
-function GhostButton({ children, onClick, disabled = false, title = "" }) {
-  return (
-    <button
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      style={{
-        cursor: disabled ? "not-allowed" : "pointer",
-        padding: "7px 10px",
-        borderRadius: 10,
-        border: `1px solid ${THEME.panelBorder}`,
-        background: "transparent",
-        color: THEME.title,
-        fontWeight: 800,
-        fontSize: 12,
-        opacity: disabled ? 0.55 : 1,
-        whiteSpace: "nowrap",
-        lineHeight: 1.1,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
 
-function TextInput({ value, onChange, placeholder = "", readOnly = false }) {
-  return (
-    <input
-      value={value ?? ""}
-      readOnly={readOnly}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      style={{
-        width: "100%",
-        maxWidth: "100%",
-        boxSizing: "border-box",
-        background: readOnly ? "rgba(2,6,23,0.20)" : THEME.inputBg,
-        color: THEME.pageText,
-        border: `1px solid ${THEME.inputBorder}`,
-        borderRadius: 10,
-        padding: "8px 10px",
-        outline: "none",
-        fontSize: 13,
-        opacity: readOnly ? 0.9 : 1,
-      }}
-    />
-  );
-}
+function SectionHeader({ title, variant = "assets", style }) {
+  const isLiab = variant === "liabilities";
+  const bg = isLiab ? THEME.liabsSectionBg : THEME.assetsSectionBg;
+  const border = isLiab ? THEME.liabsSectionBorder : THEME.assetsSectionBorder;
+  const color = isLiab ? THEME.liabsSectionText : THEME.assetsSectionText;
 
-function MoneyInput({ value, onChange, readOnly = false }) {
-  const v = value === null || value === undefined ? "" : String(value);
-  return (
-    <input
-      value={v}
-      readOnly={readOnly}
-      onChange={(e) => {
-        if (readOnly) return;
-        const raw = e.target.value;
-        if (raw === "") return onChange("");
-        const cleaned = raw.replace(/[^0-9.]/g, "");
-        onChange(cleaned);
-      }}
-      inputMode="decimal"
-      style={{
-        width: "100%",
-        maxWidth: "100%",
-        boxSizing: "border-box",
-        textAlign: "right",
-        background: readOnly ? "rgba(2,6,23,0.20)" : THEME.inputBg,
-        color: THEME.pageText,
-        border: `1px solid ${THEME.inputBorder}`,
-        borderRadius: 10,
-        padding: "8px 10px",
-        outline: "none",
-        fontSize: 13,
-        opacity: readOnly ? 0.9 : 1,
-      }}
-    />
-  );
-}
-
-function SummaryCard({ title, value, hint }) {
   return (
     <div
       style={{
-        border: `1px solid ${THEME.panelBorder}`,
-        background: THEME.panelBg,
-        borderRadius: 14,
-        padding: 12,
-        boxShadow: "0 10px 24px rgba(0,0,0,0.25)",
+        background: bg,
+        border: `1px solid ${border}`,
+        color,
+        borderRadius: 0,        // sharp section header box
+        padding: "9px 12px",
+        fontWeight: 950,
+        fontSize: 14,
+        marginTop: 10,
+        marginBottom: 6,
+        ...style,
       }}
     >
-      <div style={{ fontSize: 12, color: THEME.muted, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 18, color: THEME.title, fontWeight: 800 }}>{value}</div>
-      {hint ? <div style={{ fontSize: 11, color: THEME.muted, marginTop: 6 }}>{hint}</div> : null}
+      {title}
     </div>
   );
 }
 
+
+function Table({ columns, rows, footer, showHeader = true, rowBorderColor }) {
+  const rb = rowBorderColor || THEME.rowBorder;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        {showHeader ? (
+          <thead>
+            <tr>
+              {columns.map((c) => (
+                <th
+                  key={c.key}
+                  style={{
+                    textAlign: c.align || "left",
+                    fontSize: 12,
+                    fontWeight: 900,
+                    color: THEME.muted,
+                    padding: "8px 10px",
+                    borderBottom: `1px solid ${rb}`,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        ) : null}
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id}>
+              {columns.map((c) => (
+                <td
+                  key={c.key}
+                  style={{
+                    padding: "8px 10px",
+                    borderBottom: `1px solid ${rb}`,
+                    fontSize: 13,
+                    color: THEME.pageText,
+                    textAlign: c.align || "left",
+                    whiteSpace: c.noWrap ? "nowrap" : "normal",
+                    verticalAlign: "top",
+                  }}
+                >
+                  {c.render ? c.render(r) : r[c.key]}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+        {footer ? <tfoot>{footer}</tfoot> : null}
+      </table>
+    </div>
+  );
+}
+
+
+function Button({ children, onClick, kind = "primary" }) {
+  const bg = kind === "danger" ? THEME.dangerBg : THEME.primaryBg;
+  const br = kind === "danger" ? THEME.dangerBorder : THEME.primaryBorder;
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: bg,
+        border: `1px solid ${br}`,
+        color: THEME.title,
+        borderRadius: 10,
+        padding: "8px 10px",
+        fontWeight: 800,
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function GhostButton({ children, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: "transparent",
+        border: `1px solid ${THEME.inputBorder}`,
+        color: THEME.pageText,
+        borderRadius: 10,
+        padding: "8px 10px",
+        fontWeight: 800,
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ---------------- Liabilities (API-based) ---------------- */
+
+function normalizeLiabilityItem(it) {
+  const c = String(it?.country || "").trim().toUpperCase();
+  const country = c === "INDIA" || c === "IN" ? "INDIA" : "USA";
+  return {
+    id: it?.liabilityId || it?.assetId || it?.id || uid("lb"),
+    country,
+    category: String(it?.category || "Other"),
+    description: String(it?.description || ""),
+    value: safeNum(it?.value, 0),
+    remarks: String(it?.remarks || ""),
+  };
+}
+
+function buildLiabilitiesSections(items, country) {
+  const list = (items || []).filter((it) => pickCountry(it) === country);
+
+  // Group by category
+  const map = new Map();
+  for (const it of list) {
+    const cat = String(it?.category || "Other").trim() || "Other";
+    if (!map.has(cat)) map.set(cat, []);
+    map.get(cat).push(it);
+  }
+
+  // Stable alphabetical section order
+  const sections = Array.from(map.entries())
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    .map(([title, arr]) => ({
+      title,
+      rows: arr.map((it) => ({
+        id: it.id,
+        label: it.description || "Liability",
+        amount: safeNum(it.value, 0),
+        remarks: it.remarks || "",
+      })),
+    }));
+
+  return sections;
+}
+
+function LiabilitiesCard({ items, currency, country }) {
+  const redBorder = THEME.liabsSectionBorder;
+  const redLine = "rgba(239, 68, 68, 0.22)";
+
+  const sections = buildLiabilitiesSections(items, country);
+
+  const totalLiabs = round2(
+    (items || [])
+      .filter((it) => pickCountry(it) === country)
+      .reduce((s, it) => s + safeNum(it.value, 0), 0)
+  );
+
+  return (
+    <Card
+      style={{
+        border: `1px solid ${redBorder}`,
+      }}
+    >
+      {/* Card header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <div style={{ fontWeight: 900, color: THEME.title, fontSize: 16 }}>Liabilities</div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontWeight: 900, color: THEME.title, fontSize: 16 }}>
+          {formatMoney(totalLiabs, currency)}
+        </div>
+      </div>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <colgroup>
+            <col style={{ width: "44%" }} />
+            <col style={{ width: "26%" }} />
+            <col style={{ width: "30%" }} />
+          </colgroup>
+
+          <tbody>
+            {sections.length ? (
+              sections.map((sec) => {
+                const secTotal = round2(sec.rows.reduce((s, r) => s + safeNum(r.amount, 0), 0));
+                return (
+                  <Fragment key={sec.title}>
+                    {/* Section header row (sharp edges, total inside header) */}
+                    <tr>
+                      <td colSpan={3} style={{ padding: 0, borderBottom: `1px solid ${redLine}` }}>
+                        <div
+                          style={{
+                            background: THEME.liabsSectionBg,
+                            border: `1px solid ${redBorder}`,
+                            borderRadius: 0,
+                            padding: "9px 12px",
+                            color: THEME.liabsSectionText,
+                            fontWeight: 950,
+                            fontSize: 14,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                          }}
+                        >
+                          <div style={{ flex: 1 }}>{sec.title}</div>
+                          <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                            {formatMoney(secTotal, currency)}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {/* Section rows */}
+                    {sec.rows.map((r) => (
+                      <tr key={r.id}>
+                        <td
+                          style={{
+                            padding: "8px 10px",
+                            borderBottom: `1px solid ${redLine}`,
+                            fontSize: 13,
+                            color: THEME.pageText,
+                            verticalAlign: "top",
+                          }}
+                        >
+                          {r.label}
+                        </td>
+                        <td
+                          style={{
+                            padding: "8px 10px",
+                            borderBottom: `1px solid ${redLine}`,
+                            fontSize: 13,
+                            color: THEME.pageText,
+                            textAlign: "right",
+                            whiteSpace: "nowrap",
+                            verticalAlign: "top",
+                          }}
+                        >
+                          {formatMoney(r.amount, currency)}
+                        </td>
+                        <td
+                          style={{
+                            padding: "8px 10px",
+                            borderBottom: `1px solid ${redLine}`,
+                            fontSize: 13,
+                            color: THEME.pageText,
+                            verticalAlign: "top",
+                          }}
+                        >
+                          {r.remarks || ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })
+            ) : (
+              <tr>
+                <td style={{ padding: "10px", color: THEME.muted, fontSize: 12 }} colSpan={3}>
+                  No liabilities found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+
+/* ---------------- Assets builder (fixed sections) ---------------- */
+
+const OTHER_SECTION_ORDER = [
+  { key: "ROBO", title: "Robo Investment Account" },
+  { key: "EDUCATION", title: "Education" },
+  { key: "RETIREMENT", title: "Retirement" },
+  { key: "PROPERTY", title: "Property" },
+];
+
+function pickCountry(item) {
+  const c = String(item?.country || item?.region || "").trim().toUpperCase();
+  if (c === "USA" || c === "US") return "USA";
+  if (c === "INDIA" || c === "IN") return "INDIA";
+  return "USA";
+}
+
+function buildAssetsRows({ stocksTotal, bullionTotal, cryptoTotal, fixedIncomeItems, otherAssetsItems, country }) {
+  const rows = [];
+
+  rows.push({ kind: "section", id: "sec_mkt", label: "Market Traded Assets" });
+  rows.push({ kind: "row", id: "mkt_stocks", label: "Stocks", amount: stocksTotal, remarks: "Synced from Stocks" });
+  rows.push({ kind: "row", id: "mkt_bullion", label: "Bullion", amount: bullionTotal, remarks: "Synced from Bullion" });
+  rows.push({ kind: "row", id: "mkt_crypto", label: "Crypto", amount: cryptoTotal, remarks: "Synced from Crypto" });
+
+  const otherForCountry = (otherAssetsItems || []).filter((it) => pickCountry(it) === country);
+
+  // ---- Options (summarized from Other Assets) ----
+  // Include ONLY assetType OTHER_ASSET and categoryKey OPTIONS (robust to different field names).
+  const optionsItems = otherForCountry.filter((it) => {
+    const assetType = String(it?.assetType || it?.assettype || it?.type || "OTHER_ASSET")
+      .trim()
+      .toUpperCase();
+    const catKey = String(it?.categoryKey || it?.category || it?.category_name || "")
+      .trim()
+      .toUpperCase();
+    return assetType === "OTHER_ASSET" && catKey === "OPTIONS";
+  });
+
+  const optionsTotal = round2(
+    optionsItems.reduce((s, it) => s + safeNum(it?.value ?? it?.assetValue, 0), 0)
+  );
+
+  const optionsRemarks = optionsItems
+    .map((it) => String(it?.description || it?.label || "").trim())
+    .filter(Boolean)
+    // de-dupe while preserving order
+    .filter((d, i, arr) => arr.indexOf(d) === i)
+    .join("; ");
+
+  rows.push({
+    kind: "row",
+    id: "mkt_options",
+    label: "Options",
+    amount: optionsTotal,
+    remarks: optionsRemarks,
+  });
+
+  const byCat = new Map();
+  for (const it of otherForCountry) {
+    const key = String(it?.categoryKey || it?.category || "").trim().toUpperCase();
+    if (!byCat.has(key)) byCat.set(key, []);
+    byCat.get(key).push(it);
+  }
+
+  for (const sec of OTHER_SECTION_ORDER) {
+    rows.push({ kind: "section", id: `sec_${sec.key}`, label: sec.title });
+    const items = byCat.get(sec.key) || [];
+    for (const it of items) {
+      rows.push({
+        kind: "row",
+        id: it.assetId || it.id || uid("oa"),
+        label: String(it.description || it.label || "Other Asset"),
+        amount: safeNum(it.value ?? it.assetValue, 0),
+        remarks: "",
+      });
+    }
+  }
+
+  const cashItems = byCat.get("CASH") || [];
+  if (cashItems.length) {
+    // append cash under Property
+    for (const it of cashItems) {
+      rows.push({
+        kind: "row",
+        id: it.assetId || it.id || uid("cash"),
+        label: String(it.description || it.label || "Cash"),
+        amount: safeNum(it.value ?? it.assetValue, 0),
+        remarks: "",
+      });
+    }
+  }
+
+  rows.push({ kind: "section", id: "sec_fixed", label: "Fixed Income" });
+  const fiForCountry = (fixedIncomeItems || []).filter((it) => pickCountry(it) === country);
+  for (const it of fiForCountry) {
+    rows.push({
+      kind: "row",
+      id: it.assetId || it.id || uid("fi"),
+      label: String(it.description || it.label || it.name || "Fixed Income"),
+      amount: fixedIncomeValue(it),
+      remarks: String(it.remarks || ""),
+    });
+  }
+
+  return rows;
+}
+
+
+function sumAssetRows(rows) {
+  return round2((rows || []).filter((r) => r.kind === "row").reduce((s, r) => s + safeNum(r.amount, 0), 0));
+}
+
+
+function AssetsCard({ rows, currency }) {
+  const greenBorder = THEME.assetsSectionBorder;
+  const greenLine = "rgba(34, 197, 94, 0.28)";
+
+  // Group rows by section and compute totals
+  const sections = [];
+  let current = null;
+  for (const r of rows || []) {
+    if (r.kind === "section") {
+      if (current) sections.push(current);
+      current = { title: r.label, rows: [] };
+    } else {
+      if (!current) current = { title: "Assets", rows: [] };
+      current.rows.push(r);
+    }
+  }
+  if (current) sections.push(current);
+
+  const totalAssets = round2(
+    (rows || []).filter((r) => r.kind === "row").reduce((s, r) => s + safeNum(r.amount, 0), 0)
+  );
+
+  return (
+    <Card
+      style={{
+        border: `1px solid ${greenBorder}`,
+      }}
+    >
+      {/* Card header (no separate Assets section outside) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <div style={{ fontWeight: 900, color: THEME.title, fontSize: 16 }}>Assets</div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontWeight: 900, color: THEME.title, fontSize: 16 }}>
+          {formatMoney(totalAssets, currency)}
+        </div>
+      </div>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          {/* Force vertical alignment across ALL sections */}
+          <colgroup>
+            <col style={{ width: "44%" }} />
+            <col style={{ width: "26%" }} />
+            <col style={{ width: "30%" }} />
+          </colgroup>
+
+          <tbody>
+            {sections.map((sec) => {
+              const secTotal = round2(sec.rows.reduce((s, r) => s + safeNum(r.amount, 0), 0));
+              return (
+                <Fragment key={sec.title}>
+                  {/* Section header row (sharp edges, total inside header, right aligned) */}
+                  <tr>
+                    <td colSpan={3} style={{ padding: 0, borderBottom: `1px solid ${greenLine}` }}>
+                      <div
+                        style={{
+                          background: THEME.assetsSectionBg,
+                          border: `1px solid ${greenBorder}`,
+                          borderRadius: 0, // sharp edges
+                          padding: "9px 12px",
+                          color: THEME.assetsSectionText,
+                          fontWeight: 950,
+        fontSize: 14,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ flex: 1 }}>{sec.title}</div>
+                        <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          {formatMoney(secTotal, currency)}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+
+                  {/* Section rows */}
+                  {sec.rows.map((r) => (
+                    <tr key={r.id}>
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderBottom: `1px solid ${greenLine}`,
+                          fontSize: 13,
+                          color: THEME.pageText,
+                          verticalAlign: "top",
+                        }}
+                      >
+                        {r.label}
+                      </td>
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderBottom: `1px solid ${greenLine}`,
+                          fontSize: 13,
+                          color: THEME.pageText,
+                          textAlign: "right",
+                          whiteSpace: "nowrap",
+                          verticalAlign: "top",
+                        }}
+                      >
+                        {formatMoney(r.amount, currency)}
+                      </td>
+                      <td
+                        style={{
+                          padding: "8px 10px",
+                          borderBottom: `1px solid ${greenLine}`,
+                          fontSize: 13,
+                          color: THEME.pageText,
+                          verticalAlign: "top",
+                        }}
+                      >
+                        {r.remarks || ""}
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+
 /* ---------------- Main NAV ---------------- */
 
 export default function NAV() {
-  const [filter, setFilter] = useState("ALL");
+  const [filter, setFilter] = useState("ALL"); // ALL | USA | INDIA
 
-  const [usaAssets, setUsaAssets] = useState(DEFAULT_USA_ASSETS);
-  const [usaLiabs, setUsaLiabs] = useState(DEFAULT_USA_LIABS);
-  const [indiaAssets, setIndiaAssets] = useState(DEFAULT_INDIA_ASSETS);
-  const [indiaLiabs, setIndiaLiabs] = useState(DEFAULT_INDIA_LIABS);
+  const [liabilitiesItems, setLiabilitiesItems] = useState([]);
 
+  const [stocksTotal, setStocksTotal] = useState(0);
+  const [bullionTotal, setBullionTotal] = useState(0);
+  const [cryptoTotal, setCryptoTotal] = useState(0);
   const [fixedIncomeItems, setFixedIncomeItems] = useState([]);
+  const [otherAssetsItems, setOtherAssetsItems] = useState([]);
 
-  const [stocksHolding, setStocksHolding] = useState(0);
-  const [bullionHolding, setBullionHolding] = useState(0);
-  const [cryptoHolding, setCryptoHolding] = useState(0);
-
-  const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
-  const [lastSavedAt, setLastSavedAt] = useState("");
-
-  useEffect(() => {
-    (async () => {
-      await loadFromDbOrLocal();
-      await refreshSynced();
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function loadFromDbOrLocal() {
-    try {
-      const db = await apiFetch("/nav");
-      if (db?.usaAssets && db?.usaLiabs && db?.indiaAssets && db?.indiaLiabs) {
-        setUsaAssets(db.usaAssets);
-        setUsaLiabs(db.usaLiabs);
-        setIndiaAssets(db.indiaAssets);
-        setIndiaLiabs(db.indiaLiabs);
-        return;
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      const local = JSON.parse(localStorage.getItem("finvault.nav.local") || "null");
-      if (local?.usaAssets) setUsaAssets(local.usaAssets);
-      if (local?.usaLiabs) setUsaLiabs(local.usaLiabs);
-      if (local?.indiaAssets) setIndiaAssets(local.indiaAssets);
-      if (local?.indiaLiabs) setIndiaLiabs(local.indiaLiabs);
-    } catch {
-      // ignore
-    }
-  }
-
-  useEffect(() => {
-    localStorage.setItem(
-      "finvault.nav.local",
-      JSON.stringify({ usaAssets, usaLiabs, indiaAssets, indiaLiabs })
-    );
-  }, [usaAssets, usaLiabs, indiaAssets, indiaLiabs]);
-
-  async function saveToDb() {
-    setLoading(true);
-    setStatus("Saving…");
-    try {
-      await apiFetch("/nav", {
-        method: "PUT",
-        body: { usaAssets, usaLiabs, indiaAssets, indiaLiabs },
-      });
-      const ts = new Date().toISOString();
-      setLastSavedAt(ts);
-      setStatus("Saved.");
-    } catch (e) {
-      setStatus(`Save failed: ${e?.message || "error"}`);
-    } finally {
-      setLoading(false);
-      setTimeout(() => setStatus(""), 1400);
-    }
-  }
-
-  async function resetDb() {
-    // eslint-disable-next-line no-restricted-globals
-    if (!confirm("Delete saved NAV layout from database and revert to defaults?")) return;
-    setLoading(true);
-    setStatus("Resetting…");
-    try {
-      await apiFetch("/nav", { method: "DELETE" });
-      setUsaAssets(DEFAULT_USA_ASSETS);
-      setUsaLiabs(DEFAULT_USA_LIABS);
-      setIndiaAssets(DEFAULT_INDIA_ASSETS);
-      setIndiaLiabs(DEFAULT_INDIA_LIABS);
-      setLastSavedAt("");
-      setStatus("Reset complete.");
-    } catch (e) {
-      setStatus(`Reset failed: ${e?.message || "error"}`);
-    } finally {
-      setLoading(false);
-      setTimeout(() => setStatus(""), 1400);
-    }
-  }
-
-  async function refreshSynced() {
-    setLoading(true);
-    setStatus("Refreshing…");
-    try {
-      const fixedRes = await apiFetch("/assets/fixedincome").catch(() => []);
-      const fiItems = Array.isArray(fixedRes?.items) ? fixedRes.items : Array.isArray(fixedRes) ? fixedRes : [];
-      setFixedIncomeItems(fiItems);
-
-      const stockTxRes = await apiFetch("/assets/stocks/transactions").catch(() => []);
-      const stockTx = Array.isArray(stockTxRes?.items) ? stockTxRes.items : Array.isArray(stockTxRes) ? stockTxRes : [];
-      const stockSymbols = Array.from(
-        new Set(stockTx.map((t) => String(t.symbol || "").toUpperCase().trim()).filter(Boolean))
-      ).sort();
-
-      let stockQuoteMap = {};
-      if (stockSymbols.length) {
-        const qs = `?stocks=${encodeURIComponent(stockSymbols.join(","))}`;
-        const priceRes = await apiFetch(`/prices${qs}`).catch(() => null);
-        stockQuoteMap = priceRes?.stocks || {};
-      }
-      setStocksHolding(computeStocksHoldingValue(stockTx, stockQuoteMap));
-
-      const bullTxRes = await apiFetch("/assets/bullion/transactions").catch(() => []);
-      const bullTx = Array.isArray(bullTxRes?.items) ? bullTxRes.items : Array.isArray(bullTxRes) ? bullTxRes : [];
-      const pricesRes = await apiFetch("/prices").catch(() => null);
-
-      const goldPrice = safeNum(pricesRes?.gold?.price, 0);
-      const silverPrice = safeNum(pricesRes?.silver?.price, 0);
-      const spot = { GOLD: round2(goldPrice), SILVER: round2(silverPrice) };
-      setBullionHolding(computeBullionHoldingValue(bullTx, spot));
-
-      const cryptoTxRes = await apiFetch("/assets/crypto/transactions").catch(() => []);
-      const cryptoTx = Array.isArray(cryptoTxRes?.items) ? cryptoTxRes.items : Array.isArray(cryptoTxRes) ? cryptoTxRes : [];
-
-      const wanted = new Set();
-      cryptoTx.forEach((t) => {
-        const raw = String(t.symbol || "").toUpperCase().trim();
-        if (!raw) return;
-        wanted.add(raw.includes("-") ? raw : `${raw}-USD`);
-      });
-
-      const cryptoList = Array.from(wanted);
-      const limited = (cryptoList.length ? cryptoList : ["BTC-USD", "ETH-USD"]).slice(0, 25);
-
-      const cQs = `?crypto=${encodeURIComponent(limited.join(","))}`;
-      const cRes = await apiFetch(`/prices${cQs}`).catch(() => null);
-
-      const spotMap = extractCryptoSpots(cRes || {});
-      setCryptoHolding(computeCryptoHoldingValue(cryptoTx, spotMap));
-
-      setStatus("Updated.");
-    } catch (e) {
-      setStatus(`Refresh failed: ${e?.message || "error"}`);
-    } finally {
-      setLoading(false);
-      setTimeout(() => setStatus(""), 1400);
-    }
-  }
-
-  useEffect(() => {
-    setUsaAssets((prev) =>
-      prev.map((r) => {
-        if (r.kind !== "row") return r;
-        if (r.source === "synced_stocks") return { ...r, amount: stocksHolding };
-        if (r.source === "synced_bullion") return { ...r, amount: bullionHolding };
-        if (r.source === "synced_crypto") return { ...r, amount: cryptoHolding };
-        return r;
-      })
-    );
-  }, [stocksHolding, bullionHolding, cryptoHolding]);
-
-  const fixedIncomeTotal = useMemo(
-    () => round2((fixedIncomeItems || []).reduce((a, it) => a + safeNum(it.currentValue, 0), 0)),
-    [fixedIncomeItems]
-  );
-
-  function sumRows(rows) {
-    let sum = 0;
-    for (const r of rows) if (r.kind === "row") sum += safeNum(r.amount, 0);
-    return round2(sum);
-  }
-  function sumLiabs(rows) {
-    let sum = 0;
-    for (const r of rows) if (r.kind === "row") sum += safeNum(r.amount, 0);
-    return round2(sum);
-  }
-
-  const usaTotals = useMemo(() => {
-    const assets = round2(sumRows(usaAssets) + fixedIncomeTotal);
-    const liabs = sumLiabs(usaLiabs);
-    return { assets, liabs, net: round2(assets - liabs) };
-  }, [usaAssets, usaLiabs, fixedIncomeTotal]);
-
-  const indiaTotals = useMemo(() => {
-    const assets = sumRows(indiaAssets);
-    const liabs = sumLiabs(indiaLiabs);
-    return { assets, liabs, net: round2(assets - liabs) };
-  }, [indiaAssets, indiaLiabs]);
+  const [loading, setLoading] = useState(false);
 
   const showUSA = filter === "ALL" || filter === "USA";
   const showINDIA = filter === "ALL" || filter === "INDIA";
 
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setStatus("Loading…");
+      try {
+        const [liabsRes, fi, oa, stockRes, bullRes, cryptoRes] = await Promise.all([
+          apiFetch("/liabilities").catch(() => []),
+          apiFetch("/assets/fixedincome").catch(() => []),
+          apiFetch("/assets/otherassets").catch(() => []),
+          apiFetch("/assets/stocks/transactions").catch(() => []),
+          apiFetch("/assets/bullion/transactions").catch(() => []),
+          apiFetch("/assets/crypto/transactions").catch(() => []),
+        ]);
+
+        const liabsList = extractItems(liabsRes).map(normalizeLiabilityItem);
+        setLiabilitiesItems(liabsList);
+
+        setFixedIncomeItems(Array.isArray(fi) ? fi : (fi?.items || []));
+        setOtherAssetsItems(Array.isArray(oa) ? oa : (oa?.items || []));
+
+        const stockTx = extractItems(stockRes);
+        const bullTx = extractItems(bullRes);
+        const cryptoTx = extractItems(cryptoRes);
+
+        // Prices for stocks + crypto + metals (same approach as Portfolio.jsx)
+        const stockSymbols = Array.from(
+          new Set(stockTx.map((t) => String(t.symbol || "").toUpperCase().trim()).filter(Boolean))
+        ).sort();
+        const cryptoSymbols = Array.from(
+          new Set(
+            cryptoTx
+              .map((t) => String(t.symbol || "").toUpperCase().trim())
+              .filter(Boolean)
+              .map((s) => (s.includes("-") ? s : `${s}-USD`))
+          )
+        ).sort();
+
+        const qsParts = [];
+        if (stockSymbols.length) qsParts.push(`stocks=${encodeURIComponent(stockSymbols.join(","))}`);
+        if (cryptoSymbols.length) qsParts.push(`crypto=${encodeURIComponent(cryptoSymbols.join(","))}`);
+        const qs = qsParts.length ? `?${qsParts.join("&")}` : "";
+
+        const pricesRes = await apiFetch(`/prices${qs}`).catch(() => ({}));
+
+        const spot = {
+          GOLD: round2(safeNum(pricesRes?.gold?.price, 0)),
+          SILVER: round2(safeNum(pricesRes?.silver?.price, 0)),
+        };
+        const quoteMap = (pricesRes?.stocks && typeof pricesRes.stocks === "object") ? pricesRes.stocks : {};
+        const cryptoSpots = extractCryptoSpots(pricesRes);
+
+        setStocksTotal(computeStocksHolding(stockTx, quoteMap));
+        setBullionTotal(computeBullionHolding(bullTx, spot));
+        setCryptoTotal(computeCryptoHolding(cryptoTx, cryptoSpots));
+
+        setStatus("");
+      } catch (e) {
+        console.error(e);
+        setStatus(e.message || "Failed to load");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const usaAssetsRows = useMemo(
+    () =>
+      buildAssetsRows({
+        stocksTotal,
+        bullionTotal,
+        cryptoTotal,
+        fixedIncomeItems,
+        otherAssetsItems,
+        country: "USA",
+      }),
+    [stocksTotal, bullionTotal, cryptoTotal, fixedIncomeItems, otherAssetsItems]
+  );
+
+  const indiaAssetsRows = useMemo(
+    () =>
+      buildAssetsRows({
+        stocksTotal: 0,
+        bullionTotal: 0,
+        cryptoTotal: 0,
+        fixedIncomeItems,
+        otherAssetsItems,
+        country: "INDIA",
+      }),
+    [fixedIncomeItems, otherAssetsItems]
+  );
+
+  const usaAssetsTotal = useMemo(() => sumAssetRows(usaAssetsRows), [usaAssetsRows]);
+  const indiaAssetsTotal = useMemo(() => sumAssetRows(indiaAssetsRows), [indiaAssetsRows]);
+  const usaLiabsTotal = useMemo(
+    () =>
+      round2(
+        liabilitiesItems
+          .filter((it) => pickCountry(it) === "USA")
+          .reduce((s, it) => s + safeNum(it.value, 0), 0)
+      ),
+    [liabilitiesItems]
+  );
+
+  const indiaLiabsTotal = useMemo(
+    () =>
+      round2(
+        liabilitiesItems
+          .filter((it) => pickCountry(it) === "INDIA")
+          .reduce((s, it) => s + safeNum(it.value, 0), 0)
+      ),
+    [liabilitiesItems]
+  );
+
+  const usaNet = round2(usaAssetsTotal - usaLiabsTotal);
+  const indiaNet = round2(indiaAssetsTotal - indiaLiabsTotal);
+
+  function Region({ currency, assetsRows, country, liabilitiesItems }) {
+    return (
+      <div style={{ marginTop: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div>
+            <AssetsCard rows={assetsRows} currency={currency} />
+          </div>
+          <div>
+            <LiabilitiesCard items={liabilitiesItems} currency={currency} country={country} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 16, color: THEME.pageText }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-        <div style={{ fontSize: 20, fontWeight: 900, color: THEME.title }}>Net Asset Value</div>
-        <Pill>Net worth</Pill>
-
+        <div style={{ fontSize: 18, fontWeight: 950, color: THEME.title }}>Net Asset Value</div>
         <div style={{ flex: 1 }} />
 
+        {/* Country filter (top-right) */}
         <select
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -737,503 +1084,63 @@ export default function NAV() {
             border: `1px solid ${THEME.inputBorder}`,
             borderRadius: 10,
             padding: "8px 10px",
-            outline: "none",
-            fontSize: 13,
+            fontWeight: 800,
           }}
         >
           <option value="ALL">All</option>
           <option value="USA">USA</option>
           <option value="INDIA">India</option>
         </select>
-
-        <GhostButton onClick={refreshSynced} disabled={loading}>
-          {loading ? "Refreshing…" : "Refresh"}
-        </GhostButton>
-        <GhostButton onClick={loadFromDbOrLocal} disabled={loading}>
-          Load
-        </GhostButton>
-        <Button onClick={saveToDb} disabled={loading}>
-          Save
-        </Button>
-        <Button kind="danger" onClick={resetDb} disabled={loading}>
-          Reset
-        </Button>
-
-        {status ? <div style={{ color: THEME.muted, fontSize: 12 }}>{status}</div> : null}
       </div>
 
-      {lastSavedAt ? (
-        <div style={{ color: THEME.muted, fontSize: 12, marginBottom: 10 }}>
-          Last saved: {lastSavedAt}
-        </div>
-      ) : null}
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(240px, 1fr))", gap: 12, marginBottom: 14 }}>
-        <SummaryCard
-          title="Total USA Networth"
-          value={showUSA ? formatMoney(usaTotals.net, "USD") : "—"}
-          hint={showUSA ? `Assets ${formatMoney(usaTotals.assets)} • Liabilities ${formatMoney(usaTotals.liabs)}` : "Filter to USA or All"}
-        />
-        <SummaryCard
-          title="Total India Networth"
-          value={showINDIA ? formatMoney(indiaTotals.net, "USD") : "—"}
-          hint={showINDIA ? `Assets ${formatMoney(indiaTotals.assets)} • Liabilities ${formatMoney(indiaTotals.liabs)}` : "Filter to India or All"}
-        />
-      </div>
+      {status ? <div style={{ marginBottom: 10, color: THEME.muted, fontSize: 12 }}>{status}</div> : null}
 
       {showUSA ? (
-        <RegionBlock
-          title="USA"
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12, marginBottom: 14 }}>
+        <Card>
+          <div style={{ fontWeight: 900, color: THEME.title }}>Total USA Networth</div>
+          <div style={{ marginTop: 6, fontSize: 20, fontWeight: 950, color: THEME.title }}>
+            {showUSA ? formatMoney(usaNet, "USD") : "—"}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 11, color: THEME.muted }}>
+            {showUSA
+              ? `Assets ${formatMoney(usaAssetsTotal, "USD")} • Liabilities ${formatMoney(usaLiabsTotal, "USD")}`
+              : "Filter to USA or All"}
+          </div>
+        </Card>
+      </div>
+      ) : null}
+
+      {showUSA ? (
+        <Region
           currency="USD"
-          assetsRows={usaAssets}
-          setAssetsRows={setUsaAssets}
-          liabRows={usaLiabs}
-          setLiabRows={setUsaLiabs}
-          fixedIncomeItems={fixedIncomeItems}
-          fixedIncomeTotal={fixedIncomeTotal}
+          assetsRows={usaAssetsRows}
+          country="USA"
+          liabilitiesItems={liabilitiesItems}
         />
       ) : null}
 
       {showINDIA ? (
-        <div style={{ marginTop: 14 }}>
-          <RegionBlock
-            title="India"
+        <div style={{ marginTop: 16 }}>
+          {/* India total card is shown right before India sections */}
+          <Card style={{ marginBottom: 12 }}>
+            <div style={{ fontWeight: 900, color: THEME.title }}>Total India Networth</div>
+            <div style={{ marginTop: 6, fontSize: 20, fontWeight: 950, color: THEME.title }}>
+              {formatMoney(indiaNet, "USD")}
+            </div>
+            <div style={{ marginTop: 6, fontSize: 11, color: THEME.muted }}>
+              {`Assets ${formatMoney(indiaAssetsTotal, "USD")} • Liabilities ${formatMoney(indiaLiabsTotal, "USD")}`}
+            </div>
+          </Card>
+
+          <Region
             currency="USD"
-            assetsRows={indiaAssets}
-            setAssetsRows={setIndiaAssets}
-            liabRows={indiaLiabs}
-            setLiabRows={setIndiaLiabs}
-            fixedIncomeItems={[]}
-            fixedIncomeTotal={0}
+            assetsRows={indiaAssetsRows}
+            country="INDIA"
+            liabilitiesItems={liabilitiesItems}
           />
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/* ---------------- RegionBlock ---------------- */
-
-function RegionBlock({
-  title,
-  currency,
-  assetsRows,
-  setAssetsRows,
-  liabRows,
-  setLiabRows,
-  fixedIncomeItems,
-  fixedIncomeTotal,
-}) {
-  return (
-    <div
-      style={{
-        border: `1px solid ${THEME.panelBorder}`,
-        background: THEME.panelBg,
-        borderRadius: 16,
-        padding: 14,
-      }}
-    >
-
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <TablePanel
-          title="Assets"
-          currency={currency}
-          tintBg={ASSET_PANEL_TINT}
-          tintBorder={ASSET_PANEL_BORDER}
-          rows={assetsRows}
-          setRows={setAssetsRows}
-          showFixedIncome={true}
-          fixedIncomeItems={fixedIncomeItems}
-          fixedIncomeTotal={fixedIncomeTotal}
-        />
-        <TablePanel
-          title="Liabilities"
-          currency={currency}
-          tintBg={LIAB_PANEL_TINT}
-          tintBorder={LIAB_PANEL_BORDER}
-          rows={liabRows}
-          setRows={setLiabRows}
-          showFixedIncome={false}
-          fixedIncomeItems={[]}
-          fixedIncomeTotal={0}
-        />
-      </div>
-    </div>
-  );
-}
-
-/* ---------------- TablePanel ---------------- */
-
-function TablePanel({
-  title,
-  currency,
-  tintBg,
-  tintBorder,
-  rows,
-  setRows,
-  showFixedIncome,
-  fixedIncomeItems,
-  fixedIncomeTotal,
-}) {
-  const [editingId, setEditingId] = useState(null);
-  const [draft, setDraft] = useState({ label: "", amount: "", remarks: "" });
-
-  function addSection() {
-    setRows((prev) => [...prev, { kind: "section", id: uid("sec"), label: "New Section" }]);
-  }
-
-  function addRowBottom() {
-    setRows((prev) => [
-      ...prev,
-      { kind: "row", id: uid("row"), label: "New Item", amount: "", remarks: "", source: "manual" },
-    ]);
-  }
-
-  function addRowAfterSection(sectionId) {
-    setRows((prev) => {
-      const idx = prev.findIndex((r) => r.id === sectionId);
-      const newRow = { kind: "row", id: uid("row"), label: "New Item", amount: "", remarks: "", source: "manual" };
-      if (idx === -1) return [...prev, newRow];
-      const copy = [...prev];
-      copy.splice(idx + 1, 0, newRow);
-      return copy;
-    });
-  }
-
-  function deleteRow(id) {
-    setRows((prev) => prev.filter((r) => r.id !== id));
-    if (editingId === id) {
-      setEditingId(null);
-      setDraft({ label: "", amount: "", remarks: "" });
-    }
-  }
-
-  function deleteSectionCascade(sectionId) {
-    setRows((prev) => {
-      const idx = prev.findIndex((r) => r.id === sectionId && r.kind === "section");
-      if (idx === -1) return prev;
-
-      let end = idx + 1;
-      while (end < prev.length && prev[end].kind !== "section") end += 1;
-
-      const copy = [...prev];
-      copy.splice(idx, end - idx);
-      return copy;
-    });
-  }
-
-  function startEdit(row) {
-    const isSynced = String(row.source || "").startsWith("synced_");
-    setEditingId(row.id);
-    setDraft({
-      label: row.label ?? "",
-      amount: isSynced ? row.amount ?? 0 : String(row.amount ?? ""),
-      remarks: row.remarks ?? "",
-    });
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setDraft({ label: "", amount: "", remarks: "" });
-  }
-
-  function saveEdit(row) {
-    const isSynced = String(row.source || "").startsWith("synced_");
-
-    setRows((prev) =>
-      prev.map((r) => {
-        if (r.id !== row.id) return r;
-        if (isSynced) return { ...r, remarks: draft.remarks };
-        return { ...r, label: draft.label, amount: draft.amount, remarks: draft.remarks };
-      })
-    );
-    cancelEdit();
-  }
-
-  return (
-    <div
-      style={{
-        border: `1px solid ${tintBorder}`,
-        background: `linear-gradient(180deg, ${tintBg}, rgba(2,6,23,0.18))`,
-        borderRadius: 16,
-        padding: 14,
-        boxShadow: "0 10px 24px rgba(0,0,0,0.22)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>{title}</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <GhostButton onClick={addSection}>Add Section</GhostButton>
-          <GhostButton onClick={addRowBottom}>Add Row</GhostButton>
-        </div>
-      </div>
-
-      {/* Headers (bold + underline on Head/Amount/Remarks; Actions not underlined) */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: GRID_COLS,
-          gap: 8,
-          padding: "8px 10px",
-          borderBottom: `1px solid ${THEME.rowBorder}`,
-          color: THEME.title,
-          fontSize: 12,
-          fontWeight: 900,
-          minWidth: 0,
-          width: "100%",
-          boxSizing: "border-box",
-        }}
-      >
-        <div
-          style={{
-            ...CELL_CLAMP,
-            textAlign: "center",
-            textDecoration: "underline",
-            textUnderlineOffset: 4,
-          }}
-        >
-          Head
-        </div>
-        <div
-          style={{
-            ...AMOUNT_NO_ELLIPSIS,
-            textAlign: "center",
-            textDecoration: "underline",
-            textUnderlineOffset: 4,
-          }}
-        >
-          Amount
-        </div>
-        <div
-          style={{
-            ...CELL_CLAMP,
-            textAlign: "center",
-            textDecoration: "underline",
-            textUnderlineOffset: 4,
-          }}
-        >
-          Remarks
-        </div>
-        <div style={{ ...CELL_CLAMP, textAlign: "center" }}>Actions</div>
-      </div>
-
-      <div style={{ marginTop: 8 }}>
-        {rows.map((r) => {
-          if (r.kind === "section") {
-            const isFixedIncome =
-              showFixedIncome && String(r.label || "").trim().toLowerCase() === "fixed income";
-
-            return (
-              <div key={r.id} style={{ marginTop: 10 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 10,
-                    padding: "10px 10px",
-                    borderRadius: 12,
-                    border: `1px solid ${THEME.sectionBorder}`,
-                    background: THEME.sectionBg,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, ...CELL_CLAMP }}>
-                    <div style={{ fontSize: 14, fontWeight: 950, letterSpacing: "0.2px", color: THEME.title }}>
-                      {r.label}
-                    </div>
-                    {isFixedIncome ? <Pill>synced</Pill> : null}
-                  </div>
-
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <GhostButton onClick={() => addRowAfterSection(r.id)}>Add row</GhostButton>
-                    <Button kind="danger" onClick={() => deleteSectionCascade(r.id)}>
-                      Delete section
-                    </Button>
-                  </div>
-                </div>
-
-                {isFixedIncome ? (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      border: `1px solid ${THEME.rowBorder}`,
-                      borderRadius: 12,
-                      background: "rgba(2,6,23,0.20)",
-                      padding: 10,
-                    }}
-                  >
-                    {(fixedIncomeItems || []).length === 0 ? (
-                      <div style={{ color: THEME.muted, fontSize: 12 }}>No fixed income records.</div>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {(fixedIncomeItems || []).map((it) => {
-                          const name =
-                            it.name || it.accountName || it.institution || it.assetId || "Fixed Income";
-                          const cv = safeNum(it.currentValue, 0);
-                          const notes = it.notes || it.note || it.interestType || "";
-
-                          return (
-                            <div
-                              key={it.assetId || it.id || name}
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "1.3fr 0.9fr 1.1fr",
-                                gap: 10,
-                                alignItems: "center",
-                                padding: "10px 10px",
-                                border: `1px solid ${THEME.rowBorder}`,
-                                borderRadius: 12,
-                                background: "rgba(15,23,42,0.35)",
-                              }}
-                            >
-                              <div style={{ color: THEME.pageText, fontSize: 13, ...CELL_CLAMP }}>
-                                {String(name)}
-                              </div>
-                              <div
-                                style={{
-                                  textAlign: "right",
-                                  color: THEME.pageText,
-                                  fontSize: 13,
-                                  fontWeight: 800,
-                                  ...AMOUNT_NO_ELLIPSIS,
-                                }}
-                              >
-                                {formatMoney(cv, currency)}
-                              </div>
-                              <div style={{ color: THEME.muted, fontSize: 12, ...CELL_CLAMP }}>
-                                {String(notes || "")}
-                              </div>
-                            </div>
-                          );
-                        })}
-
-                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
-                          <div style={{ color: THEME.title, fontWeight: 900 }}>
-                            Total: {formatMoney(fixedIncomeTotal, currency)}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            );
-          }
-
-          const isSynced = String(r.source || "").startsWith("synced_");
-          const isEditing = editingId === r.id;
-
-          return (
-            <div
-              key={r.id}
-              style={{
-                display: "grid",
-                gridTemplateColumns: GRID_COLS,
-                gap: 8,
-                padding: "10px 10px",
-                alignItems: "center",
-                borderBottom: `1px solid ${THEME.rowBorder}`,
-                minWidth: 0,
-                width: "100%",
-                boxSizing: "border-box",
-              }}
-            >
-              {/* Head */}
-              <div style={{ ...CELL_CLAMP }}>
-                {isEditing ? (
-                  <TextInput
-                    value={draft.label}
-                    onChange={(v) => setDraft((d) => ({ ...d, label: v }))}
-                    readOnly={isSynced}
-                  />
-                ) : (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, ...CELL_CLAMP }}>
-                    <div style={{ color: THEME.pageText, fontSize: 13, fontWeight: 600, ...CELL_CLAMP }}>
-                      {r.label}
-                    </div>
-                    {isSynced ? <Pill>synced</Pill> : null}
-                  </div>
-                )}
-              </div>
-
-              {/* Amount (full visible) */}
-              <div style={{ ...AMOUNT_NO_ELLIPSIS }}>
-                {isEditing ? (
-                  <MoneyInput
-                    value={draft.amount}
-                    onChange={(v) => setDraft((d) => ({ ...d, amount: v }))}
-                    readOnly={isSynced}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      textAlign: "right",
-                      color: THEME.pageText,
-                      fontSize: 13,
-                      fontWeight: 800,
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: `1px solid ${THEME.rowBorder}`,
-                      background: "rgba(2,6,23,0.18)",
-                      ...AMOUNT_NO_ELLIPSIS,
-                    }}
-                  >
-                    {formatMoney(safeNum(r.amount, 0), currency)}
-                  </div>
-                )}
-              </div>
-
-              {/* Remarks (constrained so it can't overlap Actions) */}
-              <div style={{ minWidth: 0, maxWidth: "100%", boxSizing: "border-box" }}>
-                {isEditing ? (
-                  <TextInput
-                    value={draft.remarks}
-                    onChange={(v) => setDraft((d) => ({ ...d, remarks: v }))}
-                    placeholder="Comments / remarks"
-                  />
-                ) : (
-                  <div style={{ color: THEME.muted, fontSize: 12, ...CELL_CLAMP }}>
-                    {r.remarks || ""}
-                  </div>
-                )}
-              </div>
-
-              {/* Actions (right aligned, fixed horizontal, no wrap) */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  gap: 8,
-                  flexWrap: "nowrap",
-                  alignItems: "center",
-                  minWidth: 0,
-                }}
-              >
-                {!isEditing ? (
-                  <>
-                    <GhostButton title="Edit" onClick={() => startEdit(r)}>
-                      Edit
-                    </GhostButton>
-                    <Button title="Delete" kind="danger" onClick={() => deleteRow(r.id)}>
-                      Del
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <GhostButton title="Cancel" onClick={cancelEdit}>
-                      Cancel
-                    </GhostButton>
-                    <Button title="Save" onClick={() => saveEdit(r)}>
-                      Save
-                    </Button>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

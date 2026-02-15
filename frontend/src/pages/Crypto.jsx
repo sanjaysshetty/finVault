@@ -35,6 +35,24 @@ function formatMoney(n) {
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
+function formatMoneySmart(n) {
+  const x = safeNum(n, 0);
+
+  // Check if decimals beyond 2 are effectively zero
+  const rounded2 = Number(x.toFixed(2));
+  const rounded8 = Number(x.toFixed(8));
+
+  const useTwoDecimals = Math.abs(rounded8 - rounded2) < 1e-10;
+
+  return x.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: useTwoDecimals ? 2 : 8,
+    maximumFractionDigits: useTwoDecimals ? 2 : 8,
+  });
+}
+
+
 function plColor(v) {
   // Mimic Portfolio.jsx gain/loss coloring
   return safeNum(v, 0) < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
@@ -542,7 +560,7 @@ async function refreshSpots(txOverride) {
       symbol,
       date: form.date,
       quantity: Number(quantity.toFixed(8)), // crypto precision
-      unitPrice: Number(unitPrice.toFixed(2)),
+      unitPrice: Number(unitPrice.toFixed(8)), // allow up to 8 decimals
       fees: Number(fees.toFixed(2)),
       notes: form.notes?.trim() || "",
     };
@@ -748,7 +766,7 @@ async function refreshSpots(txOverride) {
                         maximumFractionDigits: 8,
                       })}
                     </Td>
-                    <Td>{formatMoney(h.avgCost)}</Td>
+                    <Td>{formatMoneySmart(h.avgCost)}</Td>
                     <Td>{formatSpot(h.spot)}</Td>
                     <Td style={{ fontWeight: 900, color: THEME.title }}>
                       {formatMoney(h.marketValue)}
@@ -999,7 +1017,7 @@ async function refreshSpots(txOverride) {
                       <Td>
                         {qty.toLocaleString(undefined, { maximumFractionDigits: 8 })}
                       </Td>
-                      <Td>{formatMoney(px)}</Td>
+                      <Td>{formatSpot(px)}</Td>
                       <Td>{formatMoney(fees)}</Td>
                       <Td style={{ fontWeight: 900, color: THEME.title }}>
                         {formatMoney(net)}

@@ -34,7 +34,6 @@ function plColor(v) {
   return safeNum(v, 0) < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
 }
 
-
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -52,11 +51,7 @@ function getApiBase() {
 }
 
 function getAccessToken() {
-  return (
-    sessionStorage.getItem("finvault.accessToken") ||
-    sessionStorage.getItem("access_token") ||
-    ""
-  );
+  return sessionStorage.getItem("finvault.accessToken") || sessionStorage.getItem("access_token") || "";
 }
 
 async function apiFetch(path, { method = "GET", body } = {}) {
@@ -101,14 +96,13 @@ function extractCryptoSpots(pricesResponse) {
   const crypto = pricesResponse?.crypto;
   if (!crypto) return {};
 
-  const arr =
-    Array.isArray(crypto)
-      ? crypto
-      : Array.isArray(crypto?.results)
-        ? crypto.results
-        : Array.isArray(crypto?.data)
-          ? crypto.data
-          : null;
+  const arr = Array.isArray(crypto)
+    ? crypto
+    : Array.isArray(crypto?.results)
+      ? crypto.results
+      : Array.isArray(crypto?.data)
+        ? crypto.data
+        : null;
 
   const out = {};
 
@@ -171,9 +165,7 @@ function computeBullion(transactions, spot) {
     SILVER: { qty: 0, cost: 0, avg: 0, realized: 0 },
   };
 
-  const txs = [...transactions].sort((a, b) =>
-    String(a.date || "").localeCompare(String(b.date || ""))
-  );
+  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 
   for (const t of txs) {
     const metal = String(t.metal || "GOLD").toUpperCase();
@@ -223,9 +215,7 @@ function computeBullion(transactions, spot) {
 function computeStocks(transactions, quoteMap) {
   const bySymbol = {};
 
-  const txs = [...transactions].sort((a, b) =>
-    String(a.date || "").localeCompare(String(b.date || ""))
-  );
+  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 
   for (const t of txs) {
     const symbol = String(t.symbol || "").toUpperCase().trim();
@@ -278,9 +268,7 @@ function computeStocks(transactions, quoteMap) {
 function computeCrypto(transactions, spotMap) {
   const bySym = {};
 
-  const txs = [...transactions].sort((a, b) =>
-    String(a.date || "").localeCompare(String(b.date || ""))
-  );
+  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 
   for (const t of txs) {
     let sym = String(t.symbol || "").toUpperCase().trim();
@@ -349,6 +337,22 @@ function computeFixedIncome(items) {
   };
 }
 
+function computeOtherAssets(items) {
+  let holdingValue = 0;
+
+  for (const it of items) {
+    // OtherAssets.jsx uses `value`. Tolerate `assetValue` as well.
+    const v = Number.isFinite(Number(it?.value)) ? Number(it.value) : safeNum(it?.assetValue, 0);
+    holdingValue += safeNum(v, 0);
+  }
+
+  return {
+    holdingValue: round2(holdingValue),
+    unrealized: 0,
+    realized: 0,
+  };
+}
+
 /* ---------------- Component ---------------- */
 
 export default function Portfolio() {
@@ -359,6 +363,7 @@ export default function Portfolio() {
   const [bullionTx, setBullionTx] = useState([]);
   const [stockTx, setStockTx] = useState([]);
   const [cryptoTx, setCryptoTx] = useState([]);
+  const [otherAssets, setOtherAssets] = useState([]);
 
   const [spot, setSpot] = useState({ GOLD: 0, SILVER: 0 });
   const [quotes, setQuotes] = useState({}); // stocks: { AAPL: { price, ... } }
@@ -381,12 +386,25 @@ export default function Portfolio() {
     return Array.from(set).sort();
   }, [cryptoTx]);
 
+  // ✅ Filter out Property from Other Assets (for display + total holding)
+  const otherAssetsNoProperty = useMemo(() => {
+    return (otherAssets || []).filter((it) => {
+      const cat = String(it?.category || "").trim().toUpperCase();
+      const catKey = String(it?.categoryKey || "").trim().toUpperCase();
+      // exclude if category or categoryKey is PROPERTY
+      return cat !== "PROPERTY" && catKey !== "PROPERTY" && cat !== "PROPERTY" && catKey !== "PROPERTY";
+    });
+  }, [otherAssets]);
+
   // Per-asset rollups
   const rollups = useMemo(() => {
     const fixedIncomeRollup = computeFixedIncome(fixedIncome);
     const bullionRollup = computeBullion(bullionTx, spot);
     const stocksRollup = computeStocks(stockTx, quotes);
     const cryptoRollup = computeCrypto(cryptoTx, cryptoSpots);
+
+    // ✅ use filtered other assets
+    const otherAssetsRollup = computeOtherAssets(otherAssetsNoProperty);
 
     // Options placeholder only
     const optionsRollup = { holdingValue: 0, realized: 0, unrealized: 0 };
@@ -397,8 +415,9 @@ export default function Portfolio() {
       bullion: bullionRollup,
       fixedIncome: fixedIncomeRollup,
       options: optionsRollup,
+      otherAssets: otherAssetsRollup,
     };
-  }, [fixedIncome, bullionTx, stockTx, cryptoTx, spot, quotes, cryptoSpots]);
+  }, [fixedIncome, bullionTx, stockTx, cryptoTx, otherAssetsNoProperty, spot, quotes, cryptoSpots]);
 
   // Totals (TOP SUMMARY) includes ALL assets incl crypto
   const totals = useMemo(() => {
@@ -407,7 +426,8 @@ export default function Portfolio() {
         rollups.bullion.holdingValue +
         rollups.stocks.holdingValue +
         rollups.crypto.holdingValue +
-        rollups.options.holdingValue
+        rollups.options.holdingValue +
+        rollups.otherAssets.holdingValue
     );
 
     const unrealized = round2(
@@ -436,25 +456,31 @@ export default function Portfolio() {
 
     try {
       // 1) Load holdings/tx
-      const [fiRes, bullRes, stockRes, cryptoRes] = await Promise.all([
+      const [fiRes, bullRes, stockRes, cryptoRes, otherRes] = await Promise.all([
         apiFetch("/assets/fixedincome"),
         apiFetch("/assets/bullion/transactions"),
         apiFetch("/assets/stocks/transactions"),
         apiFetch("/assets/crypto/transactions"),
+        apiFetch("/assets/otherassets"),
       ]);
 
       const fiItems = Array.isArray(fiRes) ? fiRes : Array.isArray(fiRes?.items) ? fiRes.items : [];
       const bullItems = Array.isArray(bullRes) ? bullRes : Array.isArray(bullRes?.items) ? bullRes.items : [];
       const stockItems = Array.isArray(stockRes) ? stockRes : Array.isArray(stockRes?.items) ? stockRes.items : [];
       const cryptoItems = Array.isArray(cryptoRes) ? cryptoRes : Array.isArray(cryptoRes?.items) ? cryptoRes.items : [];
+      const otherItems = Array.isArray(otherRes) ? otherRes : Array.isArray(otherRes?.items) ? otherRes.items : [];
 
       setFixedIncome(fiItems);
       setBullionTx(bullItems);
       setStockTx(stockItems);
       setCryptoTx(cryptoItems);
+      setOtherAssets(otherItems);
 
       // 2) Prices (metals + crypto + optional stocks)
-      const symbols = Array.from(new Set(stockItems.map((t) => String(t.symbol || "").toUpperCase().trim()).filter(Boolean))).sort();
+      const symbols = Array.from(
+        new Set(stockItems.map((t) => String(t.symbol || "").toUpperCase().trim()).filter(Boolean))
+      ).sort();
+
       const cryptoSyms = Array.from(
         new Set(
           cryptoItems
@@ -477,7 +503,7 @@ export default function Portfolio() {
       setSpot({ GOLD: round2(goldPrice), SILVER: round2(silverPrice) });
 
       // Stock quotes
-      setQuotes(symbols.length ? (pricesRes?.stocks || {}) : {});
+      setQuotes(symbols.length ? pricesRes?.stocks || {} : {});
 
       // Crypto spots (same logic style as Crypto.jsx)
       const spotMap = extractCryptoSpots(pricesRes);
@@ -493,7 +519,7 @@ export default function Portfolio() {
             : "Updated."
         );
       } else {
-       // setStatus("Updated.");
+        // setStatus("Updated.");
       }
     } catch (e) {
       setError(e?.message || "Failed to load portfolio data");
@@ -522,9 +548,11 @@ export default function Portfolio() {
       { key: "crypto", label: "Crypto", ...rollups.crypto, hint: cryptoSymbols.length ? `${cryptoSymbols.length} symbols` : "" },
       { key: "bullion", label: "Bullion", ...rollups.bullion, hint: bullionTx.length ? `${bullionTx.length} tx` : "" },
       { key: "fixedIncome", label: "Fixed Income", ...rollups.fixedIncome, hint: fixedIncome.length ? `${fixedIncome.length} positions` : "" },
+      // ✅ Other Assets now excludes Property for hint + value
+      { key: "otherAssets", label: "Other Assets", ...rollups.otherAssets, hint: otherAssetsNoProperty.length ? `${otherAssetsNoProperty.length} items` : "" },
       { key: "options", label: "Options", ...rollups.options, hint: "placeholder" },
     ],
-    [rollups, stockSymbols.length, cryptoSymbols.length, bullionTx.length, fixedIncome.length]
+    [rollups, stockSymbols.length, cryptoSymbols.length, bullionTx.length, fixedIncome.length, otherAssetsNoProperty.length]
   );
 
   return (
@@ -558,8 +586,18 @@ export default function Portfolio() {
       {/* Summary cards (includes Crypto unrealized) */}
       <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3, minmax(200px, 1fr))", gap: 12 }}>
         <SummaryCard title="Total Holding Value" value={formatMoney(totals.holdingValue)} hint="All asset types combined" />
-        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(totals.unrealized)} hint="Includes FI accrual + mark-to-market (Stocks/Crypto/Bullion)"  valueColor={plColor(totals.unrealized)} />
-        <SummaryCard title="Realized Gain/Loss" value={formatMoney(totals.realized)} hint="From sells (Stocks/Crypto/Bullion)"  valueColor={plColor(totals.realized)} />
+        <SummaryCard
+          title="Unrealized Gain/Loss"
+          value={formatMoney(totals.unrealized)}
+          hint="Includes FI accrual + mark-to-market (Stocks/Crypto/Bullion)"
+          valueColor={plColor(totals.unrealized)}
+        />
+        <SummaryCard
+          title="Realized Gain/Loss"
+          value={formatMoney(totals.realized)}
+          hint="From sells (Stocks/Crypto/Bullion)"
+          valueColor={plColor(totals.realized)}
+        />
       </div>
 
       {/* Included Assets table */}
@@ -608,6 +646,10 @@ export default function Portfolio() {
               const realizedNeg = safeNum(r.realized, 0) < 0;
               const unrealizedNeg = safeNum(r.unrealized, 0) < 0;
 
+              const showBlankPL = r.key === "otherAssets";
+              const realizedText = showBlankPL ? "" : formatMoney(r.realized);
+              const unrealizedText = showBlankPL ? "" : formatMoney(r.unrealized);
+
               return (
                 <div
                   key={r.key}
@@ -622,11 +664,7 @@ export default function Portfolio() {
                 >
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 900, color: THEME.title }}>{r.label}</div>
-                    {r.hint ? (
-                      <div style={{ marginTop: 4, fontSize: 12, color: THEME.muted }}>
-                        {r.hint}
-                      </div>
-                    ) : null}
+                    {r.hint ? <div style={{ marginTop: 4, fontSize: 12, color: THEME.muted }}>{r.hint}</div> : null}
                   </div>
 
                   <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
@@ -640,7 +678,7 @@ export default function Portfolio() {
                       color: realizedNeg ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)",
                     }}
                   >
-                    {formatMoney(r.realized)}
+                    {realizedText}
                   </div>
 
                   <div
@@ -650,7 +688,7 @@ export default function Portfolio() {
                       color: unrealizedNeg ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)",
                     }}
                   >
-                    {formatMoney(r.unrealized)}
+                    {unrealizedText}
                   </div>
                 </div>
               );
