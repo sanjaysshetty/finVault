@@ -56,6 +56,87 @@ function toUpperTrim(v) {
   return String(v || "").toUpperCase().trim();
 }
 
+
+/* =========================================================
+   NAV STATE (liabilities persisted)
+========================================================= */
+
+const NAV_BASE = "/nav";
+const NAV_ASSET_ID = "nav-state";
+const NAV_ASSET_TYPE = "NAV_STATE";
+
+function validateNavArray(arr, name) {
+  if (!Array.isArray(arr)) throw new Error(`${name} must be an array`);
+  // light validation to avoid breaking existing saved state
+  for (const it of arr) {
+    if (!it || typeof it !== "object") throw new Error(`${name} contains invalid item`);
+    const kind = String(it.kind || "").toLowerCase();
+    if (kind !== "section" && kind !== "row") throw new Error(`${name} item kind must be section or row`);
+    if (kind === "section") {
+      if (!String(it.label || "").trim()) throw new Error(`${name} section label required`);
+    } else {
+      if (!String(it.label || "").trim()) throw new Error(`${name} row label required`);
+      const amt = Number(it.amount);
+      if (!Number.isFinite(amt)) throw new Error(`${name} row amount must be a number`);
+    }
+  }
+  return arr;
+}
+
+function validateNavState(body) {
+  if (!body || typeof body !== "object") throw new Error("Invalid JSON body");
+
+  const usaLiabs = validateNavArray(body.usaLiabs ?? [], "usaLiabs");
+  const indiaLiabs = validateNavArray(body.indiaLiabs ?? [], "indiaLiabs");
+
+  // Allow optional assets arrays for backward compatibility (ignored by new UI)
+  const usaAssets = Array.isArray(body.usaAssets) ? body.usaAssets : [];
+  const indiaAssets = Array.isArray(body.indiaAssets) ? body.indiaAssets : [];
+
+  return { usaAssets, indiaAssets, usaLiabs, indiaLiabs };
+}
+
+async function navGet(event) {
+  const userId = getUserIdFromJwt(event);
+  const item = await getItem(userId, NAV_ASSET_ID);
+  if (!item) return json(200, {});
+  return json(200, item.data || {});
+}
+
+async function navPut(event) {
+  const userId = getUserIdFromJwt(event);
+  const body = parseBody(event);
+  if (!body) return badRequest("Invalid JSON body");
+
+  let data;
+  try {
+    data = validateNavState(body);
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const now = new Date().toISOString();
+
+  await putItem({
+    userId,
+    assetId: NAV_ASSET_ID,
+    assetType: NAV_ASSET_TYPE,
+    updatedAt: now,
+    data,
+    // keep a stable GSI1 key so it doesn't mix with other assets lists
+    gsi1pk: userId,
+    gsi1sk: `NAV#${NAV_ASSET_ID}`,
+  });
+
+  return json(200, { ok: true, updatedAt: now });
+}
+
+async function navDelete(event) {
+  const userId = getUserIdFromJwt(event);
+  await deleteItem(userId, NAV_ASSET_ID);
+  return json(200, { ok: true });
+}
+
 /* =========================================================
    FIXED INCOME (unchanged)
 ========================================================= */
@@ -65,6 +146,13 @@ const FIXED_BASE = "/assets/fixedincome";
 function validateFixedIncome(body) {
   const name = String(body.name || "").trim();
   if (!name) throw new Error("name is required");
+
+  const countryRaw = String(body.country || "USA").trim();
+  const c = countryRaw.toUpperCase();
+  let country;
+  if (c === "INDIA" || countryRaw.toLowerCase() === "india" || c === "IN") country = "INDIA";
+  else if (c === "USA" || c === "US") country = "USA";
+  else throw new Error("country must be USA or India");
 
   const principal = Number(body.principal);
   if (!Number.isFinite(principal) || principal <= 0) throw new Error("principal must be > 0");
@@ -99,6 +187,7 @@ function validateFixedIncome(body) {
   });
 
   return {
+    country,
     name,
     principal: Number(principal.toFixed(2)),
     annualRate: Number(annualRate.toFixed(8)),
@@ -213,6 +302,156 @@ async function fixedDelete(event, assetId) {
   const userId = getUserIdFromJwt(event);
   const existing = await getItem(userId, assetId);
   if (!existing || existing.assetType !== "FIXEDINCOME") return notFound();
+
+  await deleteItem(userId, assetId);
+  return json(204, null);
+}
+
+/* =========================================================
+   OTHER ASSETS (Education/Retirement/Robo/Options/Property)
+========================================================= */
+
+const OTHER_ASSETS_BASE = "/assets/otherassets";
+const OTHER_ASSET_TYPE = "OTHER_ASSET";
+const OTHER_ASSET_CATEGORIES = ["EDUCATION", "RETIREMENT", "ROBO", "CASH", "OPTIONS", "PROPERTY"];
+
+function titleCaseCategory(catUpper) {
+  switch (String(catUpper || "").toUpperCase()) {
+    case "EDUCATION":
+      return "Education";
+    case "RETIREMENT":
+      return "Retirement";
+    case "ROBO":
+      return "Robo";
+    case "OPTIONS":
+      return "Options";
+    case "CASH":
+      return "Cash";
+      case "PROPERTY":
+      return "Property";
+    default:
+      return String(catUpper || "").trim();
+  }
+}
+
+function validateOtherAsset(body) {
+  const catRaw = String(body.category || "").trim();
+  const catUpper = catRaw.toUpperCase();
+  if (!OTHER_ASSET_CATEGORIES.includes(catUpper)) {
+    throw new Error("category must be one of: Education, Retirement, Robo, Cash, Options, Property");
+  }
+
+  const description = String(body.description || "").trim();
+  if (!description) throw new Error("description is required");
+
+  const value = Number(body.value);
+  if (!Number.isFinite(value)) throw new Error("value must be a number");
+
+  const countryRaw = String(body.country || "USA").trim();
+  const c = countryRaw.toUpperCase();
+  let country;
+  if (c === "INDIA" || countryRaw.toLowerCase() === "india" || c === "IN") country = "INDIA";
+  else if (c === "USA" || c === "US") country = "USA";
+  else throw new Error("country must be USA or India");
+
+  return {
+    country,
+    category: titleCaseCategory(catUpper),
+    categoryKey: catUpper,
+    description,
+    value: Number(value.toFixed(2)),
+  };
+}
+
+async function otherAssetsList(event) {
+  const userId = getUserIdFromJwt(event);
+  const items = await queryByGSI1(userId, "OTHERASSET#");
+  return json(200, items);
+}
+
+async function otherAssetsCreate(event) {
+  const userId = getUserIdFromJwt(event);
+  const body = parseBody(event);
+  if (!body) return badRequest("Invalid JSON body");
+
+  let asset;
+  try {
+    asset = validateOtherAsset(body);
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const assetId = body.assetId || pickId("oa");
+  const now = new Date().toISOString();
+  const d = now.slice(0, 10);
+
+  const item = {
+    userId,
+    assetId,
+    assetType: OTHER_ASSET_TYPE,
+    country: asset.country,
+    category: asset.category,
+    categoryKey: asset.categoryKey,
+    description: asset.description,
+    value: asset.value,
+    gsi1pk: userId,
+    gsi1sk: `OTHERASSET#${d}#${asset.categoryKey}#${assetId}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(201, item);
+}
+
+async function otherAssetsGet(event, assetId) {
+  const userId = getUserIdFromJwt(event);
+  const item = await getItem(userId, assetId);
+  if (!item || item.assetType !== OTHER_ASSET_TYPE) return notFound();
+  return json(200, item);
+}
+
+async function otherAssetsUpdate(event, assetId) {
+  const userId = getUserIdFromJwt(event);
+  const patch = parseBody(event);
+  if (!patch) return badRequest("Invalid JSON body");
+
+  const existing = await getItem(userId, assetId);
+  if (!existing || existing.assetType !== OTHER_ASSET_TYPE) return notFound();
+
+  let merged;
+  try {
+    merged = validateOtherAsset({ ...existing, ...patch });
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const now = new Date().toISOString();
+  const d = now.slice(0, 10);
+
+  const item = {
+    ...existing,
+    country: merged.country,
+    category: merged.category,
+    categoryKey: merged.categoryKey,
+    description: merged.description,
+    value: merged.value,
+    userId,
+    assetId,
+    assetType: OTHER_ASSET_TYPE,
+    gsi1pk: userId,
+    gsi1sk: `OTHERASSET#${d}#${merged.categoryKey}#${assetId}`,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(200, item);
+}
+
+async function otherAssetsDelete(event, assetId) {
+  const userId = getUserIdFromJwt(event);
+  const existing = await getItem(userId, assetId);
+  if (!existing || existing.assetType !== OTHER_ASSET_TYPE) return notFound();
 
   await deleteItem(userId, assetId);
   return json(204, null);
@@ -468,7 +707,7 @@ function validateCryptoTx(body) {
     symbol,
     date,
     quantity: Number(quantity.toFixed(8)),
-    unitPrice: Number(unitPrice.toFixed(2)),
+    unitPrice: Number(unitPrice.toFixed(8)),
     fees: Number(fees.toFixed(2)),
     notes: String(body.notes || "").trim(),
   };
@@ -691,223 +930,6 @@ async function optionsDelete(event, txId) {
   return json(204, null);
 }
 
-/* =========================================================
-   ✅ NAV “MANUAL ASSET BUCKETS”
-   assetTypes:
-   - RETIRE_TX
-   - EDUCATION_TX
-   - OTHERPROP_TX
-   Routes:
-   - /assets/retirement/transactions (GET, POST)
-   - /assets/retirement/transactions/{txId} (PATCH, DELETE)
-   - /assets/education/transactions ...
-   - /assets/property/transactions ...
-========================================================= */
-
-function validateNavBucketTx(body) {
-  const date = toISODateOrBlank(body.date);
-  if (!date) throw new Error("date is required (YYYY-MM-DD)");
-
-  const name = String(body.name || "").trim();
-  if (!name) throw new Error("name is required");
-
-  const amount = toNumOrBlank(body.amount);
-  if (amount === "" || amount < 0) throw new Error("amount must be a number >= 0");
-
-  const notes = String(body.notes || "").trim();
-
-  return {
-    date,
-    name,
-    amount: Number(Number(amount).toFixed(2)),
-    notes,
-  };
-}
-
-function makeNavBucketHandlers({ assetType, idPrefix }) {
-  const prefixForQuery = `${assetType}#`;
-
-  return {
-    async list(event) {
-      const userId = getUserIdFromJwt(event);
-      const items = await queryByGSI1(userId, prefixForQuery);
-      return json(200, items);
-    },
-
-    async create(event) {
-      const userId = getUserIdFromJwt(event);
-      const body = parseBody(event);
-      if (!body) return badRequest("Invalid JSON body");
-
-      let tx;
-      try {
-        tx = validateNavBucketTx(body);
-      } catch (e) {
-        return badRequest(e.message);
-      }
-
-      const txId = body.txId || body.assetId || pickId(idPrefix);
-      const now = new Date().toISOString();
-
-      const item = {
-        userId,
-        assetId: txId,
-        txId,
-        assetType,
-        ...tx,
-        gsi1pk: userId,
-        gsi1sk: `${assetType}#${tx.date}#${txId}`,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      await putItem(item);
-      return json(201, item);
-    },
-
-    async update(event, txId) {
-      const userId = getUserIdFromJwt(event);
-      const patch = parseBody(event);
-      if (!patch) return badRequest("Invalid JSON body");
-
-      const existing = await getItem(userId, txId);
-      if (!existing || existing.assetType !== assetType) return notFound();
-
-      let merged;
-      try {
-        merged = validateNavBucketTx({ ...existing, ...patch });
-      } catch (e) {
-        return badRequest(e.message);
-      }
-
-      const now = new Date().toISOString();
-
-      const item = {
-        ...existing,
-        ...merged,
-        userId,
-        assetId: txId,
-        txId,
-        gsi1pk: userId,
-        gsi1sk: `${assetType}#${merged.date}#${txId}`,
-        updatedAt: now,
-      };
-
-      await putItem(item);
-      return json(200, item);
-    },
-
-    async del(event, txId) {
-      const userId = getUserIdFromJwt(event);
-      const existing = await getItem(userId, txId);
-      if (!existing || existing.assetType !== assetType) return notFound();
-
-      await deleteItem(userId, txId);
-      return json(204, null);
-    },
-  };
-}
-
-const RETIRE_TX_BASE = "/assets/retirement/transactions";
-const EDUCATION_TX_BASE = "/assets/education/transactions";
-const OTHERPROP_TX_BASE = "/assets/property/transactions";
-
-const retireHandlers = makeNavBucketHandlers({ assetType: "RETIRE_TX", idPrefix: "rtx" });
-const eduHandlers = makeNavBucketHandlers({ assetType: "EDUCATION_TX", idPrefix: "etx" });
-const propHandlers = makeNavBucketHandlers({ assetType: "OTHERPROP_TX", idPrefix: "ptx" });
-
-/* =========================================================
-   NAV STATE (sections + rows persisted)
-========================================================= */
-
-const NAV_BASE = "/nav";
-const NAV_ASSET_ID = "nav-state";
-const NAV_ASSET_TYPE = "NAV_STATE";
-
-function validateNavState(body) {
-  if (!body || typeof body !== "object") throw new Error("Invalid JSON body");
-
-  const required = ["usaAssets", "usaLiabs", "indiaAssets", "indiaLiabs"];
-  for (const k of required) {
-    if (!Array.isArray(body[k])) throw new Error(`${k} must be an array`);
-  }
-
-  // light validation for items
-  function validateArr(arr, name) {
-    for (const it of arr) {
-      if (!it || typeof it !== "object") throw new Error(`${name} contains invalid item`);
-      if (it.kind !== "section" && it.kind !== "row") throw new Error(`${name} item.kind must be section|row`);
-      if (!it.id) throw new Error(`${name} item.id required`);
-      if (it.kind === "section") {
-        if (typeof it.label !== "string") throw new Error(`${name} section.label must be string`);
-      } else {
-        if (typeof it.label !== "string") throw new Error(`${name} row.label must be string`);
-        // amount can be number or string (frontend uses string input)
-        if (it.amount !== undefined && typeof it.amount !== "number" && typeof it.amount !== "string")
-          throw new Error(`${name} row.amount must be number|string`);
-        if (it.remarks !== undefined && typeof it.remarks !== "string")
-          throw new Error(`${name} row.remarks must be string`);
-        if (it.source !== undefined && typeof it.source !== "string")
-          throw new Error(`${name} row.source must be string`);
-      }
-    }
-  }
-
-  validateArr(body.usaAssets, "usaAssets");
-  validateArr(body.usaLiabs, "usaLiabs");
-  validateArr(body.indiaAssets, "indiaAssets");
-  validateArr(body.indiaLiabs, "indiaLiabs");
-
-  return body;
-}
-
-async function navGet(event) {
-  const userId = getUserIdFromJwt(event);
-  const item = await getItem(userId, NAV_ASSET_ID);
-  if (!item || item.assetType !== NAV_ASSET_TYPE) return json(200, null);
-  return json(200, item.state || null);
-}
-
-async function navPut(event) {
-  const userId = getUserIdFromJwt(event);
-  const body = parseBody(event);
-  if (!body) return badRequest("Invalid JSON body");
-
-  let state;
-  try {
-    state = validateNavState(body);
-  } catch (e) {
-    return badRequest(e.message);
-  }
-
-  const now = new Date().toISOString();
-
-  const item = {
-    userId,
-    assetId: NAV_ASSET_ID,
-    assetType: NAV_ASSET_TYPE,
-    state,
-    gsi1pk: userId,
-    gsi1sk: `NAV_STATE#${NAV_ASSET_ID}`,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  // preserve createdAt if exists
-  const existing = await getItem(userId, NAV_ASSET_ID);
-  if (existing?.createdAt) item.createdAt = existing.createdAt;
-
-  await putItem(item);
-  return json(200, { ok: true });
-}
-
-async function navDelete(event) {
-  const userId = getUserIdFromJwt(event);
-  const existing = await getItem(userId, NAV_ASSET_ID);
-  if (!existing || existing.assetType !== NAV_ASSET_TYPE) return json(204, null);
-  await deleteItem(userId, NAV_ASSET_ID);
-  return json(204, null);
-}
 
 
 /* ---------------- main router ---------------- */
@@ -919,7 +941,16 @@ module.exports.handler = async (event) => {
 
     if (method === "OPTIONS") return json(204, null);
 
-    // FixedIncome
+    
+    // NAV state (liabilities)
+    if (path === NAV_BASE) {
+      if (method === "GET") return navGet(event);
+      if (method === "PUT") return navPut(event);
+      if (method === "DELETE") return navDelete(event);
+      return badRequest(`Unsupported method ${method} for ${NAV_BASE}`);
+    }
+
+// FixedIncome
     if (path === FIXED_BASE) {
       if (method === "GET") return fixedList(event);
       if (method === "POST") return fixedCreate(event);
@@ -990,54 +1021,22 @@ module.exports.handler = async (event) => {
       return badRequest(`Unsupported method ${method} for ${OPTIONS_TX_BASE}/{txId}`);
     }
 
-    // ✅ NAV bucket: Retirement
-    if (path === RETIRE_TX_BASE) {
-      if (method === "GET") return retireHandlers.list(event);
-      if (method === "POST") return retireHandlers.create(event);
-      return badRequest(`Unsupported method ${method} for ${RETIRE_TX_BASE}`);
-    }
-    if (path.startsWith(`${RETIRE_TX_BASE}/`)) {
-      const txId = decodeURIComponent(path.slice(`${RETIRE_TX_BASE}/`.length)).trim();
-      if (!txId) return badRequest("txId is required");
-      if (method === "PATCH") return retireHandlers.update(event, txId);
-      if (method === "DELETE") return retireHandlers.del(event, txId);
-      return badRequest(`Unsupported method ${method} for ${RETIRE_TX_BASE}/{txId}`);
-    }
+    
 
-    // ✅ NAV bucket: Education / 529
-    if (path === EDUCATION_TX_BASE) {
-      if (method === "GET") return eduHandlers.list(event);
-      if (method === "POST") return eduHandlers.create(event);
-      return badRequest(`Unsupported method ${method} for ${EDUCATION_TX_BASE}`);
-    }
-    if (path.startsWith(`${EDUCATION_TX_BASE}/`)) {
-      const txId = decodeURIComponent(path.slice(`${EDUCATION_TX_BASE}/`.length)).trim();
-      if (!txId) return badRequest("txId is required");
-      if (method === "PATCH") return eduHandlers.update(event, txId);
-      if (method === "DELETE") return eduHandlers.del(event, txId);
-      return badRequest(`Unsupported method ${method} for ${EDUCATION_TX_BASE}/{txId}`);
-    }
-
-    // ✅ NAV bucket: Property
-    if (path === OTHERPROP_TX_BASE) {
-      if (method === "GET") return propHandlers.list(event);
-      if (method === "POST") return propHandlers.create(event);
-      return badRequest(`Unsupported method ${method} for ${OTHERPROP_TX_BASE}`);
-    }
-    if (path.startsWith(`${OTHERPROP_TX_BASE}/`)) {
-      const txId = decodeURIComponent(path.slice(`${OTHERPROP_TX_BASE}/`.length)).trim();
-      if (!txId) return badRequest("txId is required");
-      if (method === "PATCH") return propHandlers.update(event, txId);
-      if (method === "DELETE") return propHandlers.del(event, txId);
-      return badRequest(`Unsupported method ${method} for ${OTHERPROP_TX_BASE}/{txId}`);
-    }
-    // NAV
-    if (path === NAV_BASE) {
-      if (method === "GET") return navGet(event);
-      if (method === "PUT") return navPut(event);
-      if (method === "DELETE") return navDelete(event);
-      return badRequest(`Unsupported method ${method} for ${NAV_BASE}`);
-    }
+// Other Assets
+if (path === OTHER_ASSETS_BASE) {
+  if (method === "GET") return otherAssetsList(event);
+  if (method === "POST") return otherAssetsCreate(event);
+  return badRequest(`Unsupported method ${method} for ${OTHER_ASSETS_BASE}`);
+}
+if (path.startsWith(`${OTHER_ASSETS_BASE}/`)) {
+  const assetId = decodeURIComponent(path.slice(`${OTHER_ASSETS_BASE}/`.length)).trim();
+  if (!assetId) return badRequest("assetId is required");
+  if (method === "GET") return otherAssetsGet(event, assetId);
+  if (method === "PATCH") return otherAssetsUpdate(event, assetId);
+  if (method === "DELETE") return otherAssetsDelete(event, assetId);
+  return badRequest(`Unsupported method ${method} for ${OTHER_ASSETS_BASE}/{assetId}`);
+}
 
     return notFound();
   } catch (e) {

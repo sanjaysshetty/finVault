@@ -3,6 +3,8 @@ console.log("VITE_API_BASE_URL =", import.meta.env.VITE_API_BASE_URL);
 
 const LS_KEY = "finvault.fixedIncome.v1"; // kept for reference only (no longer used for persistence)
 
+const COUNTRY_OPTIONS = ["USA", "India"];
+
 const THEME = {
   pageText: "#CBD5F5",
   title: "#F9FAFB",
@@ -95,6 +97,7 @@ function computeValue({
 }
 
 const DEFAULT_FORM = {
+  country: "USA",
   name: "",
   principal: "",
   annualRatePct: "",
@@ -167,8 +170,11 @@ async function apiFetch(path, { method = "GET", body } = {}) {
 }
 
 function normalizeApiRow(item) {
+  const c = String(item?.country || "").trim();
+  const country = c ? (c.toUpperCase() === "INDIA" ? "INDIA" : "USA") : "USA";
   return {
     ...item,
+    country,
     id: item.assetId || item.id,
   };
 }
@@ -185,6 +191,7 @@ export default function FixedIncome() {
 
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [countryFilter, setCountryFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState("startDate");
   const [sortDir, setSortDir] = useState("desc");
   const [loading, setLoading] = useState(false);
@@ -253,9 +260,14 @@ export default function FixedIncome() {
     const q = search.trim().toLowerCase();
     let list = enrichedRows;
 
+    if (countryFilter !== "ALL") {
+      const want = countryFilter === "India" ? "INDIA" : "USA";
+      list = list.filter((r) => String(r.country || "").toUpperCase() === want);
+    }
+
     if (q) {
       list = list.filter((r) => {
-        const hay = `${r.name || ""} ${r.notes || ""}`.toLowerCase();
+        const hay = `${r.country || ""} ${r.name || ""} ${r.notes || ""}`.toLowerCase();
         return hay.includes(q);
       });
     }
@@ -264,6 +276,8 @@ export default function FixedIncome() {
 
     const getVal = (r) => {
       switch (sortKey) {
+        case "country":
+          return String(r.country || "");
         case "principal":
           return safeNum(r.principal, 0);
         case "currentValue":
@@ -284,15 +298,18 @@ export default function FixedIncome() {
     });
 
     return list;
-  }, [enrichedRows, search, sortKey, sortDir]);
+  }, [enrichedRows, search, countryFilter, sortKey, sortDir]);
 
   const summary = useMemo(() => {
-    const invested = enrichedRows.reduce((s, r) => s + safeNum(r.principal, 0), 0);
-    const current = enrichedRows.reduce((s, r) => s + safeNum(r.currentValue, 0), 0);
-    const interest = enrichedRows.reduce((s, r) => s + safeNum(r.interestEarnedToDate, 0), 0);
-    const maturity = enrichedRows.reduce((s, r) => s + safeNum(r.maturityAmount, 0), 0);
+    const base = countryFilter === "ALL"
+      ? enrichedRows
+      : enrichedRows.filter((r) => String(r.country || "").toUpperCase() === (countryFilter === "India" ? "INDIA" : "USA"));
+    const invested = base.reduce((s, r) => s + safeNum(r.principal, 0), 0);
+    const current = base.reduce((s, r) => s + safeNum(r.currentValue, 0), 0);
+    const interest = base.reduce((s, r) => s + safeNum(r.interestEarnedToDate, 0), 0);
+    const maturity = base.reduce((s, r) => s + safeNum(r.maturityAmount, 0), 0);
     return { invested, current, interest, maturity };
-  }, [enrichedRows]);
+  }, [enrichedRows, countryFilter]);
 
   function resetForm({ hide } = {}) {
     setForm(DEFAULT_FORM);
@@ -316,7 +333,9 @@ export default function FixedIncome() {
   function startEdit(r) {
     setError("");
     setEditingId(r.id);
+    const c = String(r.country || "").trim().toUpperCase();
     setForm({
+      country: c === "INDIA" ? "India" : "USA",
       name: r.name || "",
       principal: String(r.principal ?? ""),
       annualRatePct: String(((safeNum(r.annualRate, 0) * 100) || 0).toFixed(4)).replace(
@@ -336,9 +355,11 @@ export default function FixedIncome() {
   }
 
   function buildPayloadFromForm() {
+    const country = String(form.country || "").trim();
     const principal = safeNum(form.principal, NaN);
     const annualRatePct = safeNum(form.annualRatePct, NaN);
 
+    if (!country || !COUNTRY_OPTIONS.includes(country)) throw new Error("Country is required");
     if (!form.name.trim()) throw new Error("Name is required");
     if (!form.startDate) throw new Error("Start date is required");
     if (!Number.isFinite(principal) || principal <= 0)
@@ -350,6 +371,7 @@ export default function FixedIncome() {
     const annualRate = annualRatePct / 100;
 
     return {
+      country: country === "India" ? "INDIA" : "USA",
       name: form.name.trim(),
       principal: Number(principal.toFixed(2)),
       annualRate: Number(annualRate.toFixed(8)),
@@ -485,7 +507,7 @@ export default function FixedIncome() {
           ) : null}
 
           <form onSubmit={onSubmit} style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 10 }}>
               <Field label="Name">
                 <input
                   value={form.name}
@@ -494,6 +516,20 @@ export default function FixedIncome() {
                   style={input}
                   disabled={saving}
                 />
+              </Field>
+              <Field label="Country">
+                <select
+                  value={form.country}
+                  onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))}
+                  style={input}
+                  disabled={saving}
+                >
+                  {COUNTRY_OPTIONS.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
               </Field>
               <Field label="Principal (USD)">
                 <input
@@ -637,10 +673,21 @@ export default function FixedIncome() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name/notes…"
+              placeholder="Search country/name/notes…"
               style={{ ...input, width: 220 }}
               disabled={loading}
             />
+
+            <select
+              value={countryFilter}
+              onChange={(e) => setCountryFilter(e.target.value)}
+              style={{ ...input, width: 140 }}
+              disabled={loading}
+            >
+              <option value="ALL">All</option>
+              <option value="USA">USA</option>
+              <option value="India">India</option>
+            </select>
 
             <select
               value={sortKey}
@@ -649,6 +696,7 @@ export default function FixedIncome() {
               disabled={loading}
             >
               <option value="startDate">Sort: Start Date</option>
+              <option value="country">Sort: Country</option>
               <option value="maturityDate">Sort: Maturity Date</option>
               <option value="principal">Sort: Principal</option>
               <option value="currentValue">Sort: Current Value</option>
@@ -681,6 +729,9 @@ export default function FixedIncome() {
                   <Th onClick={() => onToggleSort("startDate")} active={sortKey === "startDate"}>
                     Name
                   </Th>
+                  <Th onClick={() => onToggleSort("country")} active={sortKey === "country"}>
+                    Country
+                  </Th>
                   <Th onClick={() => onToggleSort("principal")} active={sortKey === "principal"}>
                     Principal
                   </Th>
@@ -708,6 +759,9 @@ export default function FixedIncome() {
                         <Pill text={r.interestType === "COMPOUND" ? `Compound · ${r.compoundFrequency}` : "Simple"} />
                         <Pill text={`${r.termMonths} months`} />
                       </div>
+                    </Td>
+                    <Td>
+                      {String(r.country || "").toUpperCase() === "INDIA" ? "India" : "USA"}
                     </Td>
                     <Td>{formatMoney(r.principal)}</Td>
                     <Td>{(safeNum(r.annualRate, 0) * 100).toFixed(2)}%</Td>

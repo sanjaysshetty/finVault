@@ -171,6 +171,13 @@ function safeNum(v, fallback = 0) {
   return Number.isFinite(x) ? x : fallback;
 }
 
+// ✅ NEW: filter helper (exclude Property)
+function isPropertyOtherAsset(it) {
+  const cat = String(it?.category || "").trim().toUpperCase();
+  const catKey = String(it?.categoryKey || "").trim().toUpperCase();
+  return cat === "PROPERTY" || catKey === "PROPERTY";
+}
+
 function computeFixedIncomeHolding(items) {
   let holding = 0;
   for (const it of items || []) holding += safeNum(it.currentValue, 0);
@@ -265,17 +272,20 @@ function computeCryptoHolding(transactions, spotMap) {
   return holding;
 }
 
+function computeOtherAssetsHolding(items) {
+  let holding = 0;
+  for (const it of items || []) {
+    // ✅ Exclude Property-category items from portfolio value calc
+    if (isPropertyOtherAsset(it)) continue;
+    holding += safeNum(it?.value ?? it?.assetValue, 0);
+  }
+  return holding;
+}
+
 /* ---------------- Index helpers ---------------- */
 
 function indexPrice(idx) {
-  return numberOrNull(
-    idx?.price ??
-      idx?.regularMarketPrice ??
-      idx?.last ??
-      idx?.close ??
-      idx?.c ??
-      null
-  );
+  return numberOrNull(idx?.price ?? idx?.regularMarketPrice ?? idx?.last ?? idx?.close ?? idx?.c ?? null);
 }
 
 function indexPrevClose(idx) {
@@ -343,27 +353,31 @@ export default function PricesBar() {
 
     try {
       // 1) Load asset data first so /prices can include the right quotes (matches Portfolio.jsx behavior)
-      const [fiResp, bullResp, stockResp, cryptoResp] = await Promise.all([
+      const [fiResp, bullResp, stockResp, cryptoResp, otherResp] = await Promise.all([
         authedFetch(`${API_BASE}/assets/fixedincome`),
         authedFetch(`${API_BASE}/assets/bullion/transactions`),
         authedFetch(`${API_BASE}/assets/stocks/transactions`),
         authedFetch(`${API_BASE}/assets/crypto/transactions`),
+        authedFetch(`${API_BASE}/assets/otherassets`),
       ]);
 
       if (!fiResp.ok) throw new Error(`FixedIncome API ${fiResp.status}`);
       if (!bullResp.ok) throw new Error(`Bullion API ${bullResp.status}`);
       if (!stockResp.ok) throw new Error(`Stocks API ${stockResp.status}`);
       if (!cryptoResp.ok) throw new Error(`Crypto API ${cryptoResp.status}`);
+      if (!otherResp.ok) throw new Error(`OtherAssets API ${otherResp.status}`);
 
       const fiRes = await fiResp.json();
       const bullRes = await bullResp.json();
       const stockRes = await stockResp.json();
       const cryptoRes = await cryptoResp.json();
+      const otherRes = await otherResp.json();
 
       const fixedIncome = extractItems(fiRes);
       const bullionTx = extractItems(bullRes);
       const stockTx = extractItems(stockRes);
       const cryptoTx = extractItems(cryptoRes);
+      const otherAssets = extractItems(otherRes);
 
       const { stocks: stockSyms, crypto: cryptoSyms } = buildSymbolsFromTx(stockTx, cryptoTx);
 
@@ -374,7 +388,7 @@ export default function PricesBar() {
       const pricesRes = await pricesResp.json();
       setData(pricesRes);
 
-      // 3) Compute portfolio total holding value (market value across FI + Bullion + Stocks + Crypto)
+      // 3) Compute portfolio total holding value (market value across FI + Bullion + Stocks + Crypto + Other Assets)
       const spot = {
         GOLD: safeNum(pricesRes?.gold?.price, 0),
         SILVER: safeNum(pricesRes?.silver?.price, 0),
@@ -387,7 +401,9 @@ export default function PricesBar() {
         computeFixedIncomeHolding(fixedIncome) +
         computeBullionHolding(bullionTx, spot) +
         computeStocksHolding(stockTx, stockQuotes) +
-        computeCryptoHolding(cryptoTx, cryptoSpots);
+        computeCryptoHolding(cryptoTx, cryptoSpots) +
+        // ✅ excludes Property
+        computeOtherAssetsHolding(otherAssets);
 
       setPortfolioValue(Number.isFinite(total) ? total : null);
     } catch {
@@ -452,11 +468,11 @@ export default function PricesBar() {
         display: "flex",
         alignItems: "center",
         gap: 8,
-        flexWrap: "nowrap",     // critical: never wrap into 2 lines
-        overflowX: "auto",      // critical: allow scroll instead of overlap
+        flexWrap: "nowrap", // critical: never wrap into 2 lines
+        overflowX: "auto", // critical: allow scroll instead of overlap
         overflowY: "hidden",
         maxWidth: "100%",
-        minWidth: 0,            // critical: allow shrink inside parent flex
+        minWidth: 0, // critical: allow shrink inside parent flex
         paddingBottom: 2,
         WebkitOverflowScrolling: "touch",
       }}
@@ -466,7 +482,7 @@ export default function PricesBar() {
         label="Portfolio"
         value={portfolioLoading ? "…" : fmtMaybeNumberUSD(portfolioValue)}
         accent="#FFFFFF"
-        title="Total holding value (Fixed Income + Stocks + Crypto + Bullion)"
+        title="Total holding value (Fixed Income + Stocks + Crypto + Bullion + Other Assets; excluding Property in Other Assets)"
       />
 
       <MiniCard label="S&P 500" value={spxValue} accent={priceColor(spxP, spxPC)} />
