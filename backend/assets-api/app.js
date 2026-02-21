@@ -56,6 +56,125 @@ function toUpperTrim(v) {
   return String(v || "").toUpperCase().trim();
 }
 
+/* =========================================================
+   INSURANCE
+========================================================= */
+
+const INSURANCE_BASE = "/assets/insurance";
+
+function validateInsurance(body) {
+  const countryRaw = String(body.country || "USA").trim();
+  const c = countryRaw.toUpperCase();
+  let country;
+  if (c === "INDIA" || countryRaw.toLowerCase() === "india" || c === "IN") country = "INDIA";
+  else if (c === "USA" || c === "US") country = "USA";
+  else throw new Error("country must be USA or India");
+
+  const insuranceType = String(body.insuranceType || "").trim();
+  if (!insuranceType) throw new Error("insuranceType is required");
+
+  const provider = String(body.provider || "").trim();
+  if (!provider) throw new Error("provider is required");
+
+  const coveredAmount = Number(body.coveredAmount);
+  if (!Number.isFinite(coveredAmount) || coveredAmount <= 0) {
+    throw new Error("coveredAmount must be a number > 0");
+  }
+
+  const remarks = String(body.remarks || "").trim();
+
+  return {
+    country,
+    insuranceType,
+    provider,
+    coveredAmount: Number(coveredAmount.toFixed(2)),
+    remarks,
+  };
+}
+
+async function insuranceList(event) {
+  const userId = getUserIdFromJwt(event);
+  const items = await queryByGSI1(userId, "INSURANCE#");
+  return json(200, items);
+}
+
+async function insuranceCreate(event) {
+  const userId = getUserIdFromJwt(event);
+  const body = parseBody(event);
+  if (!body) return badRequest("Invalid JSON body");
+
+  let asset;
+  try {
+    asset = validateInsurance(body);
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const assetId = body.assetId || pickId("ins");
+  const now = new Date().toISOString();
+
+  const item = {
+    userId,
+    assetId,
+    assetType: "INSURANCE",
+    ...asset,
+    gsi1pk: userId,
+    gsi1sk: `INSURANCE#${asset.country}#${asset.insuranceType.toUpperCase()}#${assetId}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(201, item);
+}
+
+async function insuranceGet(event, assetId) {
+  const userId = getUserIdFromJwt(event);
+  const item = await getItem(userId, assetId);
+  if (!item || item.assetType !== "INSURANCE") return notFound();
+  return json(200, item);
+}
+
+async function insuranceUpdate(event, assetId) {
+  const userId = getUserIdFromJwt(event);
+  const patch = parseBody(event);
+  if (!patch) return badRequest("Invalid JSON body");
+
+  const existing = await getItem(userId, assetId);
+  if (!existing || existing.assetType !== "INSURANCE") return notFound();
+
+  let merged;
+  try {
+    merged = validateInsurance({ ...existing, ...patch });
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const now = new Date().toISOString();
+
+  const item = {
+    ...existing,
+    ...merged,
+    userId,
+    assetId,
+    assetType: "INSURANCE",
+    gsi1pk: userId,
+    gsi1sk: `INSURANCE#${merged.country}#${String(merged.insuranceType).toUpperCase()}#${assetId}`,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(200, item);
+}
+
+async function insuranceDelete(event, assetId) {
+  const userId = getUserIdFromJwt(event);
+  const existing = await getItem(userId, assetId);
+  if (!existing || existing.assetType !== "INSURANCE") return notFound();
+
+  await deleteItem(userId, assetId);
+  return json(204, null);
+}
 
 /* =========================================================
    NAV STATE (liabilities persisted)
@@ -1021,8 +1140,21 @@ module.exports.handler = async (event) => {
       return badRequest(`Unsupported method ${method} for ${OPTIONS_TX_BASE}/{txId}`);
     }
 
+    // Insurance
+    if (path === INSURANCE_BASE) {
+      if (method === "GET") return insuranceList(event);
+      if (method === "POST") return insuranceCreate(event);
+      return badRequest(`Unsupported method ${method} for ${INSURANCE_BASE}`);
+    }
+    if (path.startsWith(`${INSURANCE_BASE}/`)) {
+      const assetId = decodeURIComponent(path.slice(`${INSURANCE_BASE}/`.length)).trim();
+      if (!assetId) return badRequest("assetId is required");
+      if (method === "GET") return insuranceGet(event, assetId);
+      if (method === "PATCH") return insuranceUpdate(event, assetId);
+      if (method === "DELETE") return insuranceDelete(event, assetId);
+      return badRequest(`Unsupported method ${method} for ${INSURANCE_BASE}/{assetId}`);
+    }
     
-
 // Other Assets
 if (path === OTHER_ASSETS_BASE) {
   if (method === "GET") return otherAssetsList(event);
