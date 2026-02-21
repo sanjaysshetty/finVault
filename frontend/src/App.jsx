@@ -3,7 +3,6 @@ import Shell from "./layout/Shell";
 
 import Prices from "./pages/Prices";
 import Spending from "./pages/Spending";
-
 import Portfolio from "./pages/Portfolio";
 import Stocks from "./pages/Stocks";
 import Bullion from "./pages/Bullion";
@@ -22,7 +21,6 @@ import RequireAuth from "./auth/RequireAuth";
 
 import "./App.css";
 
-// ✅ Works in both dev (/) and prod (/app) without changing code
 function computeBasename() {
   const p = window.location.pathname || "/";
   return p.startsWith("/app") ? "/app" : "/";
@@ -34,7 +32,6 @@ export default function App() {
       <Routes>
         {/* ✅ callback must be outside auth guard */}
         <Route path="/auth/callback" element={<AuthCallback />} />
-
         {/* ✅ everything else requires login */}
         <Route
           element={
