@@ -1,8 +1,0 @@
-{
-  "version": 1,
-  "categories": [
-    { "category": "Groceries", "subcategories": ["Produce", "Dairy", "Meat & Seafood", "Pantry", "Snacks", "Beverages"] },
-    { "category": "Dining", "subcategories": ["Fast Food", "Casual Dining", "Coffee & Tea", "Delivery"] },
-    { "category": "Household", "subcategories": ["Cleaning", "Paper Goods", "Kitchen Supplies"] }
-  ]
-}
