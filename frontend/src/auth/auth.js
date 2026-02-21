@@ -92,15 +92,29 @@ export async function login() {
 
 export async function handleAuthCallback() {
   const params = new URLSearchParams(window.location.search);
-  const code = params.get("code");
+
+  // ✅ If Cognito redirected with an error, show it
+  const err = params.get("error");
+  const errDesc = params.get("error_description");
+  if (err) {
+    throw new Error(decodeURIComponent(errDesc || err));
+  }
+
+  // ✅ Support rare cases where code ends up in hash (defensive)
+  let code = params.get("code");
+  if (!code && window.location.hash) {
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    code = hashParams.get("code");
+  }
+
   if (!code) throw new Error("Missing authorization code");
 
   const verifier = pkceGet();
   if (!verifier) {
-    // Mobile/in-app browser sometimes loses sessionStorage between redirects
-    // Clear any stale state and restart login.
     pkceClear();
-    throw new Error("Missing PKCE verifier (mobile lost session). Please tap Login again.");
+    throw new Error(
+      "Missing PKCE verifier (session lost). Please tap Login again."
+    );
   }
 
   const tokenUrl = `${COGNITO_DOMAIN}/oauth2/token`;
@@ -122,15 +136,12 @@ export async function handleAuthCallback() {
   const json = await res.json();
   if (!res.ok) throw new Error(json.error_description || "Token exchange failed");
 
-  // Store tokens in sessionStorage (NOT localStorage)
   sessionStorage.setItem(TOKEN_KEY, json.access_token);
   if (json.id_token) sessionStorage.setItem(ID_TOKEN_KEY, json.id_token);
   if (json.refresh_token) sessionStorage.setItem(REFRESH_KEY, json.refresh_token);
 
-  // Clean up verifier from both stores
   pkceClear();
 
-  // Remove ?code=... from URL safely (works for / and /app)
   const base = window.location.pathname.startsWith("/app") ? "/app" : "";
   window.history.replaceState({}, document.title, `${base}/`);
 }

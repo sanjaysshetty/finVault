@@ -123,7 +123,9 @@ export default function TopBar() {
         >
           Welcome{" "}
           <strong style={{ color: "rgba(248,250,252,0.95)", fontWeight: 700 }}>
-            {user?.email || user?.username || "User"}
+            {user?.firstName?.trim()
+              ? user.firstName
+              : user?.email || user?.username || "User"}
           </strong>
         </span>
 
