@@ -1,3 +1,17 @@
+// FrontendProxyFunction - full replacement
+// Serves a Vite/React SPA stored in S3 under a prefix (default: "app/") behind API Gateway HTTP API routes:
+//   GET /app
+//   GET /app/{proxy+}
+//
+// Expected S3 layout (matches your screenshot):
+//   s3://<FRONTEND_BUCKET>/app/index.html
+//   s3://<FRONTEND_BUCKET>/app/assets/...
+//
+// Required env:
+//   FRONTEND_BUCKET = your bucket name
+// Optional env:
+//   FRONTEND_PREFIX = "app" (or "app/")  <-- recommended to set to "app"
+
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 
 const s3 = new S3Client({});
@@ -15,61 +29,98 @@ function guessContentType(key) {
   if (k.endsWith(".ico")) return "image/x-icon";
   if (k.endsWith(".txt")) return "text/plain; charset=utf-8";
   if (k.endsWith(".map")) return "application/json; charset=utf-8";
+  if (k.endsWith(".woff")) return "font/woff";
+  if (k.endsWith(".woff2")) return "font/woff2";
   return "application/octet-stream";
 }
 
 function isBinaryContentType(ct) {
+  const c = String(ct || "").toLowerCase();
   return (
-    ct.startsWith("image/") ||
-    ct === "application/octet-stream" ||
-    ct === "application/pdf" ||
-    ct === "image/x-icon"
+    c.startsWith("image/") ||
+    c === "application/octet-stream" ||
+    c === "application/pdf" ||
+    c === "image/x-icon" ||
+    c.startsWith("font/")
   );
 }
 
 async function streamToBuffer(stream) {
   const chunks = [];
-  for await (const c of stream) chunks.push(c);
+  for await (const c of stream) chunks.push(Buffer.from(c));
   return Buffer.concat(chunks);
 }
 
 function normalizePath(p) {
-  p = String(p || "");
-  return p.replace(/^\/+/, "");
+  return String(p || "").replace(/^\/+/, "");
+}
+
+function normalizePrefix(pfx) {
+  // "app", "/app", "app/", "/app/" -> "app/"
+  const cleaned = String(pfx || "app").replace(/^\/+|\/+$/g, "");
+  return cleaned ? `${cleaned}/` : "";
+}
+
+function looksLikeAsset(key) {
+  // Has a file extension at the end (e.g. .js .css .png)
+  return /\.[a-z0-9]+$/i.test(key);
 }
 
 exports.handler = async (event) => {
   const bucket = process.env.FRONTEND_BUCKET;
-  const prefix = process.env.FRONTEND_PREFIX || "app/";
+  const prefix = normalizePrefix(process.env.FRONTEND_PREFIX || "app");
 
-  if (!bucket) return { statusCode: 500, body: "Missing FRONTEND_BUCKET env var" };
+  if (!bucket) {
+    return { statusCode: 500, body: "Missing FRONTEND_BUCKET env var" };
+  }
 
   const rawPath = event?.rawPath || "/";
   const path = normalizePath(rawPath);
 
-  // Only serve under /app
-  if (!path.startsWith("app")) return { statusCode: 404, body: "Not Found" };
+  // Only serve /app and /app/*
+  if (!(path === "app" || path === "app/" || path.startsWith("app/"))) {
+    return { statusCode: 404, body: "Not Found" };
+  }
 
-  let key = path;
+  // Map request path to S3 key:
+  //   /app or /app/ -> <prefix>index.html
+  //   /app/<rest>   -> <prefix><rest>
+  let key;
+  if (path === "app" || path === "app/") {
+    key = `${prefix}index.html`;
+  } else {
+    const rest = path.slice("app/".length); // remove "app/"
+    key = `${prefix}${rest}`;
+  }
 
-  // /app or /app/ => index.html
-  if (key === "app" || key === "app/") key = "app/index.html";
+  // If ends with "/" (folder), serve index.html within that folder
   if (key.endsWith("/")) key += "index.html";
 
   let obj;
   try {
     obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   } catch (e) {
-    // SPA fallback: if no extension, serve index.html
-    const looksLikeAsset = /\.[a-z0-9]+$/i.test(key);
-    if (!looksLikeAsset) {
+    // SPA fallback:
+    // If request doesn't look like a real file (no extension), serve index.html
+    if (!looksLikeAsset(key)) {
       try {
-        key = "app/index.html";
+        key = `${prefix}index.html`;
         obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-      } catch {
+      } catch (e2) {
+        console.log("FrontendProxy: index.html not found", {
+          bucket,
+          keyTried: key,
+          error: e2?.name || e2,
+        });
         return { statusCode: 404, body: "index.html not found in S3" };
       }
     } else {
+      // Real asset missing
+      console.log("FrontendProxy: asset not found", {
+        bucket,
+        keyTried: key,
+        error: e?.name || e,
+      });
       return { statusCode: 404, body: "File not found" };
     }
   }
@@ -78,6 +129,10 @@ exports.handler = async (event) => {
   const buf = await streamToBuffer(obj.Body);
 
   const isIndex = key.endsWith("index.html");
+
+  // Cache:
+  // - index.html: no-cache (so updates propagate)
+  // - hashed assets: long cache
   const cacheControl = isIndex
     ? "no-store, no-cache, must-revalidate"
     : "public, max-age=31536000, immutable";
@@ -86,6 +141,9 @@ exports.handler = async (event) => {
     "Content-Type": contentType,
     "Cache-Control": cacheControl,
   };
+
+  // Optional CORS (usually not needed for same-origin SPA, but harmless):
+  // headers["Access-Control-Allow-Origin"] = "*";
 
   if (isBinaryContentType(contentType)) {
     return {
@@ -96,5 +154,9 @@ exports.handler = async (event) => {
     };
   }
 
-  return { statusCode: 200, headers, body: buf.toString("utf-8") };
+  return {
+    statusCode: 200,
+    headers,
+    body: buf.toString("utf-8"),
+  };
 };

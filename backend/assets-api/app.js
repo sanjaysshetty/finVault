@@ -1049,7 +1049,128 @@ async function optionsDelete(event, txId) {
   return json(204, null);
 }
 
+/* =========================================================
+   FUTURES TRANSACTIONS
+   Fields: ticker, contractMonth, type (BUY/SELL), tradeDate,
+           qty, price, pointValue, fees, notes
+========================================================= */
 
+const FUTURES_TX_BASE = "/assets/futures/transactions";
+
+function validateFuturesTx(body) {
+  const type = String(body.type || "").toUpperCase();
+  if (!["BUY", "SELL"].includes(type)) throw new Error("type must be BUY or SELL");
+
+  const ticker = String(body.ticker || "").toUpperCase().trim();
+  if (!ticker) throw new Error("ticker is required (e.g., ES, NQ, CL)");
+
+  const tradeDate = String(body.tradeDate || "").slice(0, 10);
+  if (!tradeDate) throw new Error("tradeDate is required (YYYY-MM-DD)");
+
+  const contractMonth = String(body.contractMonth || "").trim();
+
+  const qty = Number(body.qty);
+  if (!Number.isFinite(qty) || qty <= 0) throw new Error("qty must be a positive number");
+
+  const price = Number(body.price);
+  if (!Number.isFinite(price) || price <= 0) throw new Error("price must be > 0");
+
+  const pointValue = Number(body.pointValue);
+  if (!Number.isFinite(pointValue) || pointValue <= 0)
+    throw new Error("pointValue must be > 0 (e.g., 50 for ES, 20 for NQ)");
+
+  const fees = body.fees === undefined || body.fees === "" ? 0 : Number(body.fees);
+  if (!Number.isFinite(fees) || fees < 0) throw new Error("fees must be >= 0");
+
+  return {
+    type,
+    ticker,
+    contractMonth,
+    tradeDate,
+    qty: Number(qty.toFixed(4)),
+    price: Number(price.toFixed(4)),
+    pointValue: Number(pointValue.toFixed(2)),
+    fees: Number(fees.toFixed(2)),
+    notes: String(body.notes || "").trim(),
+  };
+}
+
+async function futuresList(event) {
+  const userId = getUserIdFromJwt(event);
+  const items = await queryByGSI1(userId, "FUTURES_TX#");
+  return json(200, items);
+}
+
+async function futuresCreate(event) {
+  const userId = getUserIdFromJwt(event);
+  const body = parseBody(event);
+  if (!body) return badRequest("Invalid JSON body");
+
+  let tx;
+  try {
+    tx = validateFuturesTx(body);
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const txId = body.txId || body.assetId || pickId("ftx");
+  const now = new Date().toISOString();
+
+  const item = {
+    userId,
+    assetId: txId,
+    txId,
+    assetType: "FUTURES_TX",
+    ...tx,
+    gsi1pk: userId,
+    gsi1sk: `FUTURES_TX#${tx.tradeDate}#${txId}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(201, item);
+}
+
+async function futuresUpdate(event, txId) {
+  const userId = getUserIdFromJwt(event);
+  const patch = parseBody(event);
+  if (!patch) return badRequest("Invalid JSON body");
+
+  const existing = await getItem(userId, txId);
+  if (!existing || existing.assetType !== "FUTURES_TX") return notFound();
+
+  let merged;
+  try {
+    merged = validateFuturesTx({ ...existing, ...patch });
+  } catch (e) {
+    return badRequest(e.message);
+  }
+
+  const now = new Date().toISOString();
+  const item = {
+    ...existing,
+    ...merged,
+    userId,
+    assetId: txId,
+    txId,
+    gsi1pk: userId,
+    gsi1sk: `FUTURES_TX#${merged.tradeDate}#${txId}`,
+    updatedAt: now,
+  };
+
+  await putItem(item);
+  return json(200, item);
+}
+
+async function futuresDelete(event, txId) {
+  const userId = getUserIdFromJwt(event);
+  const existing = await getItem(userId, txId);
+  if (!existing || existing.assetType !== "FUTURES_TX") return notFound();
+
+  await deleteItem(userId, txId);
+  return json(204, null);
+}
 
 /* ---------------- main router ---------------- */
 
@@ -1138,6 +1259,20 @@ module.exports.handler = async (event) => {
       if (method === "PATCH") return optionsUpdate(event, txId);
       if (method === "DELETE") return optionsDelete(event, txId);
       return badRequest(`Unsupported method ${method} for ${OPTIONS_TX_BASE}/{txId}`);
+    }
+
+    // Futures TX
+    if (path === FUTURES_TX_BASE) {
+      if (method === "GET") return futuresList(event);
+      if (method === "POST") return futuresCreate(event);
+      return badRequest(`Unsupported method ${method} for ${FUTURES_TX_BASE}`);
+    }
+    if (path.startsWith(`${FUTURES_TX_BASE}/`)) {
+      const txId = decodeURIComponent(path.slice(`${FUTURES_TX_BASE}/`.length)).trim();
+      if (!txId) return badRequest("txId is required");
+      if (method === "PATCH") return futuresUpdate(event, txId);
+      if (method === "DELETE") return futuresDelete(event, txId);
+      return badRequest(`Unsupported method ${method} for ${FUTURES_TX_BASE}/{txId}`);
     }
 
     // Insurance
