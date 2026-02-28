@@ -56,7 +56,7 @@ exports.handler = async (event) => {
     const userId = getUserIdFromJwt(event);
     if (!userId) return json(401, { error: "Unauthorized" });
 
-    const bucket = process.env.RECEIPTS_BUCKET || "finapp-receipts-1152";
+    const bucket = process.env.RECEIPTS_BUCKET || "finvault-receipts-sandbox";
     const prefix = process.env.RECEIPTS_PREFIX || "receipts/";
     const expiresIn = Number(process.env.PRESIGN_EXPIRES_SECONDS || "300");
 

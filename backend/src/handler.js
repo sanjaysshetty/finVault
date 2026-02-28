@@ -43,7 +43,7 @@ function parseCsvSymbols(s) {
 
 /* -------------------- S3 helpers (metals) -------------------- */
 const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
-const METALS_BUCKET = process.env.METALS_BUCKET || "daily-metal-prices-1152";
+const METALS_BUCKET = process.env.METALS_BUCKET || "finvault-metal-prices-sandbox-1152";
 
 const s3 = new S3Client({ region: REGION });
 
