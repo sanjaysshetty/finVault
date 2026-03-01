@@ -1,24 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-console.log("VITE_API_BASE_URL =", import.meta.env.VITE_API_BASE_URL);
-
-const LS_KEY = "finvault.fixedIncome.v1"; // kept for reference only (no longer used for persistence)
+import { useMemo, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys } from "../api/client.js";
+import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { EmptyState } from "../components/ui/EmptyState.jsx";
 
 const COUNTRY_OPTIONS = ["USA", "India"];
-
-const THEME = {
-  pageText: "#CBD5F5",
-  title: "#F9FAFB",
-  muted: "#94A3B8",
-  panelBg: "rgba(15, 23, 42, 0.65)",
-  panelBorder: "rgba(148, 163, 184, 0.16)",
-  rowBorder: "rgba(148, 163, 184, 0.12)",
-  inputBg: "rgba(2, 6, 23, 0.45)",
-  inputBorder: "rgba(148, 163, 184, 0.18)",
-  primaryBg: "rgba(99, 102, 241, 0.18)",
-  primaryBorder: "rgba(99, 102, 241, 0.45)",
-  dangerBg: "rgba(239, 68, 68, 0.12)",
-  dangerBorder: "rgba(239, 68, 68, 0.35)",
-};
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -36,6 +22,11 @@ function safeNum(v, fallback = 0) {
 function formatMoney(n) {
   const x = safeNum(n, 0);
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+}
+
+function formatPct(n) {
+  const x = safeNum(n, 0);
+  return `${x > 0 ? "+" : ""}${x.toFixed(2)}%`;
 }
 
 function addMonths(dateISO, months) {
@@ -57,33 +48,20 @@ function yearsBetween(startISO, endISO) {
 
 function freqToN(freq) {
   switch ((freq || "YEARLY").toUpperCase()) {
-    case "DAILY":
-      return 365;
-    case "MONTHLY":
-      return 12;
-    case "QUARTERLY":
-      return 4;
+    case "DAILY": return 365;
+    case "MONTHLY": return 12;
+    case "QUARTERLY": return 4;
     case "YEARLY":
-    default:
-      return 1;
+    default: return 1;
   }
 }
 
-function computeValue({
-  principal,
-  annualRate,
-  startDate,
-  asOfDate,
-  interestType,
-  compoundFrequency,
-}) {
+function computeValue({ principal, annualRate, startDate, asOfDate, interestType, compoundFrequency }) {
   const P = safeNum(principal, 0);
   const r = safeNum(annualRate, 0);
   if (!startDate) return { value: P, interest: 0 };
-
   const t = yearsBetween(startDate, asOfDate);
   const type = (interestType || "SIMPLE").toUpperCase();
-
   let value = P;
   if (type === "COMPOUND") {
     const n = freqToN(compoundFrequency);
@@ -91,9 +69,7 @@ function computeValue({
   } else {
     value = P * (1 + r * t);
   }
-
-  const interest = value - P;
-  return { value, interest };
+  return { value, interest: value - P };
 }
 
 const DEFAULT_FORM = {
@@ -108,208 +84,138 @@ const DEFAULT_FORM = {
   notes: "",
 };
 
-/* ---------------- API wiring ---------------- */
-function getApiBase() {
-  const envBase = (import.meta?.env?.VITE_API_BASE_URL || "").trim();
-  if (envBase) return envBase.replace(/\/+$/, "");
-
-  const winBase = (window?.__FINVAULT_API_BASE_URL || "").trim?.() || "";
-  if (winBase) return winBase.replace(/\/+$/, "");
-
-  return "";
-}
-
-function getAccessToken() {
-  return (
-    sessionStorage.getItem("finvault.accessToken") ||
-    sessionStorage.getItem("access_token") ||
-    sessionStorage.getItem("token") ||
-    ""
-  );
-}
-
-function buildApiUrl(path) {
-  const p = path.startsWith("/") ? path : `/${path}`;
-  const base = getApiBase();
-  return new URL(p, base || window.location.origin);
-}
-
-async function apiFetch(path, { method = "GET", body } = {}) {
-  const base = getApiBase();
-  if (!base) throw new Error("Missing API base. Set VITE_API_BASE_URL in .env");
-
-  const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
-  const token = getAccessToken();
-
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (res.status === 204) return null;
-
-  const text = await res.text().catch(() => "");
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    throw new Error(
-      `API returned non-JSON (${res.status}). First chars: ${text.slice(0, 30)}`
-    );
-  }
-
-  if (!res.ok) {
-    throw new Error(data?.error || data?.message || `Request failed (${res.status})`);
-  }
-
-  return data;
-}
 
 function normalizeApiRow(item) {
   const c = String(item?.country || "").trim();
   const country = c ? (c.toUpperCase() === "INDIA" ? "INDIA" : "USA") : "USA";
-  return {
-    ...item,
-    country,
-    id: item.assetId || item.id,
-  };
+  return { ...item, country, id: item.assetId || item.id };
 }
 
-/* ---------------- Component ---------------- */
+/* ================================================================
+   COMPONENT
+================================================================ */
 
 export default function FixedIncome() {
-  const [rows, setRows] = useState([]);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
-
-  // ✅ NEW: hide Add card by default
   const [showForm, setShowForm] = useState(false);
-
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [countryFilter, setCountryFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState("startDate");
   const [sortDir, setSortDir] = useState("desc");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError("");
+  const queryClient = useQueryClient();
 
-    apiFetch("/assets/fixedincome")
-      .then((res) => {
-        if (!alive) return;
-        const list = Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
-        setRows(list.map(normalizeApiRow));
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setError(e?.message || "Failed to load fixed income records");
-        setRows([]);
-      })
-      .finally(() => {
-        if (!alive) return;
-        setLoading(false);
-      });
+  const { data: rawData, isLoading: loading, error: fetchError } = useQuery({
+    queryKey: queryKeys.fixedIncome(),
+    queryFn: () => api.get("/assets/fixedincome"),
+  });
 
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const rows = useMemo(() => {
+    const list = Array.isArray(rawData?.items) ? rawData.items : Array.isArray(rawData) ? rawData : [];
+    return list.map(normalizeApiRow);
+  }, [rawData]);
+
+  const saveMut = useMutation({
+    mutationFn: ({ id, payload }) =>
+      id ? api.patch(`/assets/fixedincome/${encodeURIComponent(id)}`, payload) : api.post("/assets/fixedincome", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.fixedIncome() });
+      resetForm({ hide: true });
+    },
+    onError: (e) => setError(e?.message || "Save failed"),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id) => api.delete(`/assets/fixedincome/${encodeURIComponent(id)}`),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.fixedIncome() });
+      if (editingId === id) resetForm({ hide: true });
+    },
+    onError: (e) => setError(e?.message || "Delete failed"),
+  });
+
+  const saving = saveMut.isPending || deleteMut.isPending;
 
   const asOfDate = todayISO();
 
   const enrichedRows = useMemo(() => {
     return rows.map((r) => {
       const hasBackend =
-        Number.isFinite(Number(r.currentValue)) &&
-        Number.isFinite(Number(r.interestEarnedToDate));
-
+        Number.isFinite(Number(r.currentValue)) && Number.isFinite(Number(r.interestEarnedToDate));
+      let currentValue, interestEarnedToDate;
       if (hasBackend) {
-        return {
-          ...r,
-          currentValue: Number(Number(r.currentValue).toFixed(2)),
-          interestEarnedToDate: Number(Number(r.interestEarnedToDate).toFixed(2)),
-        };
+        currentValue = Number(Number(r.currentValue).toFixed(2));
+        interestEarnedToDate = Number(Number(r.interestEarnedToDate).toFixed(2));
+      } else {
+        const calc = computeValue({
+          principal: r.principal, annualRate: r.annualRate, startDate: r.startDate,
+          asOfDate, interestType: r.interestType, compoundFrequency: r.compoundFrequency,
+        });
+        currentValue = Number(calc.value.toFixed(2));
+        interestEarnedToDate = Number(calc.interest.toFixed(2));
       }
-
-      const calc = computeValue({
-        principal: r.principal,
-        annualRate: r.annualRate,
-        startDate: r.startDate,
-        asOfDate,
-        interestType: r.interestType,
-        compoundFrequency: r.compoundFrequency,
-      });
-
-      return {
-        ...r,
-        currentValue: Number(calc.value.toFixed(2)),
-        interestEarnedToDate: Number(calc.interest.toFixed(2)),
-      };
+      const isActive = r.maturityDate ? asOfDate <= r.maturityDate : true;
+      const dailyAccrual = isActive
+        ? Number((safeNum(r.principal, 0) * safeNum(r.annualRate, 0) / 365).toFixed(2))
+        : 0;
+      return { ...r, currentValue, interestEarnedToDate, dailyAccrual };
     });
   }, [rows, asOfDate]);
 
   const filteredSortedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = enrichedRows;
-
     if (countryFilter !== "ALL") {
       const want = countryFilter === "India" ? "INDIA" : "USA";
       list = list.filter((r) => String(r.country || "").toUpperCase() === want);
     }
-
-    if (q) {
-      list = list.filter((r) => {
-        const hay = `${r.country || ""} ${r.name || ""} ${r.notes || ""}`.toLowerCase();
-        return hay.includes(q);
-      });
-    }
-
+    if (q) list = list.filter((r) =>
+      `${r.country || ""} ${r.name || ""} ${r.notes || ""}`.toLowerCase().includes(q)
+    );
     const dir = sortDir === "asc" ? 1 : -1;
-
     const getVal = (r) => {
       switch (sortKey) {
-        case "country":
-          return String(r.country || "");
-        case "principal":
-          return safeNum(r.principal, 0);
-        case "currentValue":
-          return safeNum(r.currentValue, 0);
-        case "maturityDate":
-          return r.maturityDate || "";
+        case "country": return String(r.country || "");
+        case "principal": return safeNum(r.principal, 0);
+        case "currentValue": return safeNum(r.currentValue, 0);
+        case "maturityDate": return r.maturityDate || "";
         case "startDate":
-        default:
-          return r.startDate || "";
+        default: return r.startDate || "";
       }
     };
-
-    list = [...list].sort((a, b) => {
-      const va = getVal(a);
-      const vb = getVal(b);
+    return [...list].sort((a, b) => {
+      const va = getVal(a), vb = getVal(b);
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-
-    return list;
   }, [enrichedRows, search, countryFilter, sortKey, sortDir]);
 
   const summary = useMemo(() => {
     const base = countryFilter === "ALL"
       ? enrichedRows
-      : enrichedRows.filter((r) => String(r.country || "").toUpperCase() === (countryFilter === "India" ? "INDIA" : "USA"));
-    const invested = base.reduce((s, r) => s + safeNum(r.principal, 0), 0);
-    const current = base.reduce((s, r) => s + safeNum(r.currentValue, 0), 0);
-    const interest = base.reduce((s, r) => s + safeNum(r.interestEarnedToDate, 0), 0);
-    const maturity = base.reduce((s, r) => s + safeNum(r.maturityAmount, 0), 0);
-    return { invested, current, interest, maturity };
+      : enrichedRows.filter((r) =>
+          String(r.country || "").toUpperCase() === (countryFilter === "India" ? "INDIA" : "USA")
+        );
+    return {
+      invested: base.reduce((s, r) => s + safeNum(r.principal, 0), 0),
+      current: base.reduce((s, r) => s + safeNum(r.currentValue, 0), 0),
+      interest: base.reduce((s, r) => s + safeNum(r.interestEarnedToDate, 0), 0),
+      maturity: base.reduce((s, r) => s + safeNum(r.maturityAmount, 0), 0),
+      dailyAccrual: base.reduce((s, r) => s + safeNum(r.dailyAccrual, 0), 0),
+    };
   }, [enrichedRows, countryFilter]);
+
+  const currentGainPct = summary.invested > 0
+    ? formatPct(((summary.current - summary.invested) / summary.invested) * 100)
+    : null;
+  const maturityGainPct = summary.invested > 0
+    ? formatPct(((summary.maturity - summary.invested) / summary.invested) * 100)
+    : null;
+  const dailyAccrualPct = summary.current > 0
+    ? formatPct((summary.dailyAccrual / summary.current) * 100)
+    : null;
 
   function resetForm({ hide } = {}) {
     setForm(DEFAULT_FORM);
@@ -326,9 +232,7 @@ export default function FixedIncome() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function closeForm() {
-    resetForm({ hide: true });
-  }
+  function closeForm() { resetForm({ hide: true }); }
 
   function startEdit(r) {
     setError("");
@@ -338,18 +242,13 @@ export default function FixedIncome() {
       country: c === "INDIA" ? "India" : "USA",
       name: r.name || "",
       principal: String(r.principal ?? ""),
-      annualRatePct: String(((safeNum(r.annualRate, 0) * 100) || 0).toFixed(4)).replace(
-        /\.?0+$/,
-        ""
-      ),
+      annualRatePct: String(((safeNum(r.annualRate, 0) * 100) || 0).toFixed(4)).replace(/\.?0+$/, ""),
       startDate: r.startDate || todayISO(),
       termMonths: r.termMonths ?? 12,
       interestType: r.interestType || "SIMPLE",
       compoundFrequency: r.compoundFrequency || "YEARLY",
       notes: r.notes || "",
     });
-
-    // ✅ ensure the card is visible when editing
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -358,18 +257,13 @@ export default function FixedIncome() {
     const country = String(form.country || "").trim();
     const principal = safeNum(form.principal, NaN);
     const annualRatePct = safeNum(form.annualRatePct, NaN);
-
     if (!country || !COUNTRY_OPTIONS.includes(country)) throw new Error("Country is required");
     if (!form.name.trim()) throw new Error("Name is required");
     if (!form.startDate) throw new Error("Start date is required");
-    if (!Number.isFinite(principal) || principal <= 0)
-      throw new Error("Principal must be a positive number");
-    if (!Number.isFinite(annualRatePct) || annualRatePct < 0)
-      throw new Error("Annual rate must be valid (percent)");
+    if (!Number.isFinite(principal) || principal <= 0) throw new Error("Principal must be a positive number");
+    if (!Number.isFinite(annualRatePct) || annualRatePct < 0) throw new Error("Annual rate must be valid (percent)");
     const termMonths = clamp(parseInt(form.termMonths, 10) || 0, 1, 600);
-
     const annualRate = annualRatePct / 100;
-
     return {
       country: country === "India" ? "INDIA" : "USA",
       name: form.name.trim(),
@@ -383,211 +277,155 @@ export default function FixedIncome() {
     };
   }
 
-  async function refreshList({ keepEditing = false } = {}) {
-    const res = await apiFetch("/assets/fixedincome");
-    const list = Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
-    setRows(list.map(normalizeApiRow));
-    if (!keepEditing) setEditingId(null);
-  }
-
-  async function onSubmit(e) {
+  function onSubmit(e) {
     e.preventDefault();
     setError("");
-    setSaving(true);
-
-    try {
-      const payload = buildPayloadFromForm();
-
-      if (editingId) {
-        const updated = await apiFetch(`/assets/fixedincome/${encodeURIComponent(editingId)}`, {
-          method: "PATCH",
-          body: payload,
-        });
-
-        setRows((prev) =>
-          prev.map((r) => (r.id === editingId ? normalizeApiRow({ ...r, ...updated }) : r))
-        );
-        await refreshList({ keepEditing: false });
-        resetForm({ hide: true });
-      } else {
-        const created = await apiFetch("/assets/fixedincome", { method: "POST", body: payload });
-        setRows((prev) => [normalizeApiRow(created), ...prev]);
-        await refreshList({ keepEditing: false });
-        resetForm({ hide: true });
-      }
-    } catch (err) {
-      setError(err?.message || "Save failed");
-    } finally {
-      setSaving(false);
-    }
+    let payload;
+    try { payload = buildPayloadFromForm(); }
+    catch (err) { setError(err?.message || "Save failed"); return; }
+    saveMut.mutate({ id: editingId, payload });
   }
 
-  async function onDelete(id) {
+  function onDelete(id) {
     setError("");
-    const ok = window.confirm("Delete this fixed income record?");
-    if (!ok) return;
-
-    try {
-      setSaving(true);
-      await apiFetch(`/assets/fixedincome/${encodeURIComponent(id)}`, { method: "DELETE" });
-      setRows((prev) => prev.filter((r) => r.id !== id));
-      if (editingId === id) resetForm({ hide: true });
-    } catch (err) {
-      setError(err?.message || "Delete failed");
-    } finally {
-      setSaving(false);
-    }
+    if (!window.confirm("Delete this fixed income record?")) return;
+    deleteMut.mutate(id);
   }
 
   function onToggleSort(key) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortKey(key);
-      setSortDir("desc");
-    }
+    else { setSortKey(key); setSortDir("desc"); }
   }
 
   return (
-    <div style={{ padding: 16, color: THEME.pageText }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: THEME.title, letterSpacing: "0.2px" }}>
-            Fixed Income
-          </div>
-        </div>
-        <div style={{ fontSize: 12, color: THEME.muted, textAlign: "right" }}>
-          As of <span style={{ color: THEME.pageText, fontWeight: 700 }}>{asOfDate}</span>
-        </div>
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-baseline justify-between gap-3">
+        <h1
+          className="text-2xl font-black text-slate-100 tracking-tight"
+          style={{ fontFamily: "Epilogue, sans-serif" }}
+        >
+          Fixed Income
+        </h1>
+        <span className="text-xs text-slate-500">
+          As of <strong className="text-slate-300 font-semibold">{asOfDate}</strong>
+        </span>
       </div>
 
-      <div
-        style={{
-          marginTop: 14,
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(180px, 1fr))",
-          gap: 12,
-        }}
-      >
-        <SummaryCard title="Invested Amount" value={formatMoney(summary.invested)} />
-        <SummaryCard title="Current Value" value={formatMoney(summary.current)} hint="Computed at runtime" />
-        <SummaryCard title="Interest Earned" value={formatMoney(summary.interest)} hint="To date" />
-        <SummaryCard title="Maturity Amount" value={formatMoney(summary.maturity)} hint="Stored on create/update" />
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <MetricCard label="Invested Amount" value={formatMoney(summary.invested)} />
+        <MetricCard label="Current Value" value={formatMoney(summary.current)} pct={currentGainPct} sub="Computed at runtime" />
+        <MetricCard label="Interest Earned" value={formatMoney(summary.interest)} sub="To date" />
+        <MetricCard label="Maturity Amount" value={formatMoney(summary.maturity)} pct={maturityGainPct} sub="Stored on create/update" />
+        <MetricCard label="Today's Accrual" value={formatMoney(summary.dailyAccrual)} pct={dailyAccrualPct} sub="Daily interest (active)" valueClass="text-green-400" />
       </div>
 
-      {/* ✅ Form card is now hidden by default */}
-      {showForm ? (
-        <div style={{ ...panel, marginTop: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
+      {/* Form panel */}
+      {showForm && (
+        <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2
+              className="text-sm font-black text-slate-100"
+              style={{ fontFamily: "Epilogue, sans-serif" }}
+            >
               {editingId ? "Edit Fixed Income" : "Add Fixed Income"}
-            </div>
-
-            <div style={{ display: "flex", gap: 10 }}>
-              {editingId ? (
-                <button type="button" onClick={() => resetForm({ hide: true })} style={btnSecondary} disabled={saving}>
-                  Cancel
-                </button>
-              ) : null}
-
-              <button type="button" onClick={closeForm} style={btnSecondary} disabled={saving}>
-                Close
-              </button>
+            </h2>
+            <div className="flex gap-2">
+              {editingId && (
+                <Btn onClick={() => resetForm({ hide: true })} disabled={saving}>Cancel</Btn>
+              )}
+              <Btn onClick={closeForm} disabled={saving}>Close</Btn>
             </div>
           </div>
 
-          {error ? (
-            <div style={{ marginTop: 10, ...callout }}>
-              <div style={{ fontWeight: 900, color: THEME.title }}>Error</div>
-              <div style={{ marginTop: 4, color: THEME.pageText }}>{error}</div>
+          {error && (
+            <div className="mt-3 rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
+              <div className="text-xs font-bold text-slate-100">Error</div>
+              <div className="mt-1 text-xs text-slate-300">{error}</div>
             </div>
-          ) : null}
+          )}
 
-          {loading ? (
-            <div style={{ marginTop: 10, color: THEME.muted, fontSize: 13 }}>Loading records…</div>
-          ) : null}
-
-          <form onSubmit={onSubmit} style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", gap: 10 }}>
-              <Field label="Name">
+          <form onSubmit={onSubmit} className="mt-4 grid gap-3">
+            {/* Row 1: Name (2fr) · Country · Principal · Rate */}
+            <div className="grid gap-3" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr" }}>
+              <FLabel label="Name">
                 <input
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="e.g., CD - Chase 12M"
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 />
-              </Field>
-              <Field label="Country">
+              </FLabel>
+              <FLabel label="Country">
                 <select
                   value={form.country}
                   onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))}
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 >
-                  {COUNTRY_OPTIONS.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
+                  {COUNTRY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-              </Field>
-              <Field label="Principal (USD)">
+              </FLabel>
+              <FLabel label="Principal (USD)">
                 <input
                   value={form.principal}
                   onChange={(e) => setForm((f) => ({ ...f, principal: e.target.value }))}
                   placeholder="10000"
                   inputMode="decimal"
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 />
-              </Field>
-              <Field label="Annual Rate (%)">
+              </FLabel>
+              <FLabel label="Annual Rate (%)">
                 <input
                   value={form.annualRatePct}
                   onChange={(e) => setForm((f) => ({ ...f, annualRatePct: e.target.value }))}
                   placeholder="5.25"
                   inputMode="decimal"
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 />
-              </Field>
+              </FLabel>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
-              <Field label="Start Date">
+            {/* Row 2: Start Date · Term · Interest Type · Compound Freq */}
+            <div className="grid grid-cols-4 gap-3">
+              <FLabel label="Start Date">
                 <input
                   type="date"
                   value={form.startDate}
                   onChange={(e) => setForm((f) => ({ ...f, startDate: e.target.value }))}
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 />
-              </Field>
-              <Field label="Term (Months)">
+              </FLabel>
+              <FLabel label="Term (Months)">
                 <input
                   value={form.termMonths}
                   onChange={(e) => setForm((f) => ({ ...f, termMonths: e.target.value }))}
                   inputMode="numeric"
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 />
-              </Field>
-              <Field label="Interest Type">
+              </FLabel>
+              <FLabel label="Interest Type">
                 <select
                   value={form.interestType}
                   onChange={(e) => setForm((f) => ({ ...f, interestType: e.target.value }))}
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 >
                   <option value="SIMPLE">Simple</option>
                   <option value="COMPOUND">Compound</option>
                 </select>
-              </Field>
-              <Field label="Compound Frequency">
+              </FLabel>
+              <FLabel label="Compound Frequency">
                 <select
                   value={form.compoundFrequency}
                   onChange={(e) => setForm((f) => ({ ...f, compoundFrequency: e.target.value }))}
-                  style={{ ...input, opacity: form.interestType === "COMPOUND" ? 1 : 0.5 }}
+                  className={`${inputCls} ${form.interestType !== "COMPOUND" ? "opacity-40" : ""}`}
                   disabled={saving || form.interestType !== "COMPOUND"}
                 >
                   <option value="YEARLY">Yearly</option>
@@ -595,23 +433,23 @@ export default function FixedIncome() {
                   <option value="MONTHLY">Monthly</option>
                   <option value="DAILY">Daily</option>
                 </select>
-              </Field>
+              </FLabel>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "3fr 1fr", gap: 10 }}>
-              <Field label="Notes (optional)">
+            {/* Row 3: Notes (3fr) · Preview panel (1fr) */}
+            <div className="grid gap-3" style={{ gridTemplateColumns: "3fr 1fr" }}>
+              <FLabel label="Notes (optional)">
                 <input
                   value={form.notes}
                   onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                   placeholder="e.g., auto-renew off"
-                  style={input}
+                  className={inputCls}
                   disabled={saving}
                 />
-              </Field>
-
-              <div style={{ ...miniPanel }}>
-                <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>Preview</div>
-                <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+              </FLabel>
+              <div className="rounded-xl border border-white/[0.06] bg-[#080D1A]/40 p-3">
+                <div className="text-xs font-bold text-slate-500 mb-2">Preview</div>
+                <div className="space-y-1.5">
                   <MiniRow
                     label="Maturity Date"
                     value={
@@ -623,18 +461,14 @@ export default function FixedIncome() {
                   <MiniRow
                     label="Stored Maturity"
                     value={() => {
-                      const principal = safeNum(form.principal, NaN);
-                      const rate = safeNum(form.annualRatePct, NaN) / 100;
-                      const termMonths = clamp(parseInt(form.termMonths, 10) || 0, 1, 600);
-                      if (!Number.isFinite(principal) || !Number.isFinite(rate) || !form.startDate) return "-";
-                      const maturityDate = addMonths(form.startDate, termMonths);
+                      const p = safeNum(form.principal, NaN);
+                      const r = safeNum(form.annualRatePct, NaN) / 100;
+                      const t = clamp(parseInt(form.termMonths, 10) || 0, 1, 600);
+                      if (!Number.isFinite(p) || !Number.isFinite(r) || !form.startDate) return "-";
+                      const md = addMonths(form.startDate, t);
                       const calc = computeValue({
-                        principal,
-                        annualRate: rate,
-                        startDate: form.startDate,
-                        asOfDate: maturityDate,
-                        interestType: form.interestType,
-                        compoundFrequency: form.compoundFrequency,
+                        principal: p, annualRate: r, startDate: form.startDate,
+                        asOfDate: md, interestType: form.interestType, compoundFrequency: form.compoundFrequency,
                       });
                       return formatMoney(calc.value);
                     }}
@@ -643,56 +477,46 @@ export default function FixedIncome() {
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 4 }}>
-              <button type="button" onClick={() => resetForm()} style={btnSecondary} disabled={saving}>
-                Reset
-              </button>
-              <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.75 : 1 }} disabled={saving}>
+            {/* Submit row */}
+            <div className="flex justify-end gap-2 mt-1">
+              <Btn type="button" onClick={() => resetForm()} disabled={saving}>Reset</Btn>
+              <BtnPrimary type="submit" disabled={saving} style={{ opacity: saving ? 0.75 : 1 }}>
                 {saving ? "Saving…" : editingId ? "Save Changes" : "Add Record"}
-              </button>
+              </BtnPrimary>
             </div>
           </form>
         </div>
-      ) : null}
+      )}
 
       {/* Records table */}
-      <div style={{ ...panel, marginTop: 14, paddingBottom: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>All Records</div>
-
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={openCreateForm}
-              style={btnPrimary}
-              disabled={saving}
-            >
-              Add Fixed Income Record
-            </button>
-
+      <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729]">
+        <div className="flex items-center justify-between gap-3 flex-wrap px-4 pt-4 pb-3">
+          <h2 className="text-sm font-black text-slate-100">All Records</h2>
+          <div className="flex gap-2 flex-wrap items-center">
+            <BtnPrimary type="button" onClick={openCreateForm} disabled={saving}>
+              + Add Fixed Income
+            </BtnPrimary>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search country/name/notes…"
-              style={{ ...input, width: 220 }}
+              className={`${inputCls} !w-52`}
               disabled={loading}
             />
-
             <select
               value={countryFilter}
               onChange={(e) => setCountryFilter(e.target.value)}
-              style={{ ...input, width: 140 }}
+              className={`${inputCls} !w-36`}
               disabled={loading}
             >
-              <option value="ALL">All</option>
+              <option value="ALL">All Countries</option>
               <option value="USA">USA</option>
               <option value="India">India</option>
             </select>
-
             <select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value)}
-              style={{ ...input, width: 170 }}
+              className={`${inputCls} !w-44`}
               disabled={loading}
             >
               <option value="startDate">Sort: Start Date</option>
@@ -701,87 +525,72 @@ export default function FixedIncome() {
               <option value="principal">Sort: Principal</option>
               <option value="currentValue">Sort: Current Value</option>
             </select>
-
-            <button
+            <Btn
               type="button"
               onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-              style={btnSecondary}
               disabled={loading}
             >
-              {sortDir === "asc" ? "Asc" : "Desc"}
-            </button>
+              {sortDir === "asc" ? "Asc ↑" : "Desc ↓"}
+            </Btn>
           </div>
         </div>
 
-        <div style={{ marginTop: 10, borderTop: `1px solid ${THEME.rowBorder}` }} />
+        {(fetchError || error) && (
+          <div className="mx-4 mb-3 rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
+            <div className="text-xs font-bold text-slate-100">Error</div>
+            <div className="mt-1 text-xs text-slate-300">{fetchError?.message || error}</div>
+          </div>
+        )}
+
+        <div className="border-t border-white/[0.06]" />
 
         {loading ? (
-          <div style={{ padding: 14, color: THEME.muted }}>Loading…</div>
+          <EmptyState type="loading" message="Loading fixed income records…" />
         ) : filteredSortedRows.length === 0 ? (
-          <div style={{ padding: 14, color: THEME.muted }}>
-            No fixed income records yet. Click “Add Fixed Income Record” to create one.
-          </div>
+          <EmptyState type="empty" message='No fixed income records yet. Click "+ Add Fixed Income" to create one.' />
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
               <thead>
-                <tr style={{ textAlign: "left" }}>
-                  <Th onClick={() => onToggleSort("startDate")} active={sortKey === "startDate"}>
-                    Name
-                  </Th>
-                  <Th onClick={() => onToggleSort("country")} active={sortKey === "country"}>
-                    Country
-                  </Th>
-                  <Th onClick={() => onToggleSort("principal")} active={sortKey === "principal"}>
-                    Principal
-                  </Th>
+                <tr>
+                  <Th onClick={() => onToggleSort("startDate")} active={sortKey === "startDate"}>Name</Th>
+                  <Th onClick={() => onToggleSort("country")} active={sortKey === "country"}>Country</Th>
+                  <Th onClick={() => onToggleSort("principal")} active={sortKey === "principal"}>Principal</Th>
                   <Th>Rate</Th>
                   <Th>Start</Th>
-                  <Th onClick={() => onToggleSort("maturityDate")} active={sortKey === "maturityDate"}>
-                    Maturity
-                  </Th>
-                  <Th onClick={() => onToggleSort("currentValue")} active={sortKey === "currentValue"}>
-                    Current Value
-                  </Th>
+                  <Th onClick={() => onToggleSort("maturityDate")} active={sortKey === "maturityDate"}>Maturity</Th>
+                  <Th onClick={() => onToggleSort("currentValue")} active={sortKey === "currentValue"}>Current Value</Th>
                   <Th>Stored Maturity</Th>
+                  <Th>Accrual/Day</Th>
                   <Th align="right">Actions</Th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSortedRows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
+                  <tr key={r.id} className="border-t border-white/[0.06] hover:bg-white/[0.015] transition-colors">
                     <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>{r.name}</div>
-                      {r.notes ? (
-                        <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>{r.notes}</div>
-                      ) : null}
-                      <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <div className="font-bold text-slate-100">{r.name}</div>
+                      {r.notes && <div className="mt-0.5 text-xs text-slate-500">{r.notes}</div>}
+                      <div className="mt-1.5 flex gap-1.5 flex-wrap">
                         <Pill text={r.interestType === "COMPOUND" ? `Compound · ${r.compoundFrequency}` : "Simple"} />
                         <Pill text={`${r.termMonths} months`} />
                       </div>
                     </Td>
-                    <Td>
-                      {String(r.country || "").toUpperCase() === "INDIA" ? "India" : "USA"}
-                    </Td>
-                    <Td>{formatMoney(r.principal)}</Td>
-                    <Td>{(safeNum(r.annualRate, 0) * 100).toFixed(2)}%</Td>
+                    <Td>{String(r.country || "").toUpperCase() === "INDIA" ? "India" : "USA"}</Td>
+                    <Td className="numeric">{formatMoney(r.principal)}</Td>
+                    <Td className="numeric">{(safeNum(r.annualRate, 0) * 100).toFixed(2)}%</Td>
                     <Td>{r.startDate}</Td>
                     <Td>{r.maturityDate}</Td>
                     <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(r.currentValue)}</div>
-                      <div style={{ fontSize: 12, color: THEME.muted }}>
-                        Interest: {formatMoney(r.interestEarnedToDate)}
-                      </div>
+                      <div className="font-bold text-slate-100 numeric">{formatMoney(r.currentValue)}</div>
+                      <div className="text-xs text-slate-500 numeric">Interest: {formatMoney(r.interestEarnedToDate)}</div>
                     </Td>
-                    <Td>{formatMoney(r.maturityAmount)}</Td>
+                    <Td className="numeric">{formatMoney(r.maturityAmount)}</Td>
+                    <Td className={`numeric ${r.dailyAccrual > 0 ? "text-green-400 font-bold" : "text-slate-600"}`}>{r.dailyAccrual > 0 ? formatMoney(r.dailyAccrual) : "—"}</Td>
                     <Td align="right">
-                      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingRight: 8 }}>
-                        <button type="button" onClick={() => startEdit(r)} style={btnSecondarySmall} disabled={saving}>
-                          Edit
-                        </button>
-                        <button type="button" onClick={() => onDelete(r.id)} style={btnDangerSmall} disabled={saving}>
-                          Delete
-                        </button>
+                      <div className="flex gap-1.5 justify-end">
+                        <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>
+                        <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>
                       </div>
                     </Td>
                   </tr>
@@ -790,27 +599,18 @@ export default function FixedIncome() {
             </table>
           </div>
         )}
+        <div className="h-3" />
       </div>
     </div>
   );
 }
 
-/* ---------- small UI components ---------- */
+/* ── Helpers ─────────────────────────────────────────────────── */
 
-function SummaryCard({ title, value, hint }) {
+function FLabel({ label, children }) {
   return (
-    <div style={panel}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{title}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.title }}>{value}</div>
-      {hint ? <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>{hint}</div> : null}
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <label style={{ display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{label}</div>
+    <label className="grid gap-1.5">
+      <span className="text-xs font-bold text-slate-500">{label}</span>
       {children}
     </label>
   );
@@ -820,27 +620,24 @@ function Th({ children, align, onClick, active }) {
   return (
     <th
       onClick={onClick}
-      style={{
-        padding: "10px 10px",
-        fontSize: 12,
-        color: THEME.muted,
-        fontWeight: 900,
-        cursor: onClick ? "pointer" : "default",
-        userSelect: "none",
-        whiteSpace: "nowrap",
-        ...(active ? { color: THEME.pageText } : null),
-      }}
-      align={align || "left"}
-      title={onClick ? "Click to sort" : undefined}
+      className={[
+        "text-xs font-bold uppercase tracking-widest px-3 py-2.5 whitespace-nowrap border-b border-white/[0.06] select-none",
+        onClick ? "cursor-pointer hover:text-slate-300" : "cursor-default",
+        active ? "text-slate-200" : "text-slate-500",
+        align === "right" ? "text-right" : "text-left",
+      ].join(" ")}
     >
       {children}
     </th>
   );
 }
 
-function Td({ children, align, colSpan }) {
+function Td({ children, align, colSpan, className }) {
   return (
-    <td style={{ padding: "12px 10px", verticalAlign: "top" }} align={align || "left"} colSpan={colSpan}>
+    <td
+      className={`text-sm text-slate-300 px-3 py-3 align-top ${align === "right" ? "text-right" : ""} ${className || ""}`}
+      colSpan={colSpan}
+    >
       {children}
     </td>
   );
@@ -848,17 +645,7 @@ function Td({ children, align, colSpan }) {
 
 function Pill({ text }) {
   return (
-    <span
-      style={{
-        fontSize: 11,
-        color: THEME.pageText,
-        border: `1px solid ${THEME.panelBorder}`,
-        background: "rgba(148, 163, 184, 0.06)",
-        padding: "3px 8px",
-        borderRadius: 999,
-        fontWeight: 800,
-      }}
-    >
+    <span className="text-[10px] font-bold text-slate-400 border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 rounded-full">
       {text}
     </span>
   );
@@ -867,86 +654,26 @@ function Pill({ text }) {
 function MiniRow({ label, value }) {
   const v = typeof value === "function" ? value() : value;
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-      <div style={{ color: THEME.muted, fontSize: 12, fontWeight: 800 }}>{label}</div>
-      <div style={{ color: THEME.pageText, fontSize: 12, fontWeight: 900 }}>{v}</div>
+    <div className="flex justify-between gap-2">
+      <span className="text-xs text-slate-500 font-bold">{label}</span>
+      <span className="text-xs text-slate-300 font-bold">{v}</span>
     </div>
   );
 }
 
-/* ---------- styles ---------- */
+function Btn({ children, ...p }) {
+  return <button type="button" className={btnSmCls} {...p}>{children}</button>;
+}
 
-const panel = {
-  background: THEME.panelBg,
-  border: `1px solid ${THEME.panelBorder}`,
-  borderRadius: 14,
-  padding: 14,
-  backdropFilter: "blur(6px)",
-};
+function BtnPrimary({ children, ...p }) {
+  return <button className={btnPrimCls} {...p}>{children}</button>;
+}
 
-const miniPanel = {
-  background: "rgba(2, 6, 23, 0.28)",
-  border: `1px solid ${THEME.panelBorder}`,
-  borderRadius: 12,
-  padding: 12,
-  height: "100%",
-};
+function BtnDanger({ children, ...p }) {
+  return <button type="button" className={btnDanCls} {...p}>{children}</button>;
+}
 
-const input = {
-  width: "100%",
-  padding: "10px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.inputBorder}`,
-  background: THEME.inputBg,
-  color: THEME.pageText,
-  outline: "none",
-};
-
-const btnPrimary = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.primaryBorder}`,
-  background: THEME.primaryBg,
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const btnSecondary = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.panelBorder}`,
-  background: "rgba(148, 163, 184, 0.06)",
-  color: THEME.pageText,
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const btnSecondarySmall = {
-  padding: "7px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.panelBorder}`,
-  background: "rgba(148, 163, 184, 0.06)",
-  color: THEME.pageText,
-  fontWeight: 900,
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const btnDangerSmall = {
-  padding: "7px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.dangerBorder}`,
-  background: THEME.dangerBg,
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const callout = {
-  padding: 12,
-  borderRadius: 12,
-  background: "rgba(239, 68, 68, 0.10)",
-  border: `1px solid ${THEME.dangerBorder}`,
-};
+const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+const btnPrimCls = "text-xs font-bold text-slate-100 px-3 py-1.5 rounded-lg border border-blue-500/[0.3] bg-blue-500/[0.15] hover:bg-blue-500/[0.25] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const btnDanCls = "text-xs font-bold text-red-400 px-3 py-1.5 rounded-lg border border-red-500/[0.3] bg-red-500/[0.08] hover:bg-red-500/[0.15] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";

@@ -1,916 +1,441 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys } from "../api/client.js";
+import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { Badge }      from "../components/ui/Badge.jsx";
+import { EmptyState } from "../components/ui/EmptyState.jsx";
 
-/* ---------------- Theme ---------------- */
-
-const THEME = {
-  pageText: "#CBD5F5",
-  title: "#F9FAFB",
-  muted: "#94A3B8",
-  panelBg: "rgba(15, 23, 42, 0.65)",
-  panelBorder: "rgba(148, 163, 184, 0.16)",
-  rowBorder: "rgba(148, 163, 184, 0.12)",
-  inputBg: "rgba(2, 6, 23, 0.45)",
-  inputBorder: "rgba(148, 163, 184, 0.18)",
-  primaryBg: "rgba(99, 102, 241, 0.18)",
-  primaryBorder: "rgba(99, 102, 241, 0.45)",
-  dangerBg: "rgba(239, 68, 68, 0.12)",
-  dangerBorder: "rgba(239, 68, 68, 0.35)",
-};
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function safeNum(v, fallback = 0) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : fallback;
-}
-
-function round2(n) {
-  return Number(safeNum(n, 0).toFixed(2));
-}
-
-function formatMoney(n) {
-  const x = safeNum(n, 0);
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
-}
-
-function formatPct(n) {
-  const x = safeNum(n, 0);
-  const sign = x > 0 ? "+" : "";
-  return `${sign}${x.toFixed(2)}%`;
-}
+/* ── Utilities ───────────────────────────────────────────── */
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function safeNum(v, fallback = 0) { const x = Number(v); return Number.isFinite(x) ? x : fallback; }
+function round2(n) { return Number(safeNum(n, 0).toFixed(2)); }
+function formatMoney(n) { return safeNum(n, 0).toLocaleString(undefined, { style: "currency", currency: "USD" }); }
+function formatPct(n) { const x = safeNum(n, 0); return `${x > 0 ? "+" : ""}${x.toFixed(2)}%`; }
+function plClass(v) { return safeNum(v, 0) >= 0 ? "text-green-400" : "text-red-400"; }
 
 function spotMove(spot, prevClose) {
-  const s = safeNum(spot, 0);
-  const p = safeNum(prevClose, 0);
-  if (!p) {
-    return { pct: 0, color: THEME.pageText, hasPrev: false, change: 0 };
-  }
+  const s = safeNum(spot, 0), p = safeNum(prevClose, 0);
+  if (!p) return { pct: 0, hasPrev: false, change: 0 };
   const change = s - p;
-  const pct = (change / p) * 100;
-  const color = pct < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
-  return { pct, color, hasPrev: true, change };
+  return { pct: (change / p) * 100, hasPrev: true, change };
 }
 
-function plColor(v) {
-  return safeNum(v, 0) < 0 ? "rgba(248,113,113,0.95)" : "rgba(134,239,172,0.95)";
-}
-
-/* ---------------- API ---------------- */
-
-function getApiBase() {
-  const envBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
-  if (envBase) return envBase.replace(/\/+$/, "");
-
-  const winBase = (window.__FINVAULT_API_BASE_URL || "").trim?.() || "";
-  if (winBase) return winBase.replace(/\/+$/, "");
-
-  return "";
-}
-
-function getAccessToken() {
-  return (
-    sessionStorage.getItem("finvault.accessToken") ||
-    sessionStorage.getItem("access_token") ||
-    ""
-  );
-}
-
-async function apiFetch(path, { method = "GET", body } = {}) {
-  const base = getApiBase();
-  if (!base) throw new Error("Missing API base. Set VITE_API_BASE_URL in .env");
-
-  const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
-  const token = getAccessToken();
-
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (res.status === 204) return null;
-
-  const text = await res.text().catch(() => "");
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    throw new Error(`API returned non-JSON (${res.status})`);
-  }
-
-  if (!res.ok) {
-    throw new Error(data?.error || data?.message || `Request failed (${res.status})`);
-  }
-
-  return data;
-}
-
-/* ---------------- Domain ---------------- */
-
-const DEFAULT_FORM = {
-  type: "BUY",
-  symbol: "AAPL",
-  date: todayISO(),
-  shares: "",
-  price: "",
-  fees: "",
-  notes: "",
-};
+/* ── Domain ─────────────────────────────────────────────── */
+const DEFAULT_FORM = { type: "BUY", symbol: "AAPL", date: todayISO(), shares: "", price: "", fees: "", notes: "" };
 
 function normalizeTx(item) {
-  return {
-    ...item,
-    id: item.txId || item.assetId || item.id,
-    symbol: String(item.symbol || "").toUpperCase(),
-    type: String(item.type || "BUY").toUpperCase(),
-  };
+  return { ...item, id: item.txId || item.assetId || item.id, symbol: String(item.symbol || "").toUpperCase(), type: String(item.type || "BUY").toUpperCase() };
 }
 
-/**
- * Moving-average cost per symbol.
- */
 function computeStockMetrics(transactions, quoteMap) {
   const bySymbol = {};
-
-  const txs = [...transactions].sort((a, b) =>
-    String(a.date || "").localeCompare(String(b.date || ""))
-  );
+  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 
   for (const t of txs) {
-    const symbol = String(t.symbol || "").toUpperCase();
-    if (!symbol) continue;
-
+    const symbol = String(t.symbol || "").toUpperCase(); if (!symbol) continue;
     const type = String(t.type || "BUY").toUpperCase();
-    const shares = safeNum(t.shares, 0);
-    const price = safeNum(t.price, 0);
-    const fees = safeNum(t.fees, 0);
-
-    if (!bySymbol[symbol]) {
-      bySymbol[symbol] = { shares: 0, cost: 0, avg: 0, realized: 0, buys: 0, sells: 0 };
-    }
+    const shares = safeNum(t.shares, 0), price = safeNum(t.price, 0), fees = safeNum(t.fees, 0);
+    if (!bySymbol[symbol]) bySymbol[symbol] = { shares: 0, cost: 0, avg: 0, realized: 0, buys: 0, sells: 0 };
     const s = bySymbol[symbol];
-
     if (type === "BUY") {
-      const addCost = shares * price + fees;
-      s.shares += shares;
-      s.cost += addCost;
-      s.buys += 1;
-      s.avg = s.shares > 0 ? s.cost / s.shares : 0;
+      s.shares += shares; s.cost += shares * price + fees; s.buys++; s.avg = s.shares > 0 ? s.cost / s.shares : 0;
     } else if (type === "SELL") {
-      const sellShares = Math.min(shares, s.shares);
-      const proceeds = sellShares * price - fees;
-      const basis = sellShares * (s.avg || 0);
-      const realized = proceeds - basis;
-
-      s.shares -= sellShares;
-      s.cost -= basis;
-      s.sells += 1;
-      s.realized += realized;
-      s.avg = s.shares > 0 ? s.cost / s.shares : 0;
+      const ss = Math.min(shares, s.shares);
+      s.realized += ss * price - fees - ss * (s.avg || 0);
+      s.shares -= ss; s.cost -= ss * (s.avg || 0); s.sells++; s.avg = s.shares > 0 ? s.cost / s.shares : 0;
     }
   }
 
-  const holdings = Object.entries(bySymbol)
-    .map(([symbol, s]) => {
-      const q = quoteMap[symbol];
-      const spot = safeNum(q?.price, 0);
-      const prevClose = safeNum(q?.prevClose, 0);
-      const mv = s.shares * spot;
-      const unrl = (spot - (s.avg || 0)) * s.shares;
+  const holdings = Object.entries(bySymbol).map(([symbol, s]) => {
+    const q = quoteMap[symbol];
+    const spot = safeNum(q?.price, 0), prevClose = safeNum(q?.prevClose, 0);
+    const mv = s.shares * spot;
+    return { symbol, shares: s.shares, avgCost: s.avg, spot, prevClose, marketValue: mv, unrealized: (spot - (s.avg || 0)) * s.shares, realized: s.realized, buys: s.buys, sells: s.sells, quoteTs: q?.timestamp };
+  }).sort((a, b) => b.marketValue - a.marketValue);
 
-      return {
-        symbol,
-        shares: s.shares,
-        avgCost: s.avg,
-        spot,
-        prevClose,
-        marketValue: mv,
-        unrealized: unrl,
-        realized: s.realized,
-        buys: s.buys,
-        sells: s.sells,
-        quoteTs: q?.timestamp,
-      };
-    })
-    .sort((a, b) => b.marketValue - a.marketValue);
-
-  const totals = holdings.reduce(
-    (acc, h) => {
-      acc.holdingValue += h.marketValue;
-      acc.unrealized += h.unrealized;
-      acc.realized += h.realized;
-      return acc;
-    },
-    { holdingValue: 0, unrealized: 0, realized: 0 }
-  );
+  const totals = holdings.reduce((acc, h) => {
+    acc.holdingValue += h.marketValue; acc.unrealized += h.unrealized; acc.realized += h.realized;
+    acc.totalCost += h.shares * (h.avgCost || 0);
+    const mv = spotMove(h.spot, h.prevClose);
+    if (mv.hasPrev) { acc.dayGL += h.shares * mv.change; acc.hasDayGL = true; acc.prevDayValue += h.shares * h.prevClose; }
+    return acc;
+  }, { holdingValue: 0, unrealized: 0, realized: 0, dayGL: 0, hasDayGL: false, totalCost: 0, prevDayValue: 0 });
 
   return {
     holdings,
     totals: {
-      holdingValue: round2(totals.holdingValue),
-      unrealized: round2(totals.unrealized),
-      realized: round2(totals.realized),
-      totalPL: round2(totals.unrealized + totals.realized),
+      holdingValue: round2(totals.holdingValue), unrealized: round2(totals.unrealized),
+      realized: round2(totals.realized), dayGL: totals.hasDayGL ? round2(totals.dayGL) : null,
+      totalCost: round2(totals.totalCost), prevDayValue: round2(totals.prevDayValue),
     },
   };
 }
 
-/* ---------------- Component ---------------- */
-
+/* ── Component ───────────────────────────────────────────── */
 export default function Stocks() {
-  const [tx, setTx] = useState([]);
-
-  const [quotes, setQuotes] = useState({}); // { AAPL: {price, prevClose, ...} }
-  const [quoteStatus, setQuoteStatus] = useState("");
-
-  const [form, setForm] = useState(DEFAULT_FORM);
+  const [form, setForm]           = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm]   = useState(false);
+  const [error, setError]         = useState("");
+  const [search, setSearch]       = useState("");
+  const [sortKey, setSortKey]     = useState("date");
+  const [sortDir, setSortDir]     = useState("desc");
 
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const queryClient = useQueryClient();
 
-  const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState("date");
-  const [sortDir, setSortDir] = useState("desc");
+  const { data: txData, isLoading: txLoading, error: txError } = useQuery({
+    queryKey: queryKeys.stocksTx(),
+    queryFn: () => api.get("/assets/stocks/transactions"),
+  });
 
+  const tx = useMemo(() => {
+    const list = Array.isArray(txData?.items) ? txData.items : Array.isArray(txData) ? txData : [];
+    return list.map(normalizeTx);
+  }, [txData]);
+
+  const txSymbols = useMemo(() => {
+    const set = new Set(tx.map((t) => String(t.symbol || "").toUpperCase()).filter(Boolean));
+    return Array.from(set).sort();
+  }, [tx]);
+
+  // symbols includes form symbol for display/datalist but NOT for query key (avoids refetch on every keystroke)
   const symbols = useMemo(() => {
-    const set = new Set(
-      tx.map((t) => String(t.symbol || "").toUpperCase()).filter(Boolean)
-    );
+    const set = new Set(txSymbols);
     const fSym = String(form.symbol || "").toUpperCase().trim();
     if (fSym) set.add(fSym);
     return Array.from(set).sort();
-  }, [tx, form.symbol]);
+  }, [txSymbols, form.symbol]);
+
+  const { data: pricesData, isFetching: pricesFetching, refetch: refetchPrices } = useQuery({
+    queryKey: queryKeys.prices(txSymbols, []),
+    queryFn: () => api.get(`/prices?stocks=${encodeURIComponent(txSymbols.join(","))}`),
+    enabled: txSymbols.length > 0,
+  });
+
+  const quotes = useMemo(() => pricesData?.stocks || {}, [pricesData]);
+
+  const quoteStatus = pricesFetching
+    ? "Refreshing quotes…"
+    : pricesData
+      ? "Quotes refreshed."
+      : txSymbols.length === 0
+        ? "Add a transaction to start tracking holdings."
+        : "";
+
+  const saveMut = useMutation({
+    mutationFn: ({ id, payload }) =>
+      id ? api.patch(`/assets/stocks/transactions/${encodeURIComponent(id)}`, payload) : api.post("/assets/stocks/transactions", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stocksTx() });
+      closeForm();
+    },
+    onError: (e) => setError(e?.message || "Save failed"),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id) => api.delete(`/assets/stocks/transactions/${encodeURIComponent(id)}`),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.stocksTx() });
+      if (editingId === id) closeForm();
+    },
+    onError: (e) => setError(e?.message || "Delete failed"),
+  });
+
+  const saving = saveMut.isPending || deleteMut.isPending;
+  const loading = txLoading;
 
   const metrics = useMemo(() => computeStockMetrics(tx, quotes), [tx, quotes]);
 
   const filteredSortedTx = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = tx;
-
-    if (q) {
-      list = list.filter((t) => {
-        const hay = `${t.type || ""} ${t.symbol || ""} ${t.notes || ""}`.toLowerCase();
-        return hay.includes(q);
-      });
-    }
-
+    let list = q ? tx.filter((t) => `${t.type || ""} ${t.symbol || ""} ${t.notes || ""}`.toLowerCase().includes(q)) : tx;
     const dir = sortDir === "asc" ? 1 : -1;
-
-    const getVal = (t) => {
-      switch (sortKey) {
-        case "symbol":
-          return t.symbol || "";
-        case "type":
-          return t.type || "";
-        case "shares":
-          return safeNum(t.shares, 0);
-        case "price":
-          return safeNum(t.price, 0);
-        case "date":
-        default:
-          return t.date || "";
-      }
-    };
-
+    const getVal = (t) => ({ symbol: t.symbol || "", type: t.type || "", shares: safeNum(t.shares, 0), price: safeNum(t.price, 0), date: t.date || "" }[sortKey] ?? t.date ?? "");
     return [...list].sort((a, b) => {
-      const va = getVal(a);
-      const vb = getVal(b);
-      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
-      return String(va).localeCompare(String(vb)) * dir;
+      const va = getVal(a), vb = getVal(b);
+      return (typeof va === "number" && typeof vb === "number") ? (va - vb) * dir : String(va).localeCompare(String(vb)) * dir;
     });
   }, [tx, search, sortKey, sortDir]);
 
-  useEffect(() => {
-    let alive = true;
-
-    async function loadTxAndQuotes() {
-      setLoading(true);
-      setError("");
-      setQuoteStatus("");
-
-      try {
-        const txRes = await apiFetch("/assets/stocks/transactions");
-        if (!alive) return;
-
-        const list = Array.isArray(txRes?.items) ? txRes.items : Array.isArray(txRes) ? txRes : [];
-        const norm = list.map(normalizeTx);
-        setTx(norm);
-
-        const sym = Array.from(new Set(norm.map((t) => t.symbol).filter(Boolean))).sort();
-        if (sym.length) {
-          await refreshQuotes(sym);
-        } else {
-          setQuoteStatus("Add a transaction to start tracking holdings.");
-        }
-      } catch (e) {
-        if (!alive) return;
-        setError(e?.message || "Failed to load stock transactions");
-        setTx([]);
-      } finally {
-        if (!alive) return;
-        setLoading(false);
-      }
-    }
-
-    loadTxAndQuotes();
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function refreshTxList() {
-    const txRes = await apiFetch("/assets/stocks/transactions");
-    const list = Array.isArray(txRes?.items) ? txRes.items : Array.isArray(txRes) ? txRes : [];
-    const norm = list.map(normalizeTx);
-    setTx(norm);
-
-    const sym = Array.from(new Set(norm.map((t) => t.symbol).filter(Boolean))).sort();
-    if (sym.length) {
-      await refreshQuotes(sym);
-    }
-  }
-
-  async function refreshQuotes(symList = symbols) {
-    if (!symList.length) return;
-
-    try {
-      setQuoteStatus("Refreshing quotes…");
-      const qs = `?stocks=${encodeURIComponent(symList.join(","))}`;
-      const res = await apiFetch(`/prices${qs}`);
-
-      // res.stocks expected: { AAPL: { price, prevClose, ... } }
-      const stockMap = res?.stocks || {};
-      setQuotes((prev) => ({ ...prev, ...stockMap }));
-
-      const stockErrors = res?.errors?.stocks;
-      if (stockErrors && typeof stockErrors === "object") {
-        const bad = Object.keys(stockErrors);
-        setQuoteStatus(
-          bad.length
-            ? `Quotes refreshed (some failed: ${bad.slice(0, 5).join(", ")}${bad.length > 5 ? "…" : ""}).`
-            : "Quotes refreshed."
-        );
-      } else {
-        setQuoteStatus("Quotes refreshed.");
-      }
-    } catch (e) {
-      setQuoteStatus(e?.message ? `Quote refresh failed: ${e.message}` : "Quote refresh failed.");
-    }
-  }
-
-  function resetForm() {
-    setForm(DEFAULT_FORM);
-    setEditingId(null);
-    setError("");
-  }
-
-  function closeForm() {
-    setShowForm(false);
-    resetForm();
-  }
-
-  function openCreateForm() {
-    setError("");
-    setEditingId(null);
-    setForm(DEFAULT_FORM);
-    setShowForm(true);
-    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
-  }
+  function resetForm()  { setForm(DEFAULT_FORM); setEditingId(null); setError(""); }
+  function closeForm()  { setShowForm(false); resetForm(); }
+  function openCreate() { setError(""); setEditingId(null); setForm(DEFAULT_FORM); setShowForm(true); setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0); }
 
   function startEdit(t) {
-    setError("");
-    setEditingId(t.id);
-    setForm({
-      type: String(t.type || "BUY").toUpperCase(),
-      symbol: String(t.symbol || "AAPL").toUpperCase(),
-      date: t.date || todayISO(),
-      shares: String(t.shares ?? ""),
-      price: String(t.price ?? ""),
-      fees: String(t.fees ?? ""),
-      notes: t.notes || "",
-    });
-    setShowForm(true);
-    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+    setError(""); setEditingId(t.id);
+    setForm({ type: String(t.type || "BUY").toUpperCase(), symbol: String(t.symbol || "AAPL").toUpperCase(), date: t.date || todayISO(), shares: String(t.shares ?? ""), price: String(t.price ?? ""), fees: String(t.fees ?? ""), notes: t.notes || "" });
+    setShowForm(true); setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
 
-  function buildPayloadFromForm() {
+  function buildPayload() {
     const symbol = String(form.symbol || "").toUpperCase().trim();
-    const shares = safeNum(form.shares, NaN);
-    const price = safeNum(form.price, NaN);
-    const fees = safeNum(form.fees, 0);
+    const shares = safeNum(form.shares, NaN), price = safeNum(form.price, NaN), fees = safeNum(form.fees, 0);
     const type = String(form.type).toUpperCase();
-
-    if (!symbol) throw new Error("Symbol is required (e.g., AAPL)");
+    if (!symbol) throw new Error("Symbol is required");
     if (!form.date) throw new Error("Date is required");
     if (!["BUY", "SELL"].includes(type)) throw new Error("Type must be BUY or SELL");
     if (!Number.isFinite(shares) || shares <= 0) throw new Error("Shares must be a positive number");
-    if (!Number.isFinite(price) || price <= 0) throw new Error("Price must be a positive number");
-    if (!Number.isFinite(fees) || fees < 0) throw new Error("Fees must be valid");
-
-    return {
-      type,
-      symbol,
-      date: form.date,
-      shares: Number(shares.toFixed(4)),
-      price: Number(price.toFixed(4)),
-      fees: Number(fees.toFixed(2)),
-      notes: form.notes?.trim() || "",
-    };
+    if (!Number.isFinite(price)  || price  <= 0) throw new Error("Price must be a positive number");
+    if (!Number.isFinite(fees)   || fees   < 0)  throw new Error("Fees must be valid");
+    return { type, symbol, date: form.date, shares: Number(shares.toFixed(4)), price: Number(price.toFixed(4)), fees: Number(fees.toFixed(2)), notes: form.notes?.trim() || "" };
   }
 
-  async function onSubmit(e) {
-    e.preventDefault();
+  function onSubmit(e) {
+    e.preventDefault(); setError("");
+    let payload;
+    try { payload = buildPayload(); }
+    catch (err) { setError(err?.message || "Save failed"); return; }
+    saveMut.mutate({ id: editingId, payload });
+  }
+
+  function onDelete(id) {
     setError("");
-    setSaving(true);
-
-    try {
-      const payload = buildPayloadFromForm();
-
-      if (editingId) {
-        await apiFetch(`/assets/stocks/transactions/${encodeURIComponent(editingId)}`, {
-          method: "PATCH",
-          body: payload,
-        });
-      } else {
-        await apiFetch("/assets/stocks/transactions", { method: "POST", body: payload });
-      }
-
-      await refreshTxList();
-      closeForm();
-    } catch (err) {
-      setError(err?.message || "Save failed");
-    } finally {
-      setSaving(false);
-    }
+    if (!window.confirm("Delete this stock transaction?")) return;
+    deleteMut.mutate(id);
   }
 
-  async function onDelete(id) {
-    setError("");
-    const okDel = window.confirm("Delete this stock transaction?");
-    if (!okDel) return;
-
-    try {
-      setSaving(true);
-      await apiFetch(`/assets/stocks/transactions/${encodeURIComponent(id)}`, { method: "DELETE" });
-      await refreshTxList();
-      if (editingId === id) closeForm();
-    } catch (err) {
-      setError(err?.message || "Delete failed");
-    } finally {
-      setSaving(false);
-    }
+  function refreshQuotes() {
+    if (!txSymbols.length) return;
+    refetchPrices();
   }
 
-  const asOfDate = todayISO();
-
+  /* ── Render ─────────────────────────────────────────────── */
   return (
-    <div style={{ padding: 16, color: THEME.pageText }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+    <div className="space-y-5">
+
+      {/* Page header */}
+      <div className="flex items-baseline justify-between gap-3">
         <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: THEME.title, letterSpacing: "0.2px" }}>
-            Stocks
-          </div>
-        </div>
-        <div style={{ fontSize: 12, color: THEME.muted, textAlign: "right" }}>
-          As of <span style={{ color: THEME.pageText, fontWeight: 700 }}>{asOfDate}</span>
+          <h1 className="text-2xl font-black text-slate-100 tracking-tight" style={{ fontFamily: "Epilogue, sans-serif" }}>Stocks</h1>
+          <p className="mt-0.5 text-xs text-slate-500">As of <span className="text-slate-400 font-semibold">{todayISO()}</span></p>
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(4, minmax(180px, 1fr))", gap: 12 }}>
-        <SummaryCard title="Total Holding Value" value={formatMoney(metrics.totals.holdingValue)} hint="Based on latest quotes" />
-        <SummaryCard title="Unrealized Gain/Loss" value={formatMoney(metrics.totals.unrealized)} hint="Spot vs. avg cost" valueColor={plColor(metrics.totals.unrealized)} />
-        <SummaryCard title="Realized Gain/Loss" value={formatMoney(metrics.totals.realized)} hint="From sell transactions" valueColor={plColor(metrics.totals.realized)} />
-        <SummaryCard title="Total P/L" value={formatMoney(metrics.totals.totalPL)} hint="Realized + Unrealized" />
-      </div>
-
-      {/* Holdings */}
-      <div style={{ ...panel, marginTop: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>Holdings Overview</div>
-            <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>
-              {quoteStatus || "Quotes are loaded from /prices?stocks=... (Finnhub)."}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button type="button" onClick={() => refreshQuotes()} style={btnSecondary} disabled={saving || loading}>
-              Refresh Quotes
-            </button>
-            <button type="button" onClick={openCreateForm} style={btnPrimary} disabled={saving || loading}>
-              Add Transaction
-            </button>
-          </div>
+      {(txError || error) && (
+        <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">
+          {txError?.message || error}
         </div>
+      )}
 
-        <div style={{ marginTop: 10, borderTop: `1px solid ${THEME.rowBorder}` }} />
+      {/* Loading */}
+      {loading && <EmptyState type="loading" message="Loading your stocks…" />}
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <Th>Symbol</Th>
-                <Th>Shares</Th>
-                <Th>Avg Cost</Th>
-                <Th>Spot</Th>
-                <Th>Day G/L</Th>
-                <Th>Market Value</Th>
-                <Th>Unrealized</Th>
-                <Th>Realized</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {metrics.holdings.length === 0 ? (
-                <tr style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
-                  <Td colSpan={8}>
-                    <div style={{ padding: "10px 0", color: THEME.muted }}>
-                      No holdings yet. Add a BUY transaction.
-                    </div>
-                  </Td>
-                </tr>
-              ) : (
-                metrics.holdings.map((h) => {
-                  const mv = spotMove(h.spot, h.prevClose);
-                  const dayGL = mv.hasPrev ? safeNum(h.shares, 0) * mv.change : null;
+      {!loading && (
+        <>
+          {/* Summary cards */}
+          {(() => {
+            const unrealizedPct = metrics.totals.totalCost > 0 ? formatPct((metrics.totals.unrealized / metrics.totals.totalCost) * 100) : null;
+            const dayGLPct = metrics.totals.prevDayValue > 0 && metrics.totals.dayGL != null ? formatPct((metrics.totals.dayGL / metrics.totals.prevDayValue) * 100) : null;
+            return (
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                <MetricCard label="Total Holding Value"    value={formatMoney(metrics.totals.holdingValue)} sub="Based on latest quotes" accent />
+                <MetricCard label="Unrealized Gain / Loss" value={formatMoney(metrics.totals.unrealized)}   pct={unrealizedPct} sub="Spot vs avg cost"       valueClass={plClass(metrics.totals.unrealized)} />
+                <MetricCard label="Day's Gain / Loss"      value={metrics.totals.dayGL != null ? formatMoney(metrics.totals.dayGL) : "—"} pct={dayGLPct} sub="vs. yesterday's close" valueClass={metrics.totals.dayGL != null ? plClass(metrics.totals.dayGL) : "text-slate-500"} />
+              </div>
+            );
+          })()}
 
-                  return (
-                    <tr key={h.symbol} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
-                      <Td>
-                        <div style={{ fontWeight: 900, color: THEME.title }}>{h.symbol}</div>
-                        <div style={{ marginTop: 3, fontSize: 12, color: THEME.muted }}>
-                          Buys: {h.buys} · Sells: {h.sells}
-                        </div>
-                      </Td>
-
-                      <Td>{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</Td>
-                      <Td>{formatMoney(h.avgCost)}</Td>
-
-                      {/* Spot (colored) + % change */}
-                      <Td>
-                        <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                          <span style={{ fontWeight: 900, color: mv.color }}>{formatMoney(h.spot)}</span>
-                          {mv.hasPrev ? (
-                            <span style={{ fontSize: 12, fontWeight: 800, color: mv.color }}>
-                              ({formatPct(mv.pct)})
-                            </span>
-                          ) : null}
-                        </div>
-                      </Td>
-
-                      {/* Day G/L (shares * (spot - prevClose)) */}
-                      <Td style={{ fontWeight: 900, color: mv.hasPrev ? plColor(dayGL) : THEME.muted }}>
-                        {mv.hasPrev ? formatMoney(dayGL) : "—"}
-                      </Td>
-
-                      <Td style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(h.marketValue)}</Td>
-                      <Td style={{ fontWeight: 900, color: plColor(h.unrealized) }}>{formatMoney(h.unrealized)}</Td>
-                      <Td style={{ fontWeight: 900, color: plColor(h.realized) }}>{formatMoney(h.realized)}</Td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Add/Edit transaction */}
-      {showForm ? (
-        <div style={{ ...panel, marginTop: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
-              {editingId ? "Edit Stock Transaction" : "Add Stock Transaction"}
-            </div>
-            <button type="button" onClick={closeForm} style={btnSecondary} disabled={saving}>
-              Close
-            </button>
-          </div>
-
-          {error ? (
-            <div style={{ marginTop: 10, ...callout }}>
-              <div style={{ fontWeight: 900, color: THEME.title }}>Error</div>
-              <div style={{ marginTop: 4, color: THEME.pageText }}>{error}</div>
-            </div>
-          ) : null}
-
-          <form onSubmit={onSubmit} style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              <Field label="Type">
-                <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} style={input} disabled={saving}>
-                  <option value="BUY">Buy</option>
-                  <option value="SELL">Sell</option>
-                </select>
-              </Field>
-
-              <Field label="Symbol">
-                <input
-                  value={form.symbol}
-                  onChange={(e) => setForm((f) => ({ ...f, symbol: e.target.value.toUpperCase() }))}
-                  placeholder="e.g., AAPL"
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
-
-              <Field label="Date">
-                <input
-                  type="date"
-                  value={form.date}
-                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              <Field label="Shares">
-                <input
-                  value={form.shares}
-                  onChange={(e) => setForm((f) => ({ ...f, shares: e.target.value }))}
-                  placeholder="e.g., 10"
-                  inputMode="decimal"
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
-
-              <Field label="Price (USD / share)">
-                <input
-                  value={form.price}
-                  onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-                  placeholder="e.g., 193.22"
-                  inputMode="decimal"
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
-
-              <Field label="Fees (USD)">
-                <input
-                  value={form.fees}
-                  onChange={(e) => setForm((f) => ({ ...f, fees: e.target.value }))}
-                  placeholder="0"
-                  inputMode="decimal"
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "3fr 1fr", gap: 10 }}>
-              <Field label="Notes (optional)">
-                <input
-                  value={form.notes}
-                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                  placeholder="e.g., earnings buy, long-term"
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
-
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "end" }}>
-                <button type="button" onClick={resetForm} style={btnSecondary} disabled={saving}>
-                  Reset
-                </button>
-                <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.75 : 1 }} disabled={saving}>
-                  {saving ? "Saving…" : editingId ? "Save Changes" : "Add Transaction"}
-                </button>
+          {/* Holdings */}
+          <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-sm font-bold text-slate-200">Holdings Overview</p>
+                <p className="mt-0.5 text-xs text-slate-500">{quoteStatus || "Live quotes via Finnhub"}</p>
+              </div>
+              <div className="flex gap-2">
+                <Btn onClick={refreshQuotes} disabled={saving || pricesFetching}>Refresh</Btn>
+                <BtnPrimary onClick={openCreate} disabled={saving}>Add Transaction</BtnPrimary>
               </div>
             </div>
-          </form>
-        </div>
-      ) : null}
 
-      {/* Transactions */}
-      <div style={{ ...panel, marginTop: 14, paddingBottom: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>Transactions</div>
-
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search type/symbol/notes…"
-              style={{ ...input, width: 240 }}
-              disabled={loading}
-            />
-            <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} style={{ ...input, width: 190 }} disabled={loading}>
-              <option value="date">Sort: Date</option>
-              <option value="symbol">Sort: Symbol</option>
-              <option value="type">Sort: Type</option>
-              <option value="shares">Sort: Shares</option>
-              <option value="price">Sort: Price</option>
-            </select>
-            <button type="button" onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))} style={btnSecondary} disabled={loading}>
-              {sortDir === "asc" ? "Asc" : "Desc"}
-            </button>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px]">
+                <thead>
+                  <tr className="border-b border-white/[0.06]">
+                    {["Symbol", "Shares", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {metrics.holdings.length === 0 ? (
+                    <tr><td colSpan={7}><EmptyState type="empty" message="No holdings yet. Add a BUY transaction." /></td></tr>
+                  ) : metrics.holdings.map((h) => {
+                    const mv = spotMove(h.spot, h.prevClose);
+                    const dayGL = mv.hasPrev ? safeNum(h.shares, 0) * mv.change : null;
+                    return (
+                      <tr key={h.symbol} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="px-4 py-3">
+                          <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5">Buys: {h.buys} · Sells: {h.sells}</p>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
+                        <td className="px-4 py-3">
+                          <p className={`text-sm font-bold numeric ${plClass(mv.change)}`}>{formatMoney(h.spot)}</p>
+                          {mv.hasPrev && <p className={`text-[11px] font-semibold mt-0.5 numeric ${plClass(mv.change)}`}>{formatPct(mv.pct)}</p>}
+                        </td>
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${mv.hasPrev ? plClass(dayGL) : "text-slate-600"}`}>
+                          {mv.hasPrev ? formatMoney(dayGL) : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
 
-        <div style={{ marginTop: 10, borderTop: `1px solid ${THEME.rowBorder}` }} />
+          {/* Add/Edit form */}
+          {showForm && (
+            <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-5">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <p className="text-sm font-bold text-slate-200">{editingId ? "Edit Stock Transaction" : "Add Stock Transaction"}</p>
+                <Btn onClick={closeForm} disabled={saving}>Close</Btn>
+              </div>
 
-        {loading ? (
-          <div style={{ padding: 14, color: THEME.muted }}>Loading…</div>
-        ) : filteredSortedTx.length === 0 ? (
-          <div style={{ padding: 14, color: THEME.muted }}>No stock transactions yet. Add a buy/sell above.</div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ textAlign: "left" }}>
-                  <Th>Date</Th>
-                  <Th>Type</Th>
-                  <Th>Symbol</Th>
-                  <Th>Shares</Th>
-                  <Th>Price</Th>
-                  <Th>Fees</Th>
-                  <Th>Net</Th>
-                  <Th align="right">Actions</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredSortedTx.map((t) => {
-                  const type = String(t.type || "BUY").toUpperCase();
-                  const shares = safeNum(t.shares, 0);
-                  const px = safeNum(t.price, 0);
-                  const fees = safeNum(t.fees, 0);
-                  const gross = shares * px;
-                  const net = type === "SELL" ? gross - fees : gross + fees;
+              {error && (
+                <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">{error}</div>
+              )}
 
-                  return (
-                    <tr key={t.id} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
-                      <Td>{t.date || "-"}</Td>
-                      <Td>
-                        <span style={{ fontWeight: 900, color: THEME.title }}>{type}</span>
-                      </Td>
-                      <Td>{String(t.symbol || "").toUpperCase()}</Td>
-                      <Td>{shares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Td>
-                      <Td>{formatMoney(px)}</Td>
-                      <Td>{formatMoney(fees)}</Td>
-                      <Td style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(net)}</Td>
-                      <Td align="right">
-                        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingRight: 8 }}>
-                          <button type="button" onClick={() => startEdit(t)} style={btnSecondarySmall} disabled={saving}>
-                            Edit
-                          </button>
-                          <button type="button" onClick={() => onDelete(t.id)} style={btnDangerSmall} disabled={saving}>
-                            Delete
-                          </button>
-                        </div>
-                        {t.notes ? (
-                          <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted, paddingRight: 8 }}>
-                            {t.notes}
-                          </div>
-                        ) : null}
-                      </Td>
+              <form onSubmit={onSubmit} className="space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <FLabel label="Type">
+                    <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className={inputCls} disabled={saving}>
+                      <option value="BUY">Buy</option>
+                      <option value="SELL">Sell</option>
+                    </select>
+                  </FLabel>
+                  <FLabel label="Symbol">
+                    <input value={form.symbol} onChange={(e) => setForm((f) => ({ ...f, symbol: e.target.value.toUpperCase() }))} placeholder="e.g., AAPL" className={inputCls} disabled={saving} list="finvault-stock-symbols" />
+                    <datalist id="finvault-stock-symbols">
+                      {symbols.map((s) => <option key={s} value={s} />)}
+                    </datalist>
+                  </FLabel>
+                  <FLabel label="Date">
+                    <input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} className={inputCls} disabled={saving} />
+                  </FLabel>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <FLabel label="Shares">
+                    <input value={form.shares} onChange={(e) => setForm((f) => ({ ...f, shares: e.target.value }))} placeholder="e.g., 10" inputMode="decimal" className={inputCls} disabled={saving} />
+                  </FLabel>
+                  <FLabel label="Price (USD / share)">
+                    <input value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} placeholder="e.g., 193.22" inputMode="decimal" className={inputCls} disabled={saving} />
+                  </FLabel>
+                  <FLabel label="Fees (USD)">
+                    <input value={form.fees} onChange={(e) => setForm((f) => ({ ...f, fees: e.target.value }))} placeholder="0" inputMode="decimal" className={inputCls} disabled={saving} />
+                  </FLabel>
+                </div>
+
+                <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+                  <FLabel label="Notes (optional)">
+                    <input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="e.g., earnings buy, long-term" className={inputCls} disabled={saving} />
+                  </FLabel>
+                  <div className="flex gap-2 pb-0.5">
+                    <Btn onClick={resetForm} disabled={saving}>Reset</Btn>
+                    <BtnPrimary type="submit" disabled={saving}>{saving ? "Saving…" : editingId ? "Save Changes" : "Add Transaction"}</BtnPrimary>
+                  </div>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Transactions */}
+          <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-sm font-bold text-slate-200">Transactions</p>
+              <div className="flex gap-2 items-center flex-nowrap">
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search type / symbol / notes…" className={`${inputCls} w-52`} />
+                <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className={`${inputCls} w-36`}>
+                  <option value="date">Date</option>
+                  <option value="symbol">Symbol</option>
+                  <option value="type">Type</option>
+                  <option value="shares">Shares</option>
+                  <option value="price">Price</option>
+                </select>
+                <Btn onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}>{sortDir === "asc" ? "Asc ↑" : "Desc ↓"}</Btn>
+              </div>
+            </div>
+
+            {filteredSortedTx.length === 0 ? (
+              <EmptyState type="empty" message="No stock transactions yet. Add a buy or sell above." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px]">
+                  <thead>
+                    <tr className="border-b border-white/[0.06]">
+                      {["Date", "Type", "Symbol", "Shares", "Price", "Fees", "Net", ""].map((h, i) => (
+                        <th key={i} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                      ))}
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.04]">
+                    {filteredSortedTx.map((t) => {
+                      const type = String(t.type || "BUY").toUpperCase();
+                      const shares = safeNum(t.shares, 0), px = safeNum(t.price, 0), fees = safeNum(t.fees, 0);
+                      const net = type === "SELL" ? shares * px - fees : shares * px + fees;
+                      return (
+                        <tr key={t.id} className="hover:bg-white/[0.02] transition-colors">
+                          <td className="px-4 py-3 text-sm text-slate-400">{t.date || "—"}</td>
+                          <td className="px-4 py-3"><Badge variant={type === "BUY" ? "buy" : type === "SELL" ? "sell" : "summary"}>{type}</Badge></td>
+                          <td className="px-4 py-3 text-sm font-semibold text-slate-200">{String(t.symbol || "").toUpperCase()}</td>
+                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{shares.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(px)}</td>
+                          <td className="px-4 py-3 text-sm text-slate-400 numeric">{formatMoney(fees)}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(net)}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-2 justify-end">
+                              <button type="button" onClick={() => startEdit(t)} disabled={saving} className={btnSmCls}>Edit</button>
+                              <button type="button" onClick={() => onDelete(t.id)} disabled={saving} className={btnDangerSmCls}>Delete</button>
+                            </div>
+                            {t.notes && <p className="text-[11px] text-slate-600 mt-1 text-right pr-1">{t.notes}</p>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }
 
-/* ---------- UI helpers ---------- */
-
-function SummaryCard({ title, value, hint, valueColor }) {
+/* ── Shared UI atoms ─────────────────────────────────────── */
+function FLabel({ label, children }) {
   return (
-    <div style={panel}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{title}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: valueColor || THEME.title }}>{value}</div>
-      {hint ? <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>{hint}</div> : null}
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <label style={{ display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{label}</div>
+    <label className="flex flex-col gap-1.5">
+      <span className="text-xs font-semibold text-slate-500">{label}</span>
       {children}
     </label>
   );
 }
 
-function Th({ children, align, style, ...rest }) {
+function Btn({ children, onClick, disabled, type = "button" }) {
   return (
-    <th
-      style={{
-        padding: "10px 10px",
-        fontSize: 12,
-        color: THEME.muted,
-        fontWeight: 900,
-        textAlign: align || "left",
-        ...style,
-      }}
-      {...rest}
-    >
+    <button type={type} onClick={onClick} disabled={disabled}
+      className="px-3 py-2 text-sm font-bold rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.07] hover:text-slate-200 transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap">
       {children}
-    </th>
+    </button>
   );
 }
 
-function Td({ children, colSpan, align, style, ...rest }) {
+function BtnPrimary({ children, onClick, disabled, type = "button" }) {
   return (
-    <td
-      style={{
-        padding: "10px 10px",
-        fontSize: 13,
-        color: THEME.pageText,
-        textAlign: align || "left",
-        verticalAlign: "top",
-        ...style,
-      }}
-      colSpan={colSpan}
-      {...rest}
-    >
+    <button type={type} onClick={onClick} disabled={disabled}
+      className="px-3 py-2 text-sm font-bold rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 transition-all disabled:opacity-50 cursor-pointer">
       {children}
-    </td>
+    </button>
   );
 }
 
-/* ---------- Styles ---------- */
-
-const panel = {
-  background: THEME.panelBg,
-  border: `1px solid ${THEME.panelBorder}`,
-  borderRadius: 14,
-  padding: 14,
-  boxShadow: "0 10px 26px rgba(0,0,0,0.22)",
-  backdropFilter: "blur(10px)",
-};
-
-const callout = {
-  background: "rgba(239, 68, 68, 0.12)",
-  border: `1px solid rgba(239, 68, 68, 0.28)`,
-  borderRadius: 12,
-  padding: 12,
-};
-
-const input = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 12,
-  outline: "none",
-  border: `1px solid ${THEME.inputBorder}`,
-  background: THEME.inputBg,
-  color: THEME.pageText,
-  fontSize: 13,
-};
-
-const btnPrimary = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.primaryBorder}`,
-  background: THEME.primaryBg,
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const btnSecondary = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.inputBorder}`,
-  background: "rgba(2, 6, 23, 0.2)",
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const btnSecondarySmall = {
-  padding: "8px 10px",
-  borderRadius: 10,
-  border: `1px solid ${THEME.inputBorder}`,
-  background: "rgba(2, 6, 23, 0.2)",
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const btnDangerSmall = {
-  padding: "8px 10px",
-  borderRadius: 10,
-  border: `1px solid ${THEME.dangerBorder}`,
-  background: THEME.dangerBg,
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-  fontSize: 12,
-};
+const inputCls = "w-full px-3 py-2 rounded-xl bg-[#080D1A] border border-white/[0.1] text-slate-200 text-sm placeholder:text-slate-700 focus:outline-none focus:border-blue-500/40 disabled:opacity-50";
+const btnSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.07] hover:text-slate-200 transition-all disabled:opacity-50 cursor-pointer";
+const btnDangerSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all disabled:opacity-50 cursor-pointer";

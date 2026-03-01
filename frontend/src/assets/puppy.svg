@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <!-- Ears -->
+  <ellipse cx="62" cy="72" rx="22" ry="28" fill="#C8A96E" transform="rotate(-20 62 72)"/>
+  <ellipse cx="138" cy="72" rx="22" ry="28" fill="#C8A96E" transform="rotate(20 138 72)"/>
+  <ellipse cx="62" cy="74" rx="14" ry="20" fill="#A07040" transform="rotate(-20 62 74)"/>
+  <ellipse cx="138" cy="74" rx="14" ry="20" fill="#A07040" transform="rotate(20 138 74)"/>
+
+  <!-- Head -->
+  <ellipse cx="100" cy="100" rx="52" ry="50" fill="#D4B07A"/>
+
+  <!-- Snout -->
+  <ellipse cx="100" cy="118" rx="26" ry="20" fill="#E8C88E"/>
+
+  <!-- Eyes -->
+  <ellipse cx="82" cy="95" rx="10" ry="11" fill="white"/>
+  <ellipse cx="118" cy="95" rx="10" ry="11" fill="white"/>
+  <circle cx="84" cy="96" r="7" fill="#2C1A0E"/>
+  <circle cx="120" cy="96" r="7" fill="#2C1A0E"/>
+  <!-- Eye shine -->
+  <circle cx="87" cy="93" r="2.5" fill="white"/>
+  <circle cx="123" cy="93" r="2.5" fill="white"/>
+
+  <!-- Nose -->
+  <ellipse cx="100" cy="111" rx="10" ry="7" fill="#3D2510"/>
+
+  <!-- Smile -->
+  <path d="M88 122 Q100 132 112 122" stroke="#3D2510" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+
+  <!-- Tongue -->
+  <ellipse cx="100" cy="130" rx="8" ry="7" fill="#E87070"/>
+  <path d="M92 130 Q100 138 108 130" fill="#E87070"/>
+
+  <!-- Forehead dot -->
+  <ellipse cx="100" cy="80" rx="8" ry="7" fill="#A07040"/>
+
+  <!-- Body hint -->
+  <ellipse cx="100" cy="175" rx="38" ry="22" fill="#C8A96E"/>
+
+  <!-- Paws -->
+  <ellipse cx="70" cy="185" rx="16" ry="10" fill="#D4B07A"/>
+  <ellipse cx="130" cy="185" rx="16" ry="10" fill="#D4B07A"/>
+</svg>

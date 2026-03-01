@@ -1,7 +1,6 @@
-const nacl = require("tweetnacl");
 const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
-
-const RH_BASE = "https://trading.robinhood.com";
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient, GetCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
 const YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 
@@ -41,11 +40,51 @@ function parseCsvSymbols(s) {
     .slice(0, 25);
 }
 
-/* -------------------- S3 helpers (metals) -------------------- */
+/* -------------------- S3 + DynamoDB clients -------------------- */
 const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
 const METALS_BUCKET = process.env.METALS_BUCKET || "finvault-metal-prices-sandbox-1152";
+const PRICE_CACHE_TABLE = process.env.PRICE_CACHE_TABLE;
+const PRICE_CACHE_TTL_MS = 60_000; // 60 seconds application-level TTL
 
 const s3 = new S3Client({ region: REGION });
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
+  marshallOptions: { removeUndefinedValues: true },
+});
+
+/* -------------------- Price cache (DynamoDB) -------------------- */
+async function getCachedPrices(cacheKey) {
+  if (!PRICE_CACHE_TABLE) return null;
+  try {
+    const resp = await ddb.send(new GetCommand({
+      TableName: PRICE_CACHE_TABLE,
+      Key: { cacheKey },
+    }));
+    const item = resp.Item;
+    if (!item?.cachedAt) return null;
+    const age = Date.now() - new Date(item.cachedAt).getTime();
+    return age < PRICE_CACHE_TTL_MS ? item.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function setCachedPrices(cacheKey, data) {
+  if (!PRICE_CACHE_TABLE) return;
+  try {
+    const now = new Date();
+    await ddb.send(new PutCommand({
+      TableName: PRICE_CACHE_TABLE,
+      Item: {
+        cacheKey,
+        data,
+        cachedAt: now.toISOString(),
+        ttl: Math.floor(now.getTime() / 1000) + 3600, // DynamoDB TTL: clean up after 1 hour
+      },
+    }));
+  } catch {
+    // Cache write failures are non-fatal
+  }
+}
 
 function isoDateUTC(d = new Date()) {
   return d.toISOString().slice(0, 10);
@@ -201,71 +240,6 @@ async function fetchYahooIndex(symbol) {
   return { symbol, price, prevClose, timestamp };
 }
 
-/* -------------------- Robinhood signing -------------------- */
-function b64ToUint8(b64) {
-  return new Uint8Array(Buffer.from(b64, "base64"));
-}
-
-function makeRhSignature({ apiKey, privateKeyB64, timestamp, path, method, bodyStr }) {
-  const message = `${apiKey}${timestamp}${path}${method}${bodyStr || ""}`;
-  const msgBytes = new TextEncoder().encode(message);
-
-  const rawKey = b64ToUint8(privateKeyB64);
-  const seed = rawKey.length === 64 ? rawKey.slice(0, 32) : rawKey;
-
-  const keyPair = nacl.sign.keyPair.fromSeed(seed);
-  const sig = nacl.sign.detached(msgBytes, keyPair.secretKey);
-
-  return Buffer.from(sig).toString("base64");
-}
-
-/* -------------------- Robinhood Best Bid / Ask -------------------- */
-async function fetchRhBestBidAsk(symbols) {
-  const apiKey = process.env.RH_API_KEY;
-  const privateKeyB64 = process.env.RH_PRIVATE_KEY_B64;
-
-  if (!apiKey || !privateKeyB64) {
-    throw new Error("Missing RH_API_KEY or RH_PRIVATE_KEY_B64");
-  }
-
-  const qs = symbols.map((s) => `symbol=${encodeURIComponent(s)}`).join("&");
-  const path = `/api/v2/crypto/marketdata/best_bid_ask/?${qs}`;
-  const url = `${RH_BASE}${path}`;
-
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const method = "GET";
-  const bodyStr = "";
-
-  const signature = makeRhSignature({
-    apiKey,
-    privateKeyB64,
-    timestamp,
-    path,
-    method,
-    bodyStr,
-  });
-
-  const resp = await fetchWithTimeout(
-    url,
-    {
-      method,
-      headers: {
-        "x-api-key": apiKey,
-        "x-timestamp": timestamp,
-        "x-signature": signature,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-    },
-    3500
-  );
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Robinhood ${resp.status}: ${text}`);
-  }
-
-  return resp.json();
-}
 
 /* -------------------- Finnhub stock quotes -------------------- */
 async function fetchFinnhubQuote(symbol, apiKey) {
@@ -328,6 +302,23 @@ exports.handler = async (event) => {
   const stockSymbols = parseCsvSymbols(q.stocks || q.symbols);
   const cryptoSymbols = parseCsvSymbols(q.crypto).map((s) => (s.includes("-") ? s : `${s}-USD`));
 
+  // Cache only requests without custom stock symbols (covers PricesBar's common call path).
+  // Stock quotes are per-page and change frequently; skip caching for those.
+  const cacheKey = stockSymbols.length
+    ? null
+    : `PRICES:${[...cryptoSymbols].sort().join(",")}`;
+
+  if (cacheKey) {
+    const cached = await getCachedPrices(cacheKey);
+    if (cached) {
+      return {
+        statusCode: 200,
+        headers: corsHeaders(),
+        body: JSON.stringify({ ...cached, fromCache: true }),
+      };
+    }
+  }
+
   let gold = null;
   let silver = null;
   let copper = null;
@@ -370,11 +361,16 @@ exports.handler = async (event) => {
     errors.nasdaq = String(e?.message || e);
   }
 
-  /* ---- Crypto ---- */
+  /* ---- Crypto (Yahoo Finance — returns { symbol, price, prevClose, timestamp }) ---- */
   try {
     const defaultCrypto = ["BTC-USD", "ETH-USD"];
     const requestedCrypto = cryptoSymbols.length ? cryptoSymbols : defaultCrypto;
-    crypto = await fetchRhBestBidAsk(requestedCrypto);
+    const cryptoSettled = await Promise.allSettled(requestedCrypto.map((sym) => fetchYahooIndex(sym)));
+    crypto = {};
+    cryptoSettled.forEach((r, i) => {
+      if (r.status === "fulfilled") crypto[requestedCrypto[i]] = r.value;
+      else errors[`crypto.${requestedCrypto[i]}`] = String(r.reason?.message || r.reason);
+    });
   } catch (e) {
     errors.crypto = String(e?.message || e);
   }
@@ -407,6 +403,8 @@ exports.handler = async (event) => {
     errors: Object.keys(errors).length ? errors : undefined,
     fetchedAt: new Date().toISOString(),
   };
+
+  if (cacheKey) await setCachedPrices(cacheKey, responseBody);
 
   return {
     statusCode: 200,

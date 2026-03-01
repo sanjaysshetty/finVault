@@ -1,0 +1,31 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="50%" stop-color="#3B82F6"/>
+      <stop offset="100%" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F1729"/>
+      <stop offset="100%" stop-color="#0A1628"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded square background (dark navy) -->
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)" stroke="rgba(59,130,246,0.3)" stroke-width="2"/>
+
+  <!-- Outer vault ring -->
+  <circle cx="128" cy="128" r="88" fill="none" stroke="url(#g)" stroke-width="10"/>
+
+  <!-- Inner vault disk -->
+  <circle cx="128" cy="128" r="50" fill="url(#g)" fill-opacity="0.12" stroke="url(#g)" stroke-width="7"/>
+
+  <!-- 4 handle spokes -->
+  <line x1="128" y1="40" x2="128" y2="78" stroke="url(#g)" stroke-width="10" stroke-linecap="round"/>
+  <line x1="128" y1="178" x2="128" y2="216" stroke="url(#g)" stroke-width="10" stroke-linecap="round"/>
+  <line x1="40"  y1="128" x2="78"  y2="128" stroke="url(#g)" stroke-width="10" stroke-linecap="round"/>
+  <line x1="178" y1="128" x2="216" y2="128" stroke="url(#g)" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- Central knob -->
+  <circle cx="128" cy="128" r="20" fill="url(#g)"/>
+</svg>
