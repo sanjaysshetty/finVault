@@ -1,179 +1,61 @@
 import { useEffect, useMemo, useState } from "react";
-
-/* ---------------- Theme (match your assets pages) ---------------- */
-
-const THEME = {
-  pageText: "#CBD5F5",
-  title: "#F9FAFB",
-  muted: "#94A3B8",
-  panelBg: "rgba(15, 23, 42, 0.65)",
-  panelBorder: "rgba(148, 163, 184, 0.16)",
-  rowBorder: "rgba(148, 163, 184, 0.12)",
-  inputBg: "rgba(2, 6, 23, 0.45)",
-  inputBorder: "rgba(148, 163, 184, 0.18)",
-  primaryBg: "rgba(99, 102, 241, 0.18)",
-  primaryBorder: "rgba(99, 102, 241, 0.45)",
-};
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "../api/client.js";
+import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { EmptyState } from "../components/ui/EmptyState.jsx";
 
 function formatMoney(n) {
   const x = Number(n || 0);
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
+function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addDays(iso, days) {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 
-function clamp(n, min, max) {
-  return Math.min(max, Math.max(min, n));
-}
-
-/* ---------------- API helpers (same pattern as other pages) ---------------- */
-
-function getApiBase() {
-  const envBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
-  if (envBase) return envBase.replace(/\/+$/, "");
-  const winBase = (window.__FINVAULT_API_BASE_URL || "").trim?.() || "";
-  if (winBase) return winBase.replace(/\/+$/, "");
-  return "";
-}
-
-function getAccessToken() {
-  return (
-    sessionStorage.getItem("finvault.accessToken") ||
-    sessionStorage.getItem("access_token") ||
-    ""
-  );
-}
-
-async function apiFetch(path, { method = "GET", body } = {}) {
-  const base = getApiBase();
-  if (!base) throw new Error("Missing API base. Set VITE_API_BASE_URL in .env");
-
-  const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
-  const token = getAccessToken();
-
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (res.status === 204) return null;
-
-  const text = await res.text().catch(() => "");
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    throw new Error(`API returned non-JSON (${res.status})`);
-  }
-
-  if (!res.ok) {
-    throw new Error(data?.error || data?.message || `Request failed (${res.status})`);
-  }
-
-  return data;
-}
-
-/* ---------------- Horizontal bar chart (no external libs) ---------------- */
+/* ---------------- Horizontal bar chart ---------------- */
 
 function HorizontalBarChart({ data, expanded, onToggle, detailsByCategory, loadingCat }) {
-  const max = useMemo(() => {
-    return data.reduce((m, x) => Math.max(m, Number(x.amount || 0)), 0) || 1;
-  }, [data]);
-
-  // Column layout for drilldown rows:
-  // Date | Description | Category | Amount
+  const max = useMemo(() => data.reduce((m, x) => Math.max(m, Number(x.amount || 0)), 0) || 1, [data]);
   const rowCols = "120px minmax(240px, 1fr) 220px 120px";
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div className="grid gap-3">
       {data.map((d) => {
         const amt = Number(d.amount || 0);
         const pct = clamp((amt / max) * 100, 0, 100);
-
         const isOpen = !!expanded[d.category];
         const det = detailsByCategory[d.category];
 
         return (
-          <div key={d.category} style={{ display: "grid", gap: 10 }}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "240px 1fr 130px",
-                gap: 12,
-                alignItems: "center",
-              }}
-            >
-              {/* Category label + expand/collapse */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  minWidth: 0,
-                }}
-                title={d.category}
-              >
+          <div key={d.category} className="grid gap-2.5">
+            <div className="grid items-center gap-3" style={{ gridTemplateColumns: "240px 1fr 130px" }}>
+              {/* Category label + toggle */}
+              <div className="flex items-center gap-2.5 min-w-0" title={d.category}>
                 <button
                   type="button"
                   onClick={() => onToggle(d.category)}
-                  style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: 10,
-                    border: `1px solid ${THEME.inputBorder}`,
-                    background: "rgba(255,255,255,0.06)",
-                    color: THEME.title,
-                    fontWeight: 900,
-                    cursor: "pointer",
-                    lineHeight: "24px",
-                  }}
+                  className="w-7 h-7 flex-shrink-0 rounded-lg border border-white/[0.08] bg-white/[0.04] text-slate-100 font-black cursor-pointer hover:bg-white/[0.08] text-xs inline-flex items-center justify-center"
                   aria-label={isOpen ? `Collapse ${d.category}` : `Expand ${d.category}`}
                 >
                   {isOpen ? "–" : "+"}
                 </button>
-
-                <div
-                  style={{
-                    fontWeight: 800,
-                    color: THEME.pageText,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {d.category}
-                </div>
+                <span className="font-bold text-slate-300 truncate text-sm">{d.category}</span>
               </div>
 
               {/* Track */}
               <div
-                style={{
-                  height: 14,
-                  borderRadius: 999,
-                  border: `1px solid ${THEME.panelBorder}`,
-                  background: "rgba(255,255,255,0.06)",
-                  overflow: "hidden",
-                  boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.15)",
-                }}
+                className="h-3.5 rounded-full border border-white/[0.15] bg-white/[0.06] overflow-hidden"
                 title={`${d.category}: ${formatMoney(amt)}`}
+                style={{ boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.15)" }}
               >
-                {/* Fill */}
                 <div
+                  className="h-full"
                   style={{
                     width: `${pct}%`,
-                    height: "100%",
                     background: "rgba(34,211,238,0.65)",
                     borderRight: "1px solid rgba(34,211,238,0.95)",
                     boxShadow: "0 0 14px rgba(34,211,238,0.25)",
@@ -181,166 +63,58 @@ function HorizontalBarChart({ data, expanded, onToggle, detailsByCategory, loadi
                 />
               </div>
 
-              <div style={{ textAlign: "right", fontWeight: 900, color: THEME.title }}>
-                {formatMoney(amt)}
-              </div>
+              <div className="text-right font-black text-slate-100 text-sm">{formatMoney(amt)}</div>
             </div>
 
             {/* Drilldown */}
-            {isOpen ? (
-              <div
-                style={{
-                  border: `1px solid ${THEME.rowBorder}`,
-                  borderRadius: 12,
-                  padding: 12,
-                  background: "rgba(255,255,255,0.03)",
-                }}
-              >
+            {isOpen && (
+              <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-3">
                 {loadingCat === d.category ? (
-                  <div style={{ color: THEME.muted }}>Loading line items…</div>
+                  <EmptyState type="loading" message="Loading line items…" />
                 ) : !det ? (
-                  <div style={{ color: THEME.muted }}>No details loaded.</div>
+                  <p className="text-xs text-slate-500">No details loaded.</p>
                 ) : det.error ? (
-                  <div style={{ color: THEME.muted }}>Error: {det.error}</div>
+                  <p className="text-xs text-slate-500">Error: {det.error}</p>
                 ) : det.items?.length ? (
-                  <div style={{ display: "grid", gap: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>
-                        {d.category} line items
-                      </div>
-                      <div style={{ color: THEME.muted, fontSize: 12 }}>
-                        {det.count} items · {formatMoney(det.total)}
-                      </div>
+                  <div className="grid gap-2">
+                    <div className="flex justify-between gap-3 items-center">
+                      <span className="font-black text-slate-100 text-sm">{d.category} line items</span>
+                      <span className="text-xs text-slate-500">{det.count} items · {formatMoney(det.total)}</span>
                     </div>
-
-                    <div style={{ borderTop: `1px solid ${THEME.rowBorder}` }} />
-
-                    {/* Column header row */}
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: rowCols,
-                        gap: 10,
-                        padding: "6px 0",
-                        color: THEME.muted,
-                        fontSize: 11,
-                        fontWeight: 900,
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      <div>Date</div>
-                      <div>Description</div>
-                      <div>Category</div>
-                      <div style={{ textAlign: "right" }}>Amount</div>
+                    <div className="border-t border-white/[0.06]" />
+                    <div className="grid gap-1" style={{ gridTemplateColumns: rowCols }}>
+                      {["Date", "Description", "Category", "Amount"].map((h, i) => (
+                        <span key={h} className={`text-xs font-bold uppercase tracking-widest text-slate-500 pb-1 ${i === 3 ? "text-right" : ""}`}>{h}</span>
+                      ))}
                     </div>
-
-                    <div style={{ borderTop: `1px solid ${THEME.rowBorder}` }} />
-
-                    <div style={{ display: "grid", gap: 0 }}>
-                      {det.items.slice(0, 80).map((it) => {
-                        const catText =
-                          it.category ||
-                          it.categoryName ||
-                          it.categoryLabel ||
-                          "—";
-
-                        return (
-                          <div
-                            key={`${it.pk}||${it.sk}`}
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: rowCols,
-                              gap: 10,
-                              alignItems: "center",
-                              padding: "10px 0",
-                              borderBottom: `1px solid ${THEME.rowBorder}`,
-                            }}
-                          >
-                            {/* Date */}
-                            <div
-                              style={{
-                                color: THEME.muted,
-                                fontSize: 12,
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {it.date || ""}
-                            </div>
-
-                            {/* Product Description */}
-                            <div style={{ minWidth: 0 }}>
-                              <div
-                                style={{
-                                  color: THEME.pageText,
-                                  fontWeight: 800,
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                                title={it.productDescription || ""}
-                              >
-                                {it.productDescription || "(no description)"}
-                              </div>
-                              {it.productCode ? (
-                                <div
-                                  style={{
-                                    color: THEME.muted,
-                                    fontSize: 12,
-                                    marginTop: 2,
-                                    whiteSpace: "nowrap",
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                  }}
-                                  title={`Code: ${it.productCode}`}
-                                >
-                                  Code: {it.productCode}
-                                </div>
-                              ) : null}
-                            </div>
-
-                            {/* Category */}
-                            <div
-                              style={{
-                                color: THEME.pageText,
-                                fontWeight: 800,
-                                opacity: 0.95,
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                              }}
-                              title={catText}
-                            >
-                              {catText}
-                            </div>
-
-                            {/* Amount */}
-                            <div
-                              style={{
-                                textAlign: "right",
-                                fontWeight: 900,
-                                color: THEME.title,
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {formatMoney(Number(it.amount || 0))}
-                            </div>
+                    <div className="border-t border-white/[0.06]" />
+                    {det.items.slice(0, 80).map((it) => {
+                      const catText = it.category || it.categoryName || it.categoryLabel || "—";
+                      return (
+                        <div
+                          key={`${it.pk}||${it.sk}`}
+                          className="grid items-center gap-2.5 py-2.5 border-b border-white/[0.06]"
+                          style={{ gridTemplateColumns: rowCols }}
+                        >
+                          <span className="text-xs text-slate-500 whitespace-nowrap">{it.date || ""}</span>
+                          <div className="min-w-0">
+                            <div className="text-slate-300 font-bold truncate text-sm" title={it.productDescription || ""}>{it.productDescription || "(no description)"}</div>
+                            {it.productCode && <div className="text-xs text-slate-500 mt-0.5 truncate" title={`Code: ${it.productCode}`}>Code: {it.productCode}</div>}
                           </div>
-                        );
-                      })}
-
-                      {det.items.length > 80 ? (
-                        <div style={{ color: THEME.muted, fontSize: 12, paddingTop: 8 }}>
-                          Showing top 80 items. Narrow your date range to see fewer.
+                          <span className="text-slate-300 font-bold truncate whitespace-nowrap text-sm" title={catText}>{catText}</span>
+                          <span className="text-right font-black text-slate-100 whitespace-nowrap text-sm">{formatMoney(Number(it.amount || 0))}</span>
                         </div>
-                      ) : null}
-                    </div>
+                      );
+                    })}
+                    {det.items.length > 80 && (
+                      <p className="text-xs text-slate-500 pt-2">Showing top 80 items. Narrow your date range to see fewer.</p>
+                    )}
                   </div>
                 ) : (
-                  <div style={{ color: THEME.muted }}>No line items in this category.</div>
+                  <p className="text-xs text-slate-500">No line items in this category.</p>
                 )}
               </div>
-            ) : null}
+            )}
           </div>
         );
       })}
@@ -351,66 +125,72 @@ function HorizontalBarChart({ data, expanded, onToggle, detailsByCategory, loadi
 /* ---------------- Page ---------------- */
 
 export default function SpendingDash() {
-  // presets
-  const presets = useMemo(
-    () => [
-      { key: "7D", label: "Last 7 days", days: 7 },
-      { key: "30D", label: "Last 30 days", days: 30 },
-      { key: "90D", label: "Last 90 days", days: 90 },
-      { key: "YTD", label: "Year to date", days: null },
-      { key: "CUSTOM", label: "Custom", days: null },
-    ],
-    []
-  );
+  const presets = useMemo(() => [
+    { key: "7D", label: "Last 7 days", days: 7 },
+    { key: "30D", label: "Last 30 days", days: 30 },
+    { key: "90D", label: "Last 90 days", days: 90 },
+    { key: "YTD", label: "Year to date", days: null },
+    { key: "CUSTOM", label: "Custom", days: null },
+  ], []);
 
   const [preset, setPreset] = useState("30D");
-
   const [start, setStart] = useState(addDays(todayISO(), -29));
   const [end, setEnd] = useState(todayISO());
-
   const [category, setCategory] = useState("All");
-  const [categories, setCategories] = useState(["All"]);
-
-  const [totalSpend, setTotalSpend] = useState(0);
-  const [chart, setChart] = useState([]);
-
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const [expanded, setExpanded] = useState({});
-
   const [detailsByCategory, setDetailsByCategory] = useState({});
   const [loadingCat, setLoadingCat] = useState("");
 
-  // apply preset to dates (except CUSTOM)
+  const queryClient = useQueryClient();
+
+  /* ---------- Preset → date range ---------- */
+
   useEffect(() => {
     const t = todayISO();
-
-    if (preset === "7D") {
-      setStart(addDays(t, -6));
-      setEnd(t);
-    } else if (preset === "30D") {
-      setStart(addDays(t, -29));
-      setEnd(t);
-    } else if (preset === "90D") {
-      setStart(addDays(t, -89));
-      setEnd(t);
-    } else if (preset === "YTD") {
-      const year = new Date().getFullYear();
-      setStart(`${year}-01-01`);
-      setEnd(t);
-    }
+    if (preset === "7D") { setStart(addDays(t, -6)); setEnd(t); }
+    else if (preset === "30D") { setStart(addDays(t, -29)); setEnd(t); }
+    else if (preset === "90D") { setStart(addDays(t, -89)); setEnd(t); }
+    else if (preset === "YTD") { setStart(`${new Date().getFullYear()}-01-01`); setEnd(t); }
   }, [preset]);
+
+  /* ---------- Dashboard query ---------- */
+
+  const { data: dashData, isLoading: loading, error: dashError } = useQuery({
+    queryKey: ["spending", "dashboard", start, end, category],
+    queryFn: () => {
+      const qs = new URLSearchParams({ start, end, category: category || "All" }).toString();
+      return api.get(`/spending/dashboard?${qs}`);
+    },
+  });
+
+  /* ---------- Derived data ---------- */
+
+  const totalSpend = useMemo(() => Number(dashData?.totalSpend || 0), [dashData]);
+  const chart = useMemo(() => Array.isArray(dashData?.chart) ? dashData.chart : [], [dashData]);
+  const categories = useMemo(
+    () => Array.isArray(dashData?.categories) ? dashData.categories : ["All"],
+    [dashData]
+  );
+
+  // Sync category if API normalizes it
+  useEffect(() => {
+    if (dashData?.category && dashData.category !== category) {
+      setCategory(dashData.category);
+    }
+  }, [dashData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---------- Reset drilldown when filters change ---------- */
+
+  useEffect(() => { setExpanded({}); setDetailsByCategory({}); }, [start, end, category]);
+
+  /* ---------- Category drilldown ---------- */
 
   async function loadCategoryDetails(cat) {
     setLoadingCat(cat);
     try {
       const qs = new URLSearchParams({ start, end, category: cat }).toString();
-      const res = await apiFetch(`/spending/dashboard/details?${qs}`);
-
-      setDetailsByCategory((prev) => ({
-        ...prev,
-        [cat]: { ...res, error: "" },
-      }));
+      const res = await api.get(`/spending/dashboard/details?${qs}`);
+      setDetailsByCategory((prev) => ({ ...prev, [cat]: { ...res, error: "" } }));
     } catch (e) {
       setDetailsByCategory((prev) => ({
         ...prev,
@@ -422,142 +202,57 @@ export default function SpendingDash() {
   }
 
   function toggleCategory(cat) {
-    setExpanded((prev) => {
-      const next = { ...prev, [cat]: !prev[cat] };
-      return next;
-    });
-
-    // If opening and we don't have details yet, fetch them
-    if (!expanded[cat] && !detailsByCategory[cat]) {
-      loadCategoryDetails(cat);
-    }
+    setExpanded((prev) => ({ ...prev, [cat]: !prev[cat] }));
+    if (!expanded[cat] && !detailsByCategory[cat]) loadCategoryDetails(cat);
   }
-
-  async function loadDashboard({ s = start, e = end, c = category } = {}) {
-    setLoading(true);
-    setError("");
-
-    try {
-      const qs = new URLSearchParams({
-        start: s,
-        end: e,
-        category: c || "All",
-      }).toString();
-
-      const res = await apiFetch(`/spending/dashboard?${qs}`);
-
-      setTotalSpend(Number(res?.totalSpend || 0));
-      setChart(Array.isArray(res?.chart) ? res.chart : []);
-      setCategories(Array.isArray(res?.categories) ? res.categories : ["All"]);
-
-      // backend returns normalized category name; keep UI in sync
-      if (res?.category && res.category !== c) setCategory(res.category);
-    } catch (e2) {
-      setError(e2?.message || "Failed to load dashboard");
-      setTotalSpend(0);
-      setChart([]);
-      setCategories(["All"]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // initial load + reload when filters change
-  useEffect(() => {
-    loadDashboard();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [start, end, category]);
-
-  useEffect(() => {
-    setExpanded({});
-    setDetailsByCategory({});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [start, end, category]);
 
   const asOf = todayISO();
 
   return (
-    <div style={{ padding: 16, color: THEME.pageText }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+    <div className="p-4 text-slate-300">
+      <div className="flex items-baseline justify-between gap-3 mb-4">
         <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: THEME.title, letterSpacing: "0.2px" }}>
-            Spending Dashboard
-          </div>
-          <div style={{ marginTop: 6, fontSize: 13, color: THEME.muted }}>
+          <h1 className="text-2xl font-black text-slate-100 tracking-tight">Spending Dashboard</h1>
+          <p className="mt-1.5 text-sm text-slate-500">
             Insights from your receipts ledger (Subtotal/Total excluded; Tax tracked separately).
-          </div>
+          </p>
         </div>
-        <div style={{ fontSize: 12, color: THEME.muted, textAlign: "right" }}>
-          As of <span style={{ color: THEME.pageText, fontWeight: 700 }}>{asOf}</span>
-        </div>
+        <span className="text-xs text-slate-500 text-right whitespace-nowrap">
+          As of <span className="text-slate-300 font-bold">{asOf}</span>
+        </span>
       </div>
 
-      {/* Summary card with filters */}
-      <div style={{ ...panel, marginTop: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <div>
-            <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>Total Spend</div>
-            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 900, color: THEME.title }}>
-              {loading ? "Loading…" : formatMoney(totalSpend)}
-            </div>
-            <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>
-              {start} → {end} {category && category !== "All" ? `· Category: ${category}` : ""}
-            </div>
-          </div>
+      {/* Summary + filters */}
+      <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4 mb-4">
+        <div className="flex justify-between gap-3 flex-wrap items-center">
+          <MetricCard
+            label="Total Spend"
+            value={loading ? "Loading…" : formatMoney(totalSpend)}
+            sub={`${start} → ${end}${category && category !== "All" ? ` · ${category}` : ""}`}
+            className="min-w-[200px] bg-transparent border-0 p-0"
+          />
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-            <Field label="Date Range">
-              <select value={preset} onChange={(e) => setPreset(e.target.value)} style={{ ...input, width: 160 }}>
-                {presets.map((p) => (
-                  <option key={p.key} value={p.key}>
-                    {p.label}
-                  </option>
-                ))}
+          <div className="flex gap-2.5 flex-wrap items-end">
+            <FLabel label="Date Range">
+              <select value={preset} onChange={(e) => setPreset(e.target.value)} className={`${inputCls} !w-40`}>
+                {presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
               </select>
-            </Field>
-
-            <Field label="Start">
-              <input
-                type="date"
-                value={start}
-                onChange={(e) => {
-                  setPreset("CUSTOM");
-                  setStart(e.target.value);
-                }}
-                style={{ ...input, width: 160 }}
-              />
-            </Field>
-
-            <Field label="End">
-              <input
-                type="date"
-                value={end}
-                onChange={(e) => {
-                  setPreset("CUSTOM");
-                  setEnd(e.target.value);
-                }}
-                style={{ ...input, width: 160 }}
-              />
-            </Field>
-
-            <Field label="Category">
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                style={{ ...input, width: 220 }}
-              >
-                {(categories?.length ? categories : ["All"]).map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
+            </FLabel>
+            <FLabel label="Start">
+              <input type="date" value={start} onChange={(e) => { setPreset("CUSTOM"); setStart(e.target.value); }} className={`${inputCls} !w-40`} />
+            </FLabel>
+            <FLabel label="End">
+              <input type="date" value={end} onChange={(e) => { setPreset("CUSTOM"); setEnd(e.target.value); }} className={`${inputCls} !w-40`} />
+            </FLabel>
+            <FLabel label="Category">
+              <select value={category} onChange={(e) => setCategory(e.target.value)} className={`${inputCls} !w-52`}>
+                {(categories?.length ? categories : ["All"]).map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
-            </Field>
-
+            </FLabel>
             <button
               type="button"
-              onClick={() => loadDashboard({ s: start, e: end, c: category })}
-              style={btnPrimary}
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["spending", "dashboard"] })}
+              className={btnPrimCls}
               disabled={loading}
             >
               Refresh
@@ -565,84 +260,50 @@ export default function SpendingDash() {
           </div>
         </div>
 
-        {error ? (
-          <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: `1px solid rgba(239,68,68,0.35)`, background: "rgba(239,68,68,0.10)" }}>
-            <div style={{ fontWeight: 900, color: THEME.title }}>Error</div>
-            <div style={{ marginTop: 4, color: THEME.pageText }}>{error}</div>
+        {dashError && (
+          <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2 mt-3">
+            <span className="text-xs font-black text-slate-100">Error</span>
+            <p className="text-xs text-slate-300 mt-1">{dashError.message || "Failed to load dashboard"}</p>
           </div>
-        ) : null}
+        )}
       </div>
 
       {/* Category insights */}
-      <div style={{ ...panel, marginTop: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
-              Category Insights
-            </div>
-            <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>
-              Top 10 categories by spend (remaining grouped as “Others”).
-            </div>
-          </div>
+      <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
+        <div className="mb-1">
+          <span className="text-sm font-black text-slate-100">Category Insights</span>
+          <p className="text-xs text-slate-500 mt-1">Top 10 categories by spend (remaining grouped as "Others").</p>
         </div>
+        <div className="border-t border-white/[0.06] my-3" />
 
-        <div style={{ marginTop: 12, borderTop: `1px solid ${THEME.rowBorder}` }} />
-
-        <div style={{ marginTop: 12 }}>
-          {loading ? (
-            <div style={{ color: THEME.muted }}>Loading chart…</div>
-          ) : chart.length === 0 ? (
-            <div style={{ color: THEME.muted }}>No spend data for the selected period.</div>
-          ) : (
-            <HorizontalBarChart
-              data={chart}
-              expanded={expanded}
-              onToggle={toggleCategory}
-              detailsByCategory={detailsByCategory}
-              loadingCat={loadingCat}
-            />
-          )}
-        </div>
+        {loading ? (
+          <EmptyState type="loading" message="Loading chart…" />
+        ) : chart.length === 0 ? (
+          <EmptyState type="empty" message="No spend data for the selected period." />
+        ) : (
+          <HorizontalBarChart
+            data={chart}
+            expanded={expanded}
+            onToggle={toggleCategory}
+            detailsByCategory={detailsByCategory}
+            loadingCat={loadingCat}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-/* ---------- Small UI bits ---------- */
+/* ---------- helpers ---------- */
 
-function Field({ label, children }) {
+function FLabel({ label, children }) {
   return (
-    <label style={{ display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{label}</div>
+    <label className="grid gap-1.5">
+      <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{label}</span>
       {children}
     </label>
   );
 }
 
-const panel = {
-  background: THEME.panelBg,
-  border: `1px solid ${THEME.panelBorder}`,
-  borderRadius: 14,
-  padding: 14,
-  backdropFilter: "blur(6px)",
-};
-
-const input = {
-  width: "100%",
-  padding: "10px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.inputBorder}`,
-  background: THEME.inputBg,
-  color: THEME.pageText,
-  outline: "none",
-};
-
-const btnPrimary = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.primaryBorder}`,
-  background: THEME.primaryBg,
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-};
+const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+const btnPrimCls = "text-xs font-bold text-slate-100 px-3 py-1.5 rounded-lg border border-blue-500/[0.3] bg-blue-500/[0.15] hover:bg-blue-500/[0.25] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";

@@ -1,134 +1,89 @@
 import { NavLink } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
+/* ── Section (collapsible group) ─────────────────────────── */
 function Section({ title, open, onToggle, children }) {
   return (
-    <div className="sidenav-section">
+    <div className="mb-2">
       <button
-        className="sidenav-section-title"
-        onClick={onToggle}
         type="button"
-        title={title}
-        style={{
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          padding: "8px 8px",
-          border: "none",
-          background: "transparent",
-          cursor: "pointer",
-          color: "rgba(248,250,252,0.95)",
-          fontSize: 16,
-          fontWeight: 800,
-          letterSpacing: "0.2px",
-
-          // prevent wrapping
-          whiteSpace: "nowrap",
-        }}
+        onClick={onToggle}
+        className={[
+          "w-full flex items-center justify-between",
+          "px-2 py-1.5 rounded-lg",
+          "text-sm font-bold uppercase tracking-wide",
+          "text-slate-600 hover:text-slate-400",
+          "transition-colors cursor-pointer",
+        ].join(" ")}
       >
-        <span
-          style={{
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {title}
-        </span>
-        <span className="chev" style={{ color: "rgba(226,232,240,0.75)" }}>
+        <span className="truncate">{title}</span>
+        <span className="ml-1 text-slate-700 text-xs">
           {open ? "▾" : "▸"}
         </span>
       </button>
 
       {open && (
-        // ✅ reduced vertical spacing above the submenu list
-        <div className="sidenav-items" style={{ paddingLeft: 8, marginTop: 2 }}>
-          {children}
-        </div>
+        <div className="mt-0.5 space-y-0.5 ml-2">{children}</div>
       )}
     </div>
   );
 }
 
+/* ── Nav item ─────────────────────────────────────────────── */
 function Item({ to, label }) {
   return (
     <NavLink
       to={to}
       title={label}
       className={({ isActive }) =>
-        `sidenav-item ${isActive ? "sidenav-item--active" : ""}`
+        [
+          "flex items-center px-3 py-2 rounded-xl",
+          "text-[1.05rem] font-medium transition-all duration-150",
+          "whitespace-nowrap overflow-hidden text-ellipsis",
+          isActive
+            ? "bg-blue-500/[0.12] text-blue-300 font-bold border border-blue-500/[0.2]"
+            : "text-slate-500 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent",
+        ].join(" ")
       }
-      style={({ isActive }) => ({
-        display: "block",
-
-        // ✅ reduced vertical spacing per submenu item
-        padding: "6px 10px", // was 9px 10px
-        margin: "2px 0",     // was 4px 0
-
-        borderRadius: 12,
-        textDecoration: "none",
-        fontSize: 14,
-        fontWeight: isActive ? 800 : 600,
-
-        // prevent wrapping
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-
-        color: isActive ? "#FFFFFF" : "rgba(226,232,240,0.88)",
-        background: isActive ? "rgba(99,102,241,0.18)" : "transparent",
-        outline: isActive
-          ? "1px solid rgba(99,102,241,0.30)"
-          : "1px solid transparent",
-      })}
     >
       {label}
     </NavLink>
   );
 }
 
+/* ── Sidebar ──────────────────────────────────────────────── */
 export default function SideNav() {
-  // default open like your wireframe
-  const [openAssets, setOpenAssets] = useState(true);
-  const [openNav, setOpenNav] = useState(true);
+  const [openAssets, setOpenAssets]           = useState(true);
+  const [openNav, setOpenNav]                 = useState(true);
   const [openLiabilities, setOpenLiabilities] = useState(true);
-  const [openInsurance, setOpenInsurance] = useState(true);
-  const [openSpending, setOpenSpending] = useState(true);
-
-  // (Optional) you can auto-open based on current route later
-  useMemo(() => {}, []);
+  const [openInsurance, setOpenInsurance]     = useState(true);
+  const [openSpending, setOpenSpending]       = useState(true);
 
   return (
     <aside
-      className="sidenav"
-      style={{
-        width: 260,
-        minWidth: 260,
-        maxWidth: 260,
-
-        padding: "18px 10px",
-        overflow: "auto",
-
-        background: "linear-gradient(180deg, #0E1B34 0%, #0B1220 100%)",
-        borderRight: "1px solid rgba(148,163,184,0.12)",
-      }}
+      className={[
+        "hidden md:flex flex-col shrink-0",
+        "w-56 overflow-y-auto overflow-x-hidden",
+        "py-5 px-3",
+        "bg-[#080D1A] border-r border-white/[0.06]",
+        "[&::-webkit-scrollbar]:w-1",
+        "[&::-webkit-scrollbar-thumb]:rounded-full",
+        "[&::-webkit-scrollbar-thumb]:bg-white/[0.06]",
+      ].join(" ")}
     >
       <Section
         title="Assets"
         open={openAssets}
         onToggle={() => setOpenAssets((v) => !v)}
       >
-        <Item to="/assets/portfolio" label="Portfolio" />
-        <Item to="/assets/stocks" label="Stocks" />
-        <Item to="/assets/crypto" label="Crypto" />
-        <Item to="/assets/bullion" label="Bullion" />
+        <Item to="/assets/portfolio"   label="Portfolio"    />
+        <Item to="/assets/stocks"      label="Stocks"       />
+        <Item to="/assets/crypto"      label="Crypto"       />
+        <Item to="/assets/bullion"     label="Bullion"      />
+        <Item to="/assets/futures"     label="Futures"      />
+        <Item to="/assets/options"     label="Options"      />
         <Item to="/assets/fixedincome" label="Fixed Income" />
-        <Item to="/assets/options" label="Options" />
-        <Item to="/assets/otherassets" label="Others" />
-        <Item to="/assets/futures" label="Futures" />
+        <Item to="/assets/otherassets" label="Others"       />
       </Section>
 
       <Section
@@ -160,8 +115,8 @@ export default function SideNav() {
         open={openSpending}
         onToggle={() => setOpenSpending((v) => !v)}
       >
-        <Item to="/spending/dashboard" label="Dashboard" />
-        <Item to="/spending/receipts-ledger" label="Receipts Ledger" />
+        <Item to="/spending/dashboard"       label="Dashboard"        />
+        <Item to="/spending/receipts-ledger" label="Receipts Ledger"  />
       </Section>
     </aside>
   );

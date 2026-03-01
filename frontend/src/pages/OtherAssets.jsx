@@ -1,195 +1,97 @@
-import { useEffect, useMemo, useState } from "react";
-
-console.log("VITE_API_BASE_URL =", import.meta.env.VITE_API_BASE_URL);
-
-const THEME = {
-  pageText: "#CBD5F5",
-  title: "#F9FAFB",
-  muted: "#94A3B8",
-  panelBg: "rgba(15, 23, 42, 0.65)",
-  panelBorder: "rgba(148, 163, 184, 0.16)",
-  rowBorder: "rgba(148, 163, 184, 0.12)",
-  inputBg: "rgba(2, 6, 23, 0.45)",
-  inputBorder: "rgba(148, 163, 184, 0.18)",
-  primaryBg: "rgba(99, 102, 241, 0.18)",
-  primaryBorder: "rgba(99, 102, 241, 0.45)",
-  dangerBg: "rgba(239, 68, 68, 0.12)",
-  dangerBorder: "rgba(239, 68, 68, 0.35)",
-};
+import { useMemo, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys } from "../api/client.js";
+import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { EmptyState } from "../components/ui/EmptyState.jsx";
 
 const CATEGORY_OPTIONS = ["Education", "Retirement", "Robo", "Cash", "Options", "Property"];
+const COUNTRY_OPTIONS = ["USA", "India"];
+const DEFAULT_FORM = { country: "USA", category: "Education", description: "", value: "" };
 
-function clamp(n, min, max) {
-  return Math.min(max, Math.max(min, n));
-}
-
-function safeNum(v, fallback = 0) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : fallback;
-}
-
+function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
+function safeNum(v, fallback = 0) { const x = Number(v); return Number.isFinite(x) ? x : fallback; }
 function formatMoney(n) {
   const x = safeNum(n, 0);
   return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
-/* ---------------- API wiring (same pattern as FixedIncome) ---------------- */
-function getApiBase() {
-  const envBase = (import.meta?.env?.VITE_API_BASE_URL || "").trim();
-  if (envBase) return envBase.replace(/\/+$/, "");
-
-  const winBase = (window?.__FINVAULT_API_BASE_URL || "").trim?.() || "";
-  if (winBase) return winBase.replace(/\/+$/, "");
-
-  return "";
-}
-
-function getAccessToken() {
-  return (
-    sessionStorage.getItem("finvault.accessToken") ||
-    sessionStorage.getItem("access_token") ||
-    sessionStorage.getItem("token") ||
-    ""
-  );
-}
-
-async function apiFetch(path, { method = "GET", body } = {}) {
-  const base = getApiBase();
-  if (!base) throw new Error("Missing API base. Set VITE_API_BASE_URL in .env");
-
-  const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
-  const token = getAccessToken();
-
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (res.status === 204) return null;
-
-  const text = await res.text().catch(() => "");
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    throw new Error(
-      `API returned non-JSON (${res.status}). First chars: ${text.slice(0, 30)}`
-    );
-  }
-
-  if (!res.ok) {
-    throw new Error(data?.error || data?.message || `Request failed (${res.status})`);
-  }
-
-  return data;
-}
-
 function normalizeApiRow(item) {
   const c = String(item?.country || "").trim();
   const country = c ? (c.toUpperCase() === "INDIA" ? "INDIA" : "USA") : "USA";
-  return {
-    ...item,
-    country,
-    id: item.assetId || item.id,
-  };
+  return { ...item, country, id: item.assetId || item.id };
 }
 
-const COUNTRY_OPTIONS = ["USA", "India"];
-
-const DEFAULT_FORM = {
-  country: "USA",
-  category: "Education",
-  description: "",
-  value: "",
-};
-
 export default function OtherAssets() {
-  const [rows, setRows] = useState([]);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
-
   const [showForm, setShowForm] = useState(false);
-
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [countryFilter, setCountryFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState("updatedAt");
   const [sortDir, setSortDir] = useState("desc");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError("");
+  const queryClient = useQueryClient();
 
-    apiFetch("/assets/otherassets")
-      .then((res) => {
-        if (!alive) return;
-        const list = Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
-        setRows(list.map(normalizeApiRow));
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setError(e?.message || "Failed to load other assets");
-        setRows([]);
-      })
-      .finally(() => {
-        if (!alive) return;
-        setLoading(false);
-      });
+  const { data: rawData, isLoading: loading, error: fetchError } = useQuery({
+    queryKey: queryKeys.otherAssets(),
+    queryFn: () => api.get("/assets/otherassets"),
+  });
 
-    return () => {
-      alive = false;
-    };
-  }, []);
+  const rows = useMemo(() => {
+    const list = Array.isArray(rawData?.items) ? rawData.items : Array.isArray(rawData) ? rawData : [];
+    return list.map(normalizeApiRow);
+  }, [rawData]);
+
+  const saveMut = useMutation({
+    mutationFn: ({ id, payload }) =>
+      id ? api.patch(`/assets/otherassets/${encodeURIComponent(id)}`, payload) : api.post("/assets/otherassets", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.otherAssets() });
+      resetForm({ hide: true });
+    },
+    onError: (e) => setError(e?.message || "Save failed"),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id) => api.delete(`/assets/otherassets/${encodeURIComponent(id)}`),
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.otherAssets() });
+      if (editingId === id) resetForm({ hide: true });
+    },
+    onError: (e) => setError(e?.message || "Delete failed"),
+  });
+
+  const saving = saveMut.isPending || deleteMut.isPending;
 
   const filteredSortedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = rows;
-
     if (countryFilter !== "ALL") {
       const want = countryFilter === "India" ? "INDIA" : "USA";
       list = list.filter((r) => String(r.country || "").toUpperCase() === want);
     }
-
     if (q) {
       list = list.filter((r) => {
         const hay = `${r.country || ""} ${r.category || ""} ${r.description || ""}`.toLowerCase();
         return hay.includes(q);
       });
     }
-
     const dir = sortDir === "asc" ? 1 : -1;
-
     const getVal = (r) => {
       switch (sortKey) {
-        case "country":
-          return String(r.country || "");
-        case "category":
-          return r.category || "";
-        case "value":
-          return safeNum(r.value, 0);
-        case "description":
-          return r.description || "";
-        case "updatedAt":
-        default:
-          return r.updatedAt || r.createdAt || "";
+        case "country": return String(r.country || "");
+        case "category": return r.category || "";
+        case "value": return safeNum(r.value, 0);
+        case "description": return r.description || "";
+        case "updatedAt": default: return r.updatedAt || r.createdAt || "";
       }
     };
-
-    list = [...list].sort((a, b) => {
-      const va = getVal(a);
-      const vb = getVal(b);
+    return [...list].sort((a, b) => {
+      const va = getVal(a), vb = getVal(b);
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-
-    return list;
   }, [rows, search, countryFilter, sortKey, sortDir]);
 
   const totalValue = useMemo(() => {
@@ -200,27 +102,15 @@ export default function OtherAssets() {
   }, [rows, countryFilter]);
 
   function resetForm({ hide } = {}) {
-    setForm(DEFAULT_FORM);
-    setEditingId(null);
-    setError("");
+    setForm(DEFAULT_FORM); setEditingId(null); setError("");
     if (hide) setShowForm(false);
   }
-
   function openCreateForm() {
-    setError("");
-    setEditingId(null);
-    setForm(DEFAULT_FORM);
-    setShowForm(true);
+    setError(""); setEditingId(null); setForm(DEFAULT_FORM); setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
-
-  function closeForm() {
-    resetForm({ hide: true });
-  }
-
   function startEdit(r) {
-    setError("");
-    setEditingId(r.id);
+    setError(""); setEditingId(r.id);
     const c = String(r.country || "").trim().toUpperCase();
     setForm({
       country: c === "INDIA" ? "India" : "USA",
@@ -231,324 +121,162 @@ export default function OtherAssets() {
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
-
   function buildPayloadFromForm() {
     const country = String(form.country || "").trim();
     const category = String(form.category || "").trim();
     const description = String(form.description || "").trim();
     const value = safeNum(form.value, NaN);
-
-    if (!country || !COUNTRY_OPTIONS.includes(country)) {
-      throw new Error("Country is required");
-    }
-    if (!category || !CATEGORY_OPTIONS.includes(category)) {
-      throw new Error("Asset Category is required");
-    }
+    if (!country || !COUNTRY_OPTIONS.includes(country)) throw new Error("Country is required");
+    if (!category || !CATEGORY_OPTIONS.includes(category)) throw new Error("Asset Category is required");
     if (!description) throw new Error("Asset Description is required");
     if (!Number.isFinite(value)) throw new Error("Asset Value must be a valid number");
-
     return {
       country: country === "India" ? "INDIA" : "USA",
-      category,
-      description,
+      category, description,
       value: Number(clamp(value, -1e15, 1e15).toFixed(2)),
     };
   }
-
-  async function refreshList() {
-    const res = await apiFetch("/assets/otherassets");
-    const list = Array.isArray(res?.items) ? res.items : Array.isArray(res) ? res : [];
-    setRows(list.map(normalizeApiRow));
+  function onSubmit(e) {
+    e.preventDefault(); setError("");
+    let payload;
+    try { payload = buildPayloadFromForm(); }
+    catch (err) { setError(err?.message || "Save failed"); return; }
+    saveMut.mutate({ id: editingId, payload });
   }
-
-  async function onSubmit(e) {
-    e.preventDefault();
+  function onDelete(id) {
     setError("");
-    setSaving(true);
-
-    try {
-      const payload = buildPayloadFromForm();
-
-      if (editingId) {
-        const updated = await apiFetch(`/assets/otherassets/${encodeURIComponent(editingId)}`, {
-          method: "PATCH",
-          body: payload,
-        });
-
-        setRows((prev) => prev.map((r) => (r.id === editingId ? normalizeApiRow({ ...r, ...updated }) : r)));
-        await refreshList();
-        resetForm({ hide: true });
-      } else {
-        const created = await apiFetch("/assets/otherassets", { method: "POST", body: payload });
-        setRows((prev) => [normalizeApiRow(created), ...prev]);
-        await refreshList();
-        resetForm({ hide: true });
-      }
-    } catch (err) {
-      setError(err?.message || "Save failed");
-    } finally {
-      setSaving(false);
-    }
+    if (!window.confirm("Delete this other asset record?")) return;
+    deleteMut.mutate(id);
   }
-
-  async function onDelete(id) {
-    setError("");
-    const ok = window.confirm("Delete this other asset record?");
-    if (!ok) return;
-
-    try {
-      setSaving(true);
-      await apiFetch(`/assets/otherassets/${encodeURIComponent(id)}`, { method: "DELETE" });
-      setRows((prev) => prev.filter((r) => r.id !== id));
-      if (editingId === id) resetForm({ hide: true });
-    } catch (err) {
-      setError(err?.message || "Delete failed");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   function onToggleSort(key) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortKey(key);
-      setSortDir("desc");
-    }
+    else { setSortKey(key); setSortDir("desc"); }
   }
 
   return (
-    <div style={{ padding: 16, color: THEME.pageText }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: THEME.title, letterSpacing: "0.2px" }}>
-            Other Assets
-          </div>
-        </div>
+    <div className="p-4 text-slate-300">
+      <h1 className="text-2xl font-black text-slate-100 tracking-tight mb-4">Other Assets</h1>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <MetricCard label="Total Other Assets" value={formatMoney(totalValue)} sub="Sum of all listed records" />
       </div>
 
-      <div
-        style={{
-          marginTop: 14,
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(180px, 1fr))",
-          gap: 12,
-        }}
-      >
-        <SummaryCard title="Total Other Assets" value={formatMoney(totalValue)} hint="Sum of all listed records" />
-      </div>
-
-      {showForm ? (
-        <div style={{ ...panel, marginTop: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-            <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>
+      {showForm && (
+        <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4 mb-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <span className="text-sm font-black text-slate-100">
               {editingId ? "Edit Other Asset" : "Add Other Asset"}
-            </div>
-
-            <div style={{ display: "flex", gap: 10 }}>
-              {editingId ? (
-                <button type="button" onClick={() => resetForm({ hide: true })} style={btnSecondary} disabled={saving}>
-                  Cancel
-                </button>
-              ) : null}
-
-              <button type="button" onClick={closeForm} style={btnSecondary} disabled={saving}>
-                Close
-              </button>
+            </span>
+            <div className="flex gap-2">
+              {editingId && <Btn onClick={() => resetForm({ hide: true })} disabled={saving}>Cancel</Btn>}
+              <Btn onClick={() => resetForm({ hide: true })} disabled={saving}>Close</Btn>
             </div>
           </div>
-
-          {error ? (
-            <div style={{ marginTop: 10, ...callout }}>
-              <div style={{ fontWeight: 900, color: THEME.title }}>Error</div>
-              <div style={{ marginTop: 4, color: THEME.pageText }}>{error}</div>
+          {error && (
+            <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2 mb-3">
+              <span className="text-xs font-black text-slate-100">Error</span>
+              <p className="text-xs text-slate-300 mt-1">{error}</p>
             </div>
-          ) : null}
-
-          <form onSubmit={onSubmit} style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 1fr", gap: 10 }}>
-              <Field label="Asset Category">
-                <select
-                  value={form.category}
-                  onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-                  style={input}
-                  disabled={saving}
-                >
-                  {CATEGORY_OPTIONS.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
+          )}
+          <form onSubmit={onSubmit} className="grid gap-3">
+            <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr 2fr 1fr" }}>
+              <FLabel label="Asset Category">
+                <select value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} className={inputCls} disabled={saving}>
+                  {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-              </Field>
-
-              <Field label="Country">
-                <select
-                  value={form.country}
-                  onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))}
-                  style={input}
-                  disabled={saving}
-                >
-                  {COUNTRY_OPTIONS.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
+              </FLabel>
+              <FLabel label="Country">
+                <select value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} className={inputCls} disabled={saving}>
+                  {COUNTRY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
-              </Field>
-
-              <Field label="Asset Description">
-                <input
-                  value={form.description}
-                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                  placeholder="e.g., Robinhood Cash Sweep"
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
-
-              <Field label="Latest Asset Value (USD)">
-                <input
-                  value={form.value}
-                  onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))}
-                  placeholder="1000.00"
-                  inputMode="decimal"
-                  style={input}
-                  disabled={saving}
-                />
-              </Field>
+              </FLabel>
+              <FLabel label="Asset Description">
+                <input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="e.g., Robinhood Cash Sweep" className={inputCls} disabled={saving} />
+              </FLabel>
+              <FLabel label="Latest Asset Value (USD)">
+                <input value={form.value} onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))} placeholder="1000.00" inputMode="decimal" className={inputCls} disabled={saving} />
+              </FLabel>
             </div>
-
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 4 }}>
-              <button type="button" onClick={() => resetForm()} style={btnSecondary} disabled={saving}>
-                Reset
-              </button>
-              <button type="submit" style={{ ...btnPrimary, opacity: saving ? 0.75 : 1 }} disabled={saving}>
+            <div className="flex gap-2 justify-end mt-1">
+              <Btn type="button" onClick={() => resetForm()} disabled={saving}>Reset</Btn>
+              <BtnPrimary type="submit" disabled={saving}>
                 {saving ? "Saving…" : editingId ? "Save Changes" : "Add Record"}
-              </button>
+              </BtnPrimary>
             </div>
           </form>
         </div>
-      ) : null}
+      )}
 
-      <div style={{ ...panel, marginTop: 14, paddingBottom: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ fontSize: 15, fontWeight: 900, color: THEME.title }}>All Records</div>
-
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button type="button" onClick={openCreateForm} style={btnPrimary} disabled={saving}>
-              Add Other Asset
-            </button>
-
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search country/category/description…"
-              style={{ ...input, width: 240 }}
-              disabled={loading}
-            />
-
-            <select
-              value={countryFilter}
-              onChange={(e) => setCountryFilter(e.target.value)}
-              style={{ ...input, width: 140 }}
-              disabled={loading}
-            >
+      <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+          <span className="text-sm font-black text-slate-100">All Records</span>
+          <div className="flex gap-2 items-center flex-wrap">
+            <BtnPrimary onClick={openCreateForm} disabled={saving}>Add Other Asset</BtnPrimary>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" className={`${inputCls} !w-48`} disabled={loading} />
+            <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} className={`${inputCls} !w-32`} disabled={loading}>
               <option value="ALL">All</option>
               <option value="USA">USA</option>
               <option value="India">India</option>
             </select>
-
-            <select
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value)}
-              style={{ ...input, width: 170 }}
-              disabled={loading}
-            >
+            <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className={`${inputCls} !w-40`} disabled={loading}>
               <option value="updatedAt">Sort: Updated</option>
               <option value="country">Sort: Country</option>
               <option value="category">Sort: Category</option>
               <option value="description">Sort: Description</option>
               <option value="value">Sort: Value</option>
             </select>
-
-            <button
-              type="button"
-              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-              style={btnSecondary}
-              disabled={loading}
-            >
+            <Btn onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))} disabled={loading}>
               {sortDir === "asc" ? "Asc" : "Desc"}
-            </button>
+            </Btn>
           </div>
         </div>
 
-        <div style={{ marginTop: 10, borderTop: `1px solid ${THEME.rowBorder}` }} />
+        {(fetchError || error) && (
+          <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2 mb-3">
+            <span className="text-xs font-black text-slate-100">Error</span>
+            <p className="text-xs text-slate-300 mt-1">{fetchError?.message || error}</p>
+          </div>
+        )}
+
+        <div className="border-t border-white/[0.06]" />
 
         {loading ? (
-          <div style={{ padding: 14, color: THEME.muted }}>Loading…</div>
+          <EmptyState type="loading" />
         ) : filteredSortedRows.length === 0 ? (
-          <div style={{ padding: 14, color: THEME.muted }}>
-            No other assets yet. Click “Add Other Asset” to create one.
-          </div>
+          <EmptyState type="empty" message='No other assets yet. Click "Add Other Asset" to create one.' />
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
               <thead>
-                <tr style={{ textAlign: "left" }}>
-                  <Th onClick={() => onToggleSort("category")} active={sortKey === "category"}>
-                    Asset Category
-                  </Th>
-                  <Th onClick={() => onToggleSort("description")} active={sortKey === "description"}>
-                    Asset Description
-                  </Th>
-                  <Th onClick={() => onToggleSort("country")} active={sortKey === "country"}>
-                    Country
-                  </Th>
-                  <Th onClick={() => onToggleSort("value")} active={sortKey === "value"}>
-                    Latest Asset Value
-                  </Th>
+                <tr>
+                  <Th onClick={() => onToggleSort("category")} active={sortKey === "category"}>Asset Category</Th>
+                  <Th onClick={() => onToggleSort("description")} active={sortKey === "description"}>Asset Description</Th>
+                  <Th onClick={() => onToggleSort("country")} active={sortKey === "country"}>Country</Th>
+                  <Th onClick={() => onToggleSort("value")} active={sortKey === "value"}>Latest Asset Value</Th>
                   <Th align="right">Actions</Th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSortedRows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
-                    <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>{r.category}</div>
-                    </Td>
-                    <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>{r.description}</div>
-                    </Td>
-                    <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>
-                        {String(r.country || "").toUpperCase() === "INDIA" ? "India" : "USA"}
-                      </div>
-                    </Td>
-                    <Td>
-                      <div style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(r.value)}</div>
-                    </Td>
+                  <tr key={r.id} className="border-t border-white/[0.06]">
+                    <Td><span className="font-black text-slate-100">{r.category}</span></Td>
+                    <Td><span className="font-black text-slate-100">{r.description}</span></Td>
+                    <Td><span className="font-black text-slate-100">{String(r.country || "").toUpperCase() === "INDIA" ? "India" : "USA"}</span></Td>
+                    <Td><span className="font-black text-slate-100">{formatMoney(r.value)}</span></Td>
                     <Td align="right">
-                      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingRight: 8 }}>
-                        <button type="button" onClick={() => startEdit(r)} style={btnSecondarySmall} disabled={saving}>
-                          Edit
-                        </button>
-                        <button type="button" onClick={() => onDelete(r.id)} style={btnDangerSmall} disabled={saving}>
-                          Delete
-                        </button>
+                      <div className="flex gap-2 justify-end pr-2">
+                        <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>
+                        <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>
                       </div>
                     </Td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
-                <tr style={{ borderTop: `1px solid ${THEME.rowBorder}` }}>
-                  <Td colSpan={4}>
-                    <div style={{ fontWeight: 900, color: THEME.title }}>Total</div>
-                  </Td>
-                  <Td>
-                    <div style={{ fontWeight: 900, color: THEME.title }}>{formatMoney(totalValue)}</div>
-                  </Td>
-                  <Td align="right" />
+                <tr className="border-t border-white/[0.06]">
+                  <Td colSpan={3}><span className="font-black text-slate-100">Total</span></Td>
+                  <Td><span className="font-black text-slate-100">{formatMoney(totalValue)}</span></Td>
+                  <Td />
                 </tr>
               </tfoot>
             </table>
@@ -559,122 +287,53 @@ export default function OtherAssets() {
   );
 }
 
-/* ---------- small UI components (copied style) ---------- */
+/* ---------- helpers ---------- */
 
-function SummaryCard({ title, value, hint }) {
+function FLabel({ label, children }) {
   return (
-    <div style={panel}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{title}</div>
-      <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: THEME.title }}>{value}</div>
-      {hint ? <div style={{ marginTop: 6, fontSize: 12, color: THEME.muted }}>{hint}</div> : null}
-    </div>
-  );
-}
-
-function Field({ label, children }) {
-  return (
-    <label style={{ display: "grid", gap: 6 }}>
-      <div style={{ fontSize: 12, color: THEME.muted, fontWeight: 800 }}>{label}</div>
+    <label className="grid gap-1.5">
+      <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{label}</span>
       {children}
     </label>
   );
 }
-
-function Th({ children, align, onClick, active }) {
+function Btn({ children, onClick, disabled, type = "button" }) {
+  return <button type={type} onClick={onClick} disabled={disabled} className={btnSmCls}>{children}</button>;
+}
+function BtnPrimary({ children, onClick, disabled, type = "button" }) {
+  return <button type={type} onClick={onClick} disabled={disabled} className={btnPrimCls}>{children}</button>;
+}
+function BtnDanger({ children, onClick, disabled, type = "button" }) {
+  return <button type={type} onClick={onClick} disabled={disabled} className={btnDanCls}>{children}</button>;
+}
+function Th({ children, onClick, active, align }) {
   return (
     <th
       onClick={onClick}
-      style={{
-        padding: "10px 10px",
-        fontSize: 12,
-        color: THEME.muted,
-        fontWeight: 900,
-        cursor: onClick ? "pointer" : "default",
-        userSelect: "none",
-        whiteSpace: "nowrap",
-        ...(active ? { color: THEME.pageText } : null),
-      }}
-      align={align || "left"}
       title={onClick ? "Click to sort" : undefined}
+      className={[
+        "text-xs font-bold uppercase tracking-widest px-3 py-2.5 whitespace-nowrap border-b border-white/[0.06] select-none",
+        onClick ? "cursor-pointer" : "",
+        active ? "text-slate-300" : "text-slate-500",
+        align === "right" ? "text-right" : "text-left",
+      ].join(" ")}
     >
       {children}
     </th>
   );
 }
-
 function Td({ children, align, colSpan }) {
   return (
-    <td style={{ padding: "12px 10px", verticalAlign: "top" }} align={align || "left"} colSpan={colSpan}>
+    <td
+      colSpan={colSpan}
+      className={`text-sm text-slate-300 px-3 py-3 align-top ${align === "right" ? "text-right" : "text-left"}`}
+    >
       {children}
     </td>
   );
 }
 
-/* ---------- styles ---------- */
-
-const panel = {
-  background: THEME.panelBg,
-  border: `1px solid ${THEME.panelBorder}`,
-  borderRadius: 14,
-  padding: 14,
-  backdropFilter: "blur(6px)",
-};
-
-const input = {
-  width: "100%",
-  padding: "10px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.inputBorder}`,
-  background: THEME.inputBg,
-  color: THEME.pageText,
-  outline: "none",
-};
-
-const btnPrimary = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.primaryBorder}`,
-  background: THEME.primaryBg,
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const btnSecondary = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.panelBorder}`,
-  background: "rgba(148, 163, 184, 0.06)",
-  color: THEME.pageText,
-  fontWeight: 900,
-  cursor: "pointer",
-};
-
-const btnSecondarySmall = {
-  padding: "7px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.panelBorder}`,
-  background: "rgba(148, 163, 184, 0.06)",
-  color: THEME.pageText,
-  fontWeight: 900,
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const btnDangerSmall = {
-  padding: "7px 10px",
-  borderRadius: 12,
-  border: `1px solid ${THEME.dangerBorder}`,
-  background: THEME.dangerBg,
-  color: THEME.title,
-  fontWeight: 900,
-  cursor: "pointer",
-  fontSize: 12,
-};
-
-const callout = {
-  padding: 12,
-  borderRadius: 12,
-  background: "rgba(239, 68, 68, 0.10)",
-  border: `1px solid ${THEME.dangerBorder}`,
-};
+const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+const btnPrimCls = "text-xs font-bold text-slate-100 px-3 py-1.5 rounded-lg border border-blue-500/[0.3] bg-blue-500/[0.15] hover:bg-blue-500/[0.25] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const btnDanCls = "text-xs font-bold text-red-400 px-3 py-1.5 rounded-lg border border-red-500/[0.3] bg-red-500/[0.08] hover:bg-red-500/[0.15] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";

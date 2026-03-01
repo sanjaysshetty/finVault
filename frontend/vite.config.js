@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ command }) => ({
   // ✅ Dev: "/"  |  Build (prod): "/app/"
   base: command === "serve" ? "/" : "/app/",
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
 }));
