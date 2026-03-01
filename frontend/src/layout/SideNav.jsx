@@ -12,12 +12,12 @@ function Section({ title, open, onToggle, children }) {
           "w-full flex items-center justify-between",
           "px-2 py-1.5 rounded-lg",
           "text-sm font-bold uppercase tracking-wide",
-          "text-slate-600 hover:text-slate-400",
+          "text-slate-100 hover:text-white",
           "transition-colors cursor-pointer",
         ].join(" ")}
       >
         <span className="truncate">{title}</span>
-        <span className="ml-1 text-slate-700 text-xs">
+        <span className="ml-1 text-slate-100 text-xs">
           {open ? "▾" : "▸"}
         </span>
       </button>

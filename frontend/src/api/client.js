@@ -17,6 +17,7 @@ function getAccessToken() {
 /**
  * apiFetch — authenticated fetch wrapper.
  * Throws an Error (with .status) on non-2xx responses.
+ * On 401, clears the session and redirects to Cognito logout immediately.
  */
 export async function apiFetch(path, { method = "GET", body } = {}) {
   const token = getAccessToken();
@@ -28,6 +29,24 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
     headers,
     ...(body != null ? { body: JSON.stringify(body) } : {}),
   });
+
+  if (res.status === 401) {
+    // Session expired — clear tokens and redirect to Cognito logout
+    sessionStorage.removeItem("finvault.accessToken");
+    sessionStorage.removeItem("finvault.idToken");
+    sessionStorage.removeItem("finvault.refreshToken");
+    sessionStorage.removeItem("access_token");
+    sessionStorage.removeItem("id_token");
+    const domain    = import.meta.env.VITE_COGNITO_DOMAIN;
+    const clientId  = import.meta.env.VITE_COGNITO_CLIENT_ID;
+    const logoutUri = import.meta.env.VITE_COGNITO_LOGOUT_URI ||
+      new URL(import.meta.env.BASE_URL || "/", window.location.origin).toString();
+    window.location.assign(
+      `${domain}/logout?client_id=${encodeURIComponent(clientId)}&logout_uri=${encodeURIComponent(logoutUri)}`
+    );
+    // Return a never-resolving promise so no downstream code runs
+    return new Promise(() => {});
+  }
 
   if (!res.ok) {
     const err = new Error(`API ${method} ${path} → ${res.status}`);

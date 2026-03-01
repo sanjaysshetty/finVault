@@ -211,7 +211,6 @@ export default function OtherAssets() {
         <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
           <span className="text-sm font-black text-slate-100">All Records</span>
           <div className="flex gap-2 items-center flex-wrap">
-            <BtnPrimary onClick={openCreateForm} disabled={saving}>Add Other Asset</BtnPrimary>
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" className={`${inputCls} !w-48`} disabled={loading} />
             <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} className={`${inputCls} !w-32`} disabled={loading}>
               <option value="ALL">All</option>
@@ -226,8 +225,9 @@ export default function OtherAssets() {
               <option value="value">Sort: Value</option>
             </select>
             <Btn onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))} disabled={loading}>
-              {sortDir === "asc" ? "Asc" : "Desc"}
+              {sortDir === "asc" ? "Asc" : "Desc ↓"}
             </Btn>
+            <BtnPrimary onClick={openCreateForm} disabled={saving}>+ Add Other Asset</BtnPrimary>
           </div>
         </div>
 

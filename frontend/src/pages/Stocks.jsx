@@ -235,59 +235,6 @@ export default function Stocks() {
             );
           })()}
 
-          {/* Holdings */}
-          <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
-              <div>
-                <p className="text-sm font-bold text-slate-200">Holdings Overview</p>
-                <p className="mt-0.5 text-xs text-slate-500">{quoteStatus || "Live quotes via Finnhub"}</p>
-              </div>
-              <div className="flex gap-2">
-                <Btn onClick={refreshQuotes} disabled={saving || pricesFetching}>Refresh</Btn>
-                <BtnPrimary onClick={openCreate} disabled={saving}>Add Transaction</BtnPrimary>
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px]">
-                <thead>
-                  <tr className="border-b border-white/[0.06]">
-                    {["Symbol", "Shares", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
-                      <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {metrics.holdings.length === 0 ? (
-                    <tr><td colSpan={7}><EmptyState type="empty" message="No holdings yet. Add a BUY transaction." /></td></tr>
-                  ) : metrics.holdings.map((h) => {
-                    const mv = spotMove(h.spot, h.prevClose);
-                    const dayGL = mv.hasPrev ? safeNum(h.shares, 0) * mv.change : null;
-                    return (
-                      <tr key={h.symbol} className="hover:bg-white/[0.02] transition-colors">
-                        <td className="px-4 py-3">
-                          <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
-                          <p className="text-[11px] text-slate-600 mt-0.5">Buys: {h.buys} · Sells: {h.sells}</p>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
-                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
-                        <td className="px-4 py-3">
-                          <p className={`text-sm font-bold numeric ${plClass(mv.change)}`}>{formatMoney(h.spot)}</p>
-                          {mv.hasPrev && <p className={`text-[11px] font-semibold mt-0.5 numeric ${plClass(mv.change)}`}>{formatPct(mv.pct)}</p>}
-                        </td>
-                        <td className={`px-4 py-3 text-sm font-bold numeric ${mv.hasPrev ? plClass(dayGL) : "text-slate-600"}`}>
-                          {mv.hasPrev ? formatMoney(dayGL) : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
-                        <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
           {/* Add/Edit form */}
           {showForm && (
             <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-5">
@@ -343,6 +290,59 @@ export default function Stocks() {
               </form>
             </div>
           )}
+
+          {/* Holdings */}
+          <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-sm font-bold text-slate-200">Holdings Overview</p>
+                <p className="mt-0.5 text-xs text-slate-500">{quoteStatus || "Live quotes via Finnhub"}</p>
+              </div>
+              <div className="flex gap-2">
+                <Btn onClick={refreshQuotes} disabled={saving || pricesFetching}>Refresh</Btn>
+                <BtnPrimary onClick={openCreate} disabled={saving}>+ Add Transaction</BtnPrimary>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px]">
+                <thead>
+                  <tr className="border-b border-white/[0.06]">
+                    {["Symbol", "Shares", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {metrics.holdings.length === 0 ? (
+                    <tr><td colSpan={7}><EmptyState type="empty" message="No holdings yet. Add a BUY transaction." /></td></tr>
+                  ) : metrics.holdings.map((h) => {
+                    const mv = spotMove(h.spot, h.prevClose);
+                    const dayGL = mv.hasPrev ? safeNum(h.shares, 0) * mv.change : null;
+                    return (
+                      <tr key={h.symbol} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="px-4 py-3">
+                          <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
+                          <p className="text-[11px] text-slate-600 mt-0.5">Buys: {h.buys} · Sells: {h.sells}</p>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
+                        <td className="px-4 py-3">
+                          <p className={`text-sm font-bold numeric ${plClass(mv.change)}`}>{formatMoney(h.spot)}</p>
+                          {mv.hasPrev && <p className={`text-[11px] font-semibold mt-0.5 numeric ${plClass(mv.change)}`}>{formatPct(mv.pct)}</p>}
+                        </td>
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${mv.hasPrev ? plClass(dayGL) : "text-slate-600"}`}>
+                          {mv.hasPrev ? formatMoney(dayGL) : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
           {/* Transactions */}
           <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
@@ -430,7 +430,7 @@ function Btn({ children, onClick, disabled, type = "button" }) {
 function BtnPrimary({ children, onClick, disabled, type = "button" }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
-      className="px-3 py-2 text-sm font-bold rounded-xl bg-blue-500/15 border border-blue-500/30 text-blue-300 hover:bg-blue-500/25 transition-all disabled:opacity-50 cursor-pointer">
+      className="text-xs font-bold text-slate-100 px-3 py-1.5 rounded-lg border border-blue-500/[0.3] bg-blue-500/[0.15] hover:bg-blue-500/[0.25] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
       {children}
     </button>
   );

@@ -363,9 +363,6 @@ export default function Futures() {
             <h2 className="text-sm font-black text-slate-100" style={{ fontFamily: "Epilogue, sans-serif" }}>
               Open Positions
             </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Unmatched contracts after FIFO netting. Click Close to record the offsetting trade.
-            </p>
           </div>
           <BtnPrimary type="button" onClick={openAddForm} disabled={saving || loading}>
             + Add Transaction
@@ -574,7 +571,7 @@ export default function Futures() {
       {/* Transaction history */}
       <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729]">
         <div className="flex items-center justify-between gap-3 flex-wrap px-4 pt-4 pb-3">
-          <h2 className="text-sm font-black text-slate-100">Transaction History</h2>
+          <h2 className="text-sm font-black text-slate-100">Transactions</h2>
           <div className="flex gap-2 flex-wrap items-center">
             <select
               value={tickerFilter}
