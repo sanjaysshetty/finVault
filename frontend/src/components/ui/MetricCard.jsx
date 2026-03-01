@@ -29,7 +29,7 @@ export function MetricCard({ label, value, pct = null, valueClass = "text-slate-
           value and pct together so they always fit on one line. */}
       <div
         className={`flex items-baseline gap-x-1.5 min-w-0 overflow-hidden ${valueClass}`}
-        style={{ fontFamily: "Epilogue, sans-serif", fontSize: "clamp(0.9rem, 3.6vw, 1.8rem)" }}
+        style={{ fontFamily: "Epilogue, sans-serif", fontSize: "clamp(1rem, 3.6vw, 1.44rem)" }}
       >
         <span className="font-black leading-tight">{displayValue}</span>
         {pct != null && (

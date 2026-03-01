@@ -493,9 +493,6 @@ export default function FixedIncome() {
         <div className="flex items-center justify-between gap-3 flex-wrap px-4 pt-4 pb-3">
           <h2 className="text-sm font-black text-slate-100">All Records</h2>
           <div className="flex gap-2 flex-wrap items-center">
-            <BtnPrimary type="button" onClick={openCreateForm} disabled={saving}>
-              + Add Fixed Income
-            </BtnPrimary>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -532,6 +529,9 @@ export default function FixedIncome() {
             >
               {sortDir === "asc" ? "Asc ↑" : "Desc ↓"}
             </Btn>
+            <BtnPrimary type="button" onClick={openCreateForm} disabled={saving}>
+              + Add Fixed Income
+            </BtnPrimary>
           </div>
         </div>
 

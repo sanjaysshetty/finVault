@@ -377,29 +377,39 @@ export default function Portfolio() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[540px] table-fixed">
+              <table className="w-full min-w-[780px] table-fixed">
                 <thead>
                   <tr className="border-b border-white/[0.06]">
-                    <th className="w-1/3 px-5 py-3 text-left text-sm font-bold uppercase tracking-wide text-slate-400">Asset Type</th>
-                    <th className="w-1/3 px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Latest Value</th>
-                    <th className="w-1/3 px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Unrealized</th>
+                    <th className="w-[26%] px-5 py-3 text-left text-sm font-bold uppercase tracking-wide text-slate-400">Asset Type</th>
+                    <th className="w-[18%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Latest Value</th>
+                    <th className="w-[18%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Invested Value</th>
+                    <th className="w-[19%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Unrealized G/L</th>
+                    <th className="w-[19%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Day's G/L</th>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-white/[0.04]">
                   {rows.map((r) => {
-                    const showPL = r.key !== "otherAssets";
+                    const showPL       = r.key !== "otherAssets";
+                    const showInvested = r.totalCost != null;
+                    const showDayGL    = r.dayGL != null;
                     return (
                       <tr key={r.key} className="hover:bg-white/[0.02] transition-colors">
-                        <td className="w-1/3 px-5 py-3.5">
+                        <td className="w-[26%] px-5 py-3.5">
                           <p className="font-semibold text-slate-200 text-sm">{r.label}</p>
                           {r.hint && <p className="text-xs text-slate-600 mt-0.5">{r.hint}</p>}
                         </td>
-                        <td className="w-1/3 px-5 py-3.5 text-right font-bold text-slate-200 text-sm numeric">
+                        <td className="w-[18%] px-5 py-3.5 text-right font-bold text-slate-200 text-sm numeric">
                           {formatMoney(r.holdingValue)}
                         </td>
-                        <td className={`w-1/3 px-5 py-3.5 text-right font-bold text-sm numeric ${showPL ? plColorClass(r.unrealized) : "text-slate-700"}`}>
+                        <td className="w-[18%] px-5 py-3.5 text-right font-bold text-slate-400 text-sm numeric">
+                          {showInvested ? formatMoney(r.totalCost) : "—"}
+                        </td>
+                        <td className={`w-[19%] px-5 py-3.5 text-right font-bold text-sm numeric ${showPL ? plColorClass(r.unrealized) : "text-slate-700"}`}>
                           {showPL ? formatMoney(r.unrealized) : "—"}
+                        </td>
+                        <td className={`w-[19%] px-5 py-3.5 text-right font-bold text-sm numeric ${showDayGL ? plColorClass(r.dayGL) : "text-slate-700"}`}>
+                          {showDayGL ? formatMoney(r.dayGL) : "—"}
                         </td>
                       </tr>
                     );
@@ -409,12 +419,18 @@ export default function Portfolio() {
                 {/* Totals row */}
                 <tfoot>
                   <tr className="border-t border-white/[0.1] bg-white/[0.02]">
-                    <td className="w-1/3 px-5 py-3.5 text-sm font-black text-slate-300">Total</td>
-                    <td className="w-1/3 px-5 py-3.5 text-right text-sm font-black text-slate-100 numeric">
+                    <td className="w-[26%] px-5 py-3.5 text-sm font-black text-slate-300">Total</td>
+                    <td className="w-[18%] px-5 py-3.5 text-right text-sm font-black text-slate-100 numeric">
                       {formatMoney(totals.holdingValue)}
                     </td>
-                    <td className={`w-1/3 px-5 py-3.5 text-right text-sm font-black numeric ${plColorClass(totals.unrealized)}`}>
+                    <td className="w-[18%] px-5 py-3.5 text-right text-sm font-black text-slate-400 numeric">
+                      {formatMoney(totals.totalCost)}
+                    </td>
+                    <td className={`w-[19%] px-5 py-3.5 text-right text-sm font-black numeric ${plColorClass(totals.unrealized)}`}>
                       {formatMoney(totals.unrealized)}
+                    </td>
+                    <td className={`w-[19%] px-5 py-3.5 text-right text-sm font-black numeric ${totals.dayGL != null ? plColorClass(totals.dayGL) : "text-slate-700"}`}>
+                      {totals.dayGL != null ? formatMoney(totals.dayGL) : "—"}
                     </td>
                   </tr>
                 </tfoot>
