@@ -7,22 +7,36 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 
 function getAccessToken() {
+  // Send the ID token as Bearer — it contains verified claims (email, sub)
+  // and its audience matches the Cognito client ID configured on the JWT authorizer.
   return (
+    sessionStorage.getItem("finvault.idToken") ||
+    sessionStorage.getItem("id_token") ||
     sessionStorage.getItem("finvault.accessToken") ||
     sessionStorage.getItem("access_token") ||
     ""
   );
 }
 
+function getActiveAccountId() {
+  return sessionStorage.getItem("finvault.activeAccountId") || "";
+}
+
+
 /**
  * apiFetch — authenticated fetch wrapper.
  * Throws an Error (with .status) on non-2xx responses.
  * On 401, clears the session and redirects to Cognito logout immediately.
+ *
+ * Pass `accountId` in opts to override the active account header for a
+ * specific call (used by AccountsPage to manage non-active accounts).
  */
-export async function apiFetch(path, { method = "GET", body } = {}) {
+export async function apiFetch(path, { method = "GET", body, accountId: accountIdOverride } = {}) {
   const token = getAccessToken();
+  const accountId = accountIdOverride !== undefined ? accountIdOverride : getActiveAccountId();
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (accountId) headers["X-Account-Id"] = accountId;
 
   const res = await fetch(`${API_BASE}${path}`, {
     method,
@@ -61,13 +75,16 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
 }
 
 // ── Convenience helpers ──────────────────────────────────────
+// All helpers accept an optional `opts` object (e.g. `{ accountId }`) as the
+// last argument so callers can override the X-Account-Id header for a specific
+// call without touching the global active-account state.
 
 export const api = {
-  get:    (path)         => apiFetch(path),
-  post:   (path, body)   => apiFetch(path, { method: "POST",   body }),
-  patch:  (path, body)   => apiFetch(path, { method: "PATCH",  body }),
-  put:    (path, body)   => apiFetch(path, { method: "PUT",    body }),
-  delete: (path)         => apiFetch(path, { method: "DELETE" }),
+  get:    (path, opts)       => apiFetch(path, opts || {}),
+  post:   (path, body, opts) => apiFetch(path, { method: "POST",   body, ...(opts || {}) }),
+  patch:  (path, body, opts) => apiFetch(path, { method: "PATCH",  body, ...(opts || {}) }),
+  put:    (path, body, opts) => apiFetch(path, { method: "PUT",    body, ...(opts || {}) }),
+  delete: (path, opts)       => apiFetch(path, { method: "DELETE", ...(opts || {}) }),
 };
 
 // ── React Query key factory ──────────────────────────────────
@@ -91,4 +108,9 @@ export const queryKeys = {
     stockSymbols.slice().sort().join(","),
     cryptoSymbols.slice().sort().join(","),
   ],
+
+  // Accounts
+  accounts:  ()          => ["accounts"],
+  members:   (accountId) => ["accounts", accountId, "members"],
+  invites:   (accountId) => ["accounts", accountId, "invites"],
 };

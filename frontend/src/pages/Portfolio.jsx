@@ -2,8 +2,10 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { safeNum as _safeNum } from "../utils/format.js";
-import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
 import { EmptyState }  from "../components/ui/EmptyState.jsx";
+import { PageHeader }  from "../components/ui/PageHeader.jsx";
+import { PageIcons }   from "../components/ui/PageIcons.jsx";
 
 /* ── shared aliases ──────────────────────────────────────── */
 const safeNum = _safeNum;
@@ -158,6 +160,43 @@ function computeCrypto(transactions, spotMap, cryptoData) {
   return { holdingValue: round2(holdingValue), unrealized: round2(unrealized), realized: round2(realized), dayGL: hasDayGL ? round2(dayGL) : null, totalCost: round2(totalCost), prevDayValue: round2(prevDayValue) };
 }
 
+/* FIFO lot tracker — YTD realized per asset class, for Portfolio aggregate */
+function _fifoYTD(txs, getKey, getQty, getPrice, getFees) {
+  const year = new Date().getFullYear();
+  const yearStart = `${year}-01-01`;
+  const sorted = [...txs].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const lots = {};
+  let shortTerm = 0, longTerm = 0;
+
+  for (const t of sorted) {
+    const key = getKey(t); if (!key) continue;
+    const type = String(t.type || "BUY").toUpperCase();
+    const qty = safeNum(getQty(t), 0), price = safeNum(getPrice(t), 0), fees = safeNum(getFees(t), 0);
+    if (qty <= 0) continue;
+    if (!lots[key]) lots[key] = [];
+
+    if (type === "BUY") {
+      lots[key].push({ date: t.date || "", qty, costPerUnit: (qty * price + fees) / qty });
+    } else if (type === "SELL") {
+      const netPerUnit = (qty * price - fees) / qty;
+      let rem = qty;
+      const isCY = t.date && t.date >= yearStart;
+      while (rem > 0 && lots[key].length > 0) {
+        const lot = lots[key][0];
+        const used = Math.min(rem, lot.qty);
+        if (isCY) {
+          const gain = used * (netPerUnit - lot.costPerUnit);
+          const days = lot.date ? (new Date(t.date) - new Date(lot.date)) / 86400000 : 0;
+          if (days > 365) longTerm += gain; else shortTerm += gain;
+        }
+        lot.qty -= used; rem -= used;
+        if (lot.qty <= 0) lots[key].shift();
+      }
+    }
+  }
+  return { shortTerm: round2(shortTerm), longTerm: round2(longTerm) };
+}
+
 function computeFixedIncome(items) {
   let holdingValue = 0, unrealized = 0, dailyAccrual = 0, totalCost = 0;
   const today = new Date().toISOString().slice(0, 10);
@@ -181,6 +220,73 @@ function computeOtherAssets(items) {
   return { holdingValue: round2(holdingValue), unrealized: 0, realized: 0 };
 }
 
+/* ── Futures YTD (FIFO, long/short queues) ───────────────── */
+function computeFuturesYTDRealized(transactions) {
+  const year = new Date().getFullYear();
+  const yearStart = `${year}-01-01`;
+  const txSorted = [...transactions].sort((a, b) => {
+    const d = String(a.tradeDate || "").localeCompare(String(b.tradeDate || ""));
+    return d !== 0 ? d : String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+  });
+  const state = {};
+  let shortTerm = 0, longTerm = 0;
+  for (const tx of txSorted) {
+    const ticker = String(tx.ticker || "").toUpperCase(); if (!ticker) continue;
+    if (!state[ticker]) state[ticker] = { longQueue: [], shortQueue: [] };
+    const s = state[ticker];
+    const type = String(tx.type || "").toUpperCase();
+    const pv = safeNum(tx.pointValue, 50), qty = safeNum(tx.qty, 0);
+    const price = safeNum(tx.price, 0), fees = safeNum(tx.fees, 0);
+    const feePerQty = qty > 0 ? fees / qty : 0;
+    const tradeDate = tx.tradeDate || "";
+    if (type === "BUY") {
+      let rem = qty;
+      while (rem > 0 && s.shortQueue.length > 0) {
+        const o = s.shortQueue[0]; const cq = Math.min(rem, o.qty);
+        const pl = (o.price - price) * cq * pv - cq * feePerQty - cq * o.feePerQty;
+        if (tradeDate >= yearStart) { const days = o.openDate ? (new Date(tradeDate) - new Date(o.openDate)) / 86400000 : 0; if (days > 365) longTerm += pl; else shortTerm += pl; }
+        o.qty -= cq; rem -= cq; if (o.qty <= 0) s.shortQueue.shift();
+      }
+      if (rem > 0) s.longQueue.push({ price, qty: rem, feePerQty, openDate: tradeDate });
+    } else if (type === "SELL") {
+      let rem = qty;
+      while (rem > 0 && s.longQueue.length > 0) {
+        const o = s.longQueue[0]; const cq = Math.min(rem, o.qty);
+        const pl = (price - o.price) * cq * pv - cq * feePerQty - cq * o.feePerQty;
+        if (tradeDate >= yearStart) { const days = o.openDate ? (new Date(tradeDate) - new Date(o.openDate)) / 86400000 : 0; if (days > 365) longTerm += pl; else shortTerm += pl; }
+        o.qty -= cq; rem -= cq; if (o.qty <= 0) s.longQueue.shift();
+      }
+      if (rem > 0) s.shortQueue.push({ price, qty: rem, feePerQty, openDate: tradeDate });
+    } else if (type === "SUMMARY") {
+      if (tradeDate >= yearStart) shortTerm += safeNum(tx.grossPL, 0);
+    }
+  }
+  return { shortTerm: round2(shortTerm), longTerm: round2(longTerm), total: round2(shortTerm + longTerm) };
+}
+
+/* ── Options YTD (sum closed P/L where closeDate in current year) ── */
+function computeOptionsYTDRealized(rawItems) {
+  const year = new Date().getFullYear();
+  const yearStart = `${year}-01-01`;
+  const yearEnd   = `${year}-12-31`;
+  let total = 0;
+  for (const it of rawItems) {
+    const closeDate = String(it.closeDate ?? it.close_date ?? "");
+    if (!closeDate || closeDate < yearStart || closeDate > yearEnd) continue;
+    const typeU = String(it.type || "").trim().toUpperCase();
+    const qty   = safeNum(it.qty, 0), fill = safeNum(it.fill, 0), fee = safeNum(it.fee, 0);
+    const closeRaw = it.closePrice;
+    if (closeRaw === "" || closeRaw === null || closeRaw === undefined) continue;
+    const close = safeNum(closeRaw, NaN); if (!Number.isFinite(close)) continue;
+    let pl = null;
+    if (typeU === "SELL")                          pl = (fill - close - fee / 100) * qty * 100;
+    else if (typeU === "BUY" || typeU === "ASS" || typeU === "ASSIGNED") pl = (close - fill - fee / 100) * qty * 100;
+    else if (typeU === "SDI")                      pl = (close - fill) * qty - fee;
+    if (pl !== null) total += pl;
+  }
+  return round2(total);
+}
+
 /* ── Helpers ─────────────────────────────────────────────── */
 function extractItems(res) {
   if (Array.isArray(res)) return res;
@@ -194,16 +300,20 @@ export default function Portfolio() {
   const { data: bullRes,   isLoading: loadingBull,   isFetching: fetchingBull,   refetch: refetchBull }   = useQuery({ queryKey: queryKeys.bullionTx(),    queryFn: () => api.get("/assets/bullion/transactions") });
   const { data: stockRes,  isLoading: loadingStock,  isFetching: fetchingStock,  refetch: refetchStock }  = useQuery({ queryKey: queryKeys.stocksTx(),     queryFn: () => api.get("/assets/stocks/transactions") });
   const { data: cryptoRes, isLoading: loadingCrypto, isFetching: fetchingCrypto, refetch: refetchCrypto } = useQuery({ queryKey: queryKeys.cryptoTx(),     queryFn: () => api.get("/assets/crypto/transactions") });
-  const { data: otherRes,  isLoading: loadingOther,  isFetching: fetchingOther,  refetch: refetchOther }  = useQuery({ queryKey: queryKeys.otherAssets(),  queryFn: () => api.get("/assets/otherassets") });
+  const { data: otherRes,     isLoading: loadingOther,    isFetching: fetchingOther,    refetch: refetchOther }    = useQuery({ queryKey: queryKeys.otherAssets(),  queryFn: () => api.get("/assets/otherassets") });
+  const { data: futuresRes,   isFetching: fetchingFutures, refetch: refetchFutures }   = useQuery({ queryKey: queryKeys.futuresTx(), queryFn: () => api.get("/assets/futures/transactions") });
+  const { data: optionsRes,   isFetching: fetchingOptions,  refetch: refetchOptions }   = useQuery({ queryKey: queryKeys.optionsTx(),  queryFn: () => api.get("/assets/options/transactions") });
 
-  const fixedIncome = useMemo(() => extractItems(fiRes),     [fiRes]);
-  const bullionTx   = useMemo(() => extractItems(bullRes),   [bullRes]);
-  const stockTx     = useMemo(() => extractItems(stockRes),  [stockRes]);
-  const cryptoTx    = useMemo(() => extractItems(cryptoRes), [cryptoRes]);
-  const otherAssets = useMemo(() => extractItems(otherRes),  [otherRes]);
+  const fixedIncome = useMemo(() => extractItems(fiRes),      [fiRes]);
+  const bullionTx   = useMemo(() => extractItems(bullRes),    [bullRes]);
+  const stockTx     = useMemo(() => extractItems(stockRes),   [stockRes]);
+  const cryptoTx    = useMemo(() => extractItems(cryptoRes),  [cryptoRes]);
+  const otherAssets = useMemo(() => extractItems(otherRes),   [otherRes]);
+  const futuresTx   = useMemo(() => extractItems(futuresRes), [futuresRes]);
+  const optionsTx   = useMemo(() => extractItems(optionsRes), [optionsRes]);
 
   const loading      = loadingFI  || loadingBull  || loadingStock  || loadingCrypto  || loadingOther;
-  const isRefreshing = fetchingFI || fetchingBull || fetchingStock || fetchingCrypto || fetchingOther;
+  const isRefreshing = fetchingFI || fetchingBull || fetchingStock || fetchingCrypto || fetchingOther || fetchingFutures || fetchingOptions;
 
   const stockSymbols = useMemo(() => {
     const set = new Set(stockTx.map((t) => String(t.symbol || "").toUpperCase().trim()).filter(Boolean));
@@ -257,6 +367,8 @@ export default function Portfolio() {
     refetchStock();
     refetchCrypto();
     refetchOther();
+    refetchFutures();
+    refetchOptions();
     refetchPrices();
   }
 
@@ -266,7 +378,6 @@ export default function Portfolio() {
     bullion:     computeBullion(bullionTx, spot, pricesRes),
     fixedIncome: computeFixedIncome(fixedIncome),
     otherAssets: computeOtherAssets(otherAssetsNoProperty),
-    options:     { holdingValue: 0, realized: 0, unrealized: 0, dayGL: null },
   }), [fixedIncome, bullionTx, stockTx, cryptoTx, otherAssetsNoProperty, spot, quotes, cryptoSpots, pricesRes]);
 
   const totals = useMemo(() => {
@@ -278,47 +389,66 @@ export default function Portfolio() {
       holdingValue: round2(
         rollups.fixedIncome.holdingValue + rollups.bullion.holdingValue +
         rollups.stocks.holdingValue      + rollups.crypto.holdingValue  +
-        rollups.options.holdingValue     + rollups.otherAssets.holdingValue
+        rollups.otherAssets.holdingValue
       ),
       unrealized: round2(
         rollups.fixedIncome.unrealized + rollups.bullion.unrealized +
-        rollups.stocks.unrealized      + rollups.crypto.unrealized  + rollups.options.unrealized
+        rollups.stocks.unrealized      + rollups.crypto.unrealized
       ),
       realized: round2(
         rollups.fixedIncome.realized + rollups.bullion.realized +
-        rollups.stocks.realized      + rollups.crypto.realized  + rollups.options.realized
+        rollups.stocks.realized      + rollups.crypto.realized
       ),
       dayGL: hasDayGL ? round2(dayGLParts.reduce((s, v) => s + (v ?? 0), 0)) : null,
       totalCost, prevDayValue,
     };
   }, [rollups]);
 
+  const ytdRealized = useMemo(() => {
+    const stocks  = _fifoYTD(stockTx,   (t) => String(t.symbol || "").toUpperCase().trim(),                                    (t) => t.shares,     (t) => t.price,     (t) => t.fees);
+    const bullion = _fifoYTD(bullionTx,  (t) => String(t.metal  || "GOLD").toUpperCase(),                                       (t) => t.quantityOz, (t) => t.unitPrice, (t) => t.fees);
+    const crypto  = _fifoYTD(cryptoTx,  (t) => { const s = String(t.symbol || "").toUpperCase().trim(); return s ? (s.includes("-") ? s : `${s}-USD`) : ""; }, (t) => t.quantity,  (t) => t.unitPrice, (t) => t.fees);
+    const shortTerm = round2(stocks.shortTerm + bullion.shortTerm + crypto.shortTerm);
+    const longTerm  = round2(stocks.longTerm  + bullion.longTerm  + crypto.longTerm);
+    return {
+      shortTerm, longTerm, total: round2(shortTerm + longTerm),
+      stocks:  round2(stocks.shortTerm  + stocks.longTerm),
+      bullion: round2(bullion.shortTerm + bullion.longTerm),
+      crypto:  round2(crypto.shortTerm  + crypto.longTerm),
+    };
+  }, [stockTx, bullionTx, cryptoTx]);
+
+  const futuresYTD      = useMemo(() => computeFuturesYTDRealized(futuresTx), [futuresTx]);
+  const optionsYTDTotal = useMemo(() => computeOptionsYTDRealized(optionsTx), [optionsTx]);
+  // allYTDRealized: combines all asset classes; options have no ST/LT split so treated as short-term
+  const allYTDRealized  = useMemo(() => {
+    const shortTerm = round2(ytdRealized.shortTerm + futuresYTD.shortTerm + optionsYTDTotal);
+    const longTerm  = round2(ytdRealized.longTerm  + futuresYTD.longTerm);
+    return { shortTerm, longTerm, total: round2(shortTerm + longTerm) };
+  }, [ytdRealized.shortTerm, ytdRealized.longTerm, futuresYTD.shortTerm, futuresYTD.longTerm, optionsYTDTotal]);
+
+  const currentYear = String(new Date().getFullYear());
   const asOfDate = todayISO();
 
   const rows = useMemo(() => [
-    { key: "stocks",      label: "Stocks",       hint: stockSymbols.length       ? `${stockSymbols.length} symbols`              : "", ...rollups.stocks },
-    { key: "crypto",      label: "Crypto",        hint: cryptoSymbols.length      ? `${cryptoSymbols.length} symbols`             : "", ...rollups.crypto },
-    { key: "bullion",     label: "Bullion",       hint: bullionTx.length          ? `${bullionTx.length} tx`                      : "", ...rollups.bullion },
-    { key: "fixedIncome", label: "Fixed Income",  hint: fixedIncome.length        ? `${fixedIncome.length} positions`             : "", ...rollups.fixedIncome },
-    { key: "otherAssets", label: "Other Assets",  hint: otherAssetsNoProperty.length ? `${otherAssetsNoProperty.length} items`    : "", ...rollups.otherAssets },
-    { key: "options",     label: "Options",        hint: "placeholder",                                                                  ...rollups.options },
-  ], [rollups, stockSymbols.length, cryptoSymbols.length, bullionTx.length, fixedIncome.length, otherAssetsNoProperty.length]);
+    { key: "stocks",      label: "Stocks",       ...rollups.stocks,      realized: ytdRealized.stocks    },
+    { key: "crypto",      label: "Crypto",        ...rollups.crypto,      realized: ytdRealized.crypto    },
+    { key: "bullion",     label: "Bullion",       ...rollups.bullion,     realized: ytdRealized.bullion   },
+    { key: "fixedIncome", label: "Fixed Income",  ...rollups.fixedIncome, realized: 0                     },
+    { key: "futures",     label: "Futures",       ytdOnly: true,          realized: futuresYTD.total      },
+    { key: "options",     label: "Options",       ytdOnly: true,          realized: optionsYTDTotal       },
+    { key: "otherAssets", label: "Other Assets",  ...rollups.otherAssets, realized: 0                     },
+  ], [rollups, ytdRealized, futuresYTD.total, optionsYTDTotal]);
 
   /* ── Render ───────────────────────────────────────────── */
   return (
     <div className="space-y-5">
 
       {/* Page header */}
-      <div className="flex items-baseline justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-black text-slate-100 tracking-tight" style={{ fontFamily: "Epilogue, sans-serif" }}>
-            Portfolio
-          </h1>
-          <p className="mt-0.5 text-xs text-slate-500">
-            As of <span className="text-slate-400 font-semibold">{asOfDate}</span>
-          </p>
-        </div>
-
+      <PageHeader
+        title="Portfolio"
+        icon={PageIcons.portfolio}
+      >
         <button
           type="button"
           onClick={handleRefresh}
@@ -327,7 +457,7 @@ export default function Portfolio() {
         >
           {loading ? "Loading…" : isRefreshing ? "Refreshing…" : "Refresh"}
         </button>
-      </div>
+      </PageHeader>
 
       {/* Loading state */}
       {loading && <EmptyState type="loading" message="Loading your portfolio…" />}
@@ -339,7 +469,7 @@ export default function Portfolio() {
             const unrealizedPct = totals.totalCost > 0 ? formatPct((totals.unrealized / totals.totalCost) * 100) : null;
             const dayGLPct = totals.prevDayValue > 0 && totals.dayGL != null ? formatPct((totals.dayGL / totals.prevDayValue) * 100) : null;
             return (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <MetricCard
                   label="Total Holding Value"
                   value={formatMoney(totals.holdingValue)}
@@ -360,6 +490,12 @@ export default function Portfolio() {
                   sub="Stocks + Crypto + Bullion + FI"
                   valueClass={totals.dayGL != null ? plColorClass(totals.dayGL) : "text-slate-500"}
                 />
+                <RealizedGainCard
+                  total={allYTDRealized.total}
+                  shortTerm={allYTDRealized.shortTerm}
+                  longTerm={allYTDRealized.longTerm}
+                  year={currentYear}
+                />
               </div>
             );
           })()}
@@ -377,38 +513,44 @@ export default function Portfolio() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[780px] table-fixed">
+              <table className="w-full min-w-[920px] table-fixed">
                 <thead>
                   <tr className="border-b border-white/[0.06]">
-                    <th className="w-[26%] px-5 py-3 text-left text-sm font-bold uppercase tracking-wide text-slate-400">Asset Type</th>
-                    <th className="w-[18%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Latest Value</th>
-                    <th className="w-[18%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Invested Value</th>
-                    <th className="w-[19%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Unrealized G/L</th>
-                    <th className="w-[19%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Day's G/L</th>
+                    <th className="w-[22%] px-5 py-3 text-left text-sm font-bold uppercase tracking-wide text-slate-400">Asset Type</th>
+                    <th className="w-[15%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Latest Value</th>
+                    <th className="w-[15%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Invested Value</th>
+                    <th className="w-[16%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Unrealized G/L</th>
+                    <th className="w-[16%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">YTD Realized P/L</th>
+                    <th className="w-[16%] px-5 py-3 text-right text-sm font-bold uppercase tracking-wide text-slate-400">Day's G/L</th>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-white/[0.04]">
                   {rows.map((r) => {
-                    const showPL       = r.key !== "otherAssets";
-                    const showInvested = r.totalCost != null;
-                    const showDayGL    = r.dayGL != null;
+                    const showHolding   = !r.ytdOnly;
+                    const showPL        = r.key !== "otherAssets" && !r.ytdOnly;
+                    const showInvested  = r.totalCost != null && !r.ytdOnly;
+                    const showDayGL     = r.dayGL != null && !r.ytdOnly;
+                    const showRealized  = r.key !== "otherAssets";
+                    const colorRealized = showRealized && safeNum(r.realized, 0) !== 0;
                     return (
                       <tr key={r.key} className="hover:bg-white/[0.02] transition-colors">
-                        <td className="w-[26%] px-5 py-3.5">
+                        <td className="w-[22%] px-5 py-3.5">
                           <p className="font-semibold text-slate-200 text-sm">{r.label}</p>
-                          {r.hint && <p className="text-xs text-slate-600 mt-0.5">{r.hint}</p>}
                         </td>
-                        <td className="w-[18%] px-5 py-3.5 text-right font-bold text-slate-200 text-sm numeric">
-                          {formatMoney(r.holdingValue)}
+                        <td className="w-[15%] px-5 py-3.5 text-right font-bold text-slate-200 text-sm numeric">
+                          {showHolding ? formatMoney(r.holdingValue) : "—"}
                         </td>
-                        <td className="w-[18%] px-5 py-3.5 text-right font-bold text-slate-400 text-sm numeric">
+                        <td className="w-[15%] px-5 py-3.5 text-right font-bold text-slate-400 text-sm numeric">
                           {showInvested ? formatMoney(r.totalCost) : "—"}
                         </td>
-                        <td className={`w-[19%] px-5 py-3.5 text-right font-bold text-sm numeric ${showPL ? plColorClass(r.unrealized) : "text-slate-700"}`}>
+                        <td className={`w-[16%] px-5 py-3.5 text-right font-bold text-sm numeric ${showPL ? plColorClass(r.unrealized) : "text-slate-700"}`}>
                           {showPL ? formatMoney(r.unrealized) : "—"}
                         </td>
-                        <td className={`w-[19%] px-5 py-3.5 text-right font-bold text-sm numeric ${showDayGL ? plColorClass(r.dayGL) : "text-slate-700"}`}>
+                        <td className={`w-[16%] px-5 py-3.5 text-right font-bold text-sm numeric ${colorRealized ? plColorClass(r.realized) : "text-slate-700"}`}>
+                          {showRealized ? formatMoney(r.realized) : "—"}
+                        </td>
+                        <td className={`w-[16%] px-5 py-3.5 text-right font-bold text-sm numeric ${showDayGL ? plColorClass(r.dayGL) : "text-slate-700"}`}>
                           {showDayGL ? formatMoney(r.dayGL) : "—"}
                         </td>
                       </tr>
@@ -419,17 +561,20 @@ export default function Portfolio() {
                 {/* Totals row */}
                 <tfoot>
                   <tr className="border-t border-white/[0.1] bg-white/[0.02]">
-                    <td className="w-[26%] px-5 py-3.5 text-sm font-black text-slate-300">Total</td>
-                    <td className="w-[18%] px-5 py-3.5 text-right text-sm font-black text-slate-100 numeric">
+                    <td className="w-[22%] px-5 py-3.5 text-sm font-black text-slate-300">Total</td>
+                    <td className="w-[15%] px-5 py-3.5 text-right text-sm font-black text-slate-100 numeric">
                       {formatMoney(totals.holdingValue)}
                     </td>
-                    <td className="w-[18%] px-5 py-3.5 text-right text-sm font-black text-slate-400 numeric">
+                    <td className="w-[15%] px-5 py-3.5 text-right text-sm font-black text-slate-400 numeric">
                       {formatMoney(totals.totalCost)}
                     </td>
-                    <td className={`w-[19%] px-5 py-3.5 text-right text-sm font-black numeric ${plColorClass(totals.unrealized)}`}>
+                    <td className={`w-[16%] px-5 py-3.5 text-right text-sm font-black numeric ${plColorClass(totals.unrealized)}`}>
                       {formatMoney(totals.unrealized)}
                     </td>
-                    <td className={`w-[19%] px-5 py-3.5 text-right text-sm font-black numeric ${totals.dayGL != null ? plColorClass(totals.dayGL) : "text-slate-700"}`}>
+                    <td className={`w-[16%] px-5 py-3.5 text-right text-sm font-black numeric ${plColorClass(allYTDRealized.total)}`}>
+                      {formatMoney(allYTDRealized.total)}
+                    </td>
+                    <td className={`w-[16%] px-5 py-3.5 text-right text-sm font-black numeric ${totals.dayGL != null ? plColorClass(totals.dayGL) : "text-slate-700"}`}>
                       {totals.dayGL != null ? formatMoney(totals.dayGL) : "—"}
                     </td>
                   </tr>

@@ -2,7 +2,6 @@ const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const {
   DynamoDBDocumentClient,
   QueryCommand,
-  ScanCommand,
   PutCommand,
   UpdateCommand,
   DeleteCommand,
@@ -48,15 +47,17 @@ function parseBody(event) {
   }
 }
 
-function getUserIdFromJwt(event) {
-  const claims = event?.requestContext?.authorizer?.jwt?.claims || {};
-  const sub = claims.sub;
-  if (!sub) {
-    const err = new Error("Unauthorized");
-    err.statusCode = 401;
-    throw err;
-  }
-  return sub;
+const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
+
+async function resolveCtxCached(event) {
+  if (!event._ctx) event._ctx = await resolveContext(event);
+  return event._ctx;
+}
+
+// Shim: resolves accountId via resolveContext (equals userId for primary accounts).
+async function getUserIdFromJwt(event) {
+  const { accountId } = await resolveCtxCached(event);
+  return accountId;
 }
 
 function normalizeReceipt(receiptParam) {
@@ -309,107 +310,56 @@ function isTaxLine(item) {
 }
 
 async function queryAllForDateRange(userId, startISO, endISO) {
-  // Preferred: Query a GSI with pk=userId, sk=date (YYYY-MM-DD)
   let lastKey = undefined;
   const all = [];
 
-  try {
-    do {
-      const resp = await ddb.send(
-        new QueryCommand({
-          TableName: TABLE_NAME,
-          IndexName: DATE_INDEX_NAME,
-          KeyConditionExpression: "#uid = :uid AND #date BETWEEN :s AND :e",
-          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
-          ExpressionAttributeValues: { ":uid": userId, ":s": startISO, ":e": endISO },
-          ExclusiveStartKey: lastKey,
-        })
-      );
+  do {
+    const resp = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: DATE_INDEX_NAME,
+        KeyConditionExpression: "#uid = :uid AND #date BETWEEN :s AND :e",
+        ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
+        ExpressionAttributeValues: { ":uid": userId, ":s": startISO, ":e": endISO },
+        ExclusiveStartKey: lastKey,
+      })
+    );
 
-      if (resp.Items?.length) all.push(...resp.Items);
-      lastKey = resp.LastEvaluatedKey;
-    } while (lastKey);
+    if (resp.Items?.length) all.push(...resp.Items);
+    lastKey = resp.LastEvaluatedKey;
+  } while (lastKey);
 
-    return all;
-  } catch (e) {
-    // Fallback scan by user + date range (works but slower)
-    const msg = String(e?.message || e);
-    console.log("Date range query failed; falling back to Scan. Error:", msg);
-
-    let scanLast = undefined;
-    do {
-      const sresp = await ddb.send(
-        new ScanCommand({
-          TableName: TABLE_NAME,
-          FilterExpression: "#uid = :uid AND #date BETWEEN :s AND :e",
-          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
-          ExpressionAttributeValues: { ":uid": userId, ":s": startISO, ":e": endISO },
-          ExclusiveStartKey: scanLast,
-        })
-      );
-
-      if (sresp.Items?.length) all.push(...sresp.Items);
-      scanLast = sresp.LastEvaluatedKey;
-    } while (scanLast);
-
-    return all;
-  }
+  return all;
 }
 
 async function queryAllForDate(userId, dISO) {
-  // Prefer date-GSI query; if GSI schema changed, fall back to Scan.
-  const pk = `DATE#${dISO}`;
   let lastKey = undefined;
   const all = [];
 
-  try {
-    do {
-      const resp = await ddb.send(
-        new QueryCommand({
-          TableName: TABLE_NAME,
-          IndexName: "GSI1",
-          KeyConditionExpression: "gsi1pk = :pk",
-          ExpressionAttributeValues: { ":pk": pk, ":uid": userId },
-          FilterExpression: "#uid = :uid",
-          ExpressionAttributeNames: { "#uid": "userId" },
-          ExclusiveStartKey: lastKey,
-        })
-      );
+  do {
+    const resp = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: DATE_INDEX_NAME,
+        KeyConditionExpression: "#uid = :uid AND #date = :d",
+        ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
+        ExpressionAttributeValues: { ":uid": userId, ":d": dISO },
+        ExclusiveStartKey: lastKey,
+      })
+    );
 
-      if (resp.Items?.length) all.push(...resp.Items);
-      lastKey = resp.LastEvaluatedKey;
-    } while (lastKey);
+    if (resp.Items?.length) all.push(...resp.Items);
+    lastKey = resp.LastEvaluatedKey;
+  } while (lastKey);
 
-    return all;
-  } catch (e) {
-    // fallback scan by date + user
-    const msg = String(e?.message || e);
-    console.log("GSI1 date query failed; falling back to Scan. Error:", msg);
-
-    let scanLast = undefined;
-    do {
-      const sresp = await ddb.send(
-        new ScanCommand({
-          TableName: TABLE_NAME,
-          FilterExpression: "#uid = :uid AND #date = :d",
-          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
-          ExpressionAttributeValues: { ":uid": userId, ":d": dISO },
-          ExclusiveStartKey: scanLast,
-        })
-      );
-      if (sresp.Items?.length) all.push(...sresp.Items);
-      scanLast = sresp.LastEvaluatedKey;
-    } while (scanLast);
-
-    return all;
-  }
+  return all;
 }
 
 /* -------------------- Handlers -------------------- */
 
 async function listSpending(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
 
   const qs = event.queryStringParameters || {};
   const limit = Math.max(1, Math.min(200, Number(qs.limit) || 50));
@@ -425,60 +375,39 @@ async function listSpending(event) {
     }
   }
 
-  // Optional date query via GSI1 (preferred). If GSI is not date-based, fallback to Scan.
+  // Date filter: query UserDateIndex (userId PK, date SK) — no scan needed.
   const date = (qs.date || "").trim();
   if (date) {
     const d = normalizeDateYYYYMMDD(date);
 
-    try {
-      const resp = await ddb.send(
-        new QueryCommand({
-          TableName: TABLE_NAME,
-          IndexName: "GSI1",
-          KeyConditionExpression: "gsi1pk = :pk",
-          ExpressionAttributeValues: { ":pk": `DATE#${d}`, ":uid": userId },
-          FilterExpression: "#uid = :uid",
-          ExpressionAttributeNames: { "#uid": "userId" },
-          Limit: limit,
-          ExclusiveStartKey: exclusiveStartKey,
-        })
-      );
+    const resp = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: DATE_INDEX_NAME,
+        KeyConditionExpression: "#uid = :uid AND #date = :d",
+        ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
+        ExpressionAttributeValues: { ":uid": userId, ":d": d },
+        Limit: limit,
+        ExclusiveStartKey: exclusiveStartKey,
+      })
+    );
 
-      const nextTokenOut = resp.LastEvaluatedKey
-        ? Buffer.from(JSON.stringify(resp.LastEvaluatedKey), "utf8").toString("base64")
-        : null;
+    const nextTokenOut = resp.LastEvaluatedKey
+      ? Buffer.from(JSON.stringify(resp.LastEvaluatedKey), "utf8").toString("base64")
+      : null;
 
-      return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
-    } catch (e) {
-      const msg = String(e?.message || e);
-      console.log("GSI1 date list query failed; falling back to Scan. Error:", msg);
-
-      const resp = await ddb.send(
-        new ScanCommand({
-          TableName: TABLE_NAME,
-          FilterExpression: "#uid = :uid AND #date = :d",
-          ExpressionAttributeNames: { "#uid": "userId", "#date": "date" },
-          ExpressionAttributeValues: { ":uid": userId, ":d": d },
-          Limit: limit,
-          ExclusiveStartKey: exclusiveStartKey,
-        })
-      );
-
-      const nextTokenOut = resp.LastEvaluatedKey
-        ? Buffer.from(JSON.stringify(resp.LastEvaluatedKey), "utf8").toString("base64")
-        : null;
-
-      return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
-    }
+    return json(200, { items: resp.Items || [], nextToken: nextTokenOut });
   }
 
-  // Fallback: Scan and filter by userId
+  // No date filter: query all items for this user via UserDateIndex (sorted by date desc).
   const resp = await ddb.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: TABLE_NAME,
-      FilterExpression: "#uid = :uid",
+      IndexName: DATE_INDEX_NAME,
+      KeyConditionExpression: "#uid = :uid",
       ExpressionAttributeNames: { "#uid": "userId" },
       ExpressionAttributeValues: { ":uid": userId },
+      ScanIndexForward: false,
       Limit: limit,
       ExclusiveStartKey: exclusiveStartKey,
     })
@@ -493,7 +422,7 @@ async function listSpending(event) {
 
 async function spendingDashboard(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const qs = event.queryStringParameters || {};
 
   const today = new Date().toISOString().slice(0, 10);
@@ -546,7 +475,7 @@ async function spendingDashboard(event) {
 
 async function spendingDashboardDetails(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const qs = event.queryStringParameters || {};
 
   const today = new Date().toISOString().slice(0, 10);
@@ -606,7 +535,7 @@ async function spendingDashboardDetails(event) {
 // receipt -> pk=RECEIPT#receipt
 async function getReceipt(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
 
   const receipt = normalizeReceipt(event.pathParameters?.receipt);
   const pk = `RECEIPT#${receipt}`;
@@ -627,7 +556,7 @@ async function getReceipt(event) {
 // create uses LINE#000001 format. Keep for compatibility.
 async function createItem(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
 
   const body = parseBody(event);
 
@@ -678,7 +607,7 @@ async function createItem(event) {
 // OLD update: receipt + lineId
 async function updateItemByReceiptLine(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
 
   const receipt = normalizeReceipt(event.pathParameters?.receipt);
   const lineId = normalizeLineId(event.pathParameters?.lineId);
@@ -711,7 +640,7 @@ async function updateItemByReceiptLine(event) {
 // ✅ pk/sk update
 async function updateItemByPkSk(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
 
   const pk = decodeURIComponent(event.pathParameters?.pk || "").trim();
   const sk = decodeURIComponent(event.pathParameters?.sk || "").trim();
@@ -743,7 +672,7 @@ async function updateItemByPkSk(event) {
 
 async function deleteItemByReceiptLine(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
 
   const receipt = normalizeReceipt(event.pathParameters?.receipt);
   const lineId = normalizeLineId(event.pathParameters?.lineId);
@@ -768,7 +697,7 @@ async function deleteItemByReceiptLine(event) {
 // ✅ pk/sk delete
 async function deleteItemByPkSk(event) {
   requireTableName();
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
 
   const pk = decodeURIComponent(event.pathParameters?.pk || "").trim();
   const sk = decodeURIComponent(event.pathParameters?.sk || "").trim();
@@ -797,6 +726,17 @@ exports.handler = async (event) => {
     if (method === "OPTIONS") return json(200, "");
 
     const rawPath = event?.rawPath || "";
+
+    // Enforce page-level permissions.
+    // Dashboard paths → spendingDashboard; all other spending paths → receiptsLedger.
+    const ctx = await resolveCtxCached(event);
+    const isDashboard = rawPath.startsWith("/spending/dashboard");
+    const pageKey = isDashboard ? "spendingDashboard" : "receiptsLedger";
+    if (method === "GET") {
+      assertRead(ctx, pageKey);
+    } else {
+      assertWrite(ctx, pageKey);
+    }
 
     // ✅ Dashboard aggregates
     if (method === "GET" && rawPath === "/spending/dashboard/details")

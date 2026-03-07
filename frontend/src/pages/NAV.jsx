@@ -2,6 +2,8 @@ import { Fragment, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
 
 /* ---------------- utils ---------------- */
@@ -582,18 +584,18 @@ export default function NAV() {
 
   return (
     <div className="p-4 text-slate-300">
-      <div className="flex items-center gap-3 mb-4">
-        <h1 className="text-2xl font-black text-slate-100 tracking-tight">Net Asset Value</h1>
-        <div className="flex-1" />
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
-        >
-          <option value="ALL">All</option>
-          <option value="USA">USA</option>
-          <option value="INDIA">India</option>
-        </select>
+      <div className="mb-4">
+        <PageHeader title="Net Asset Value" icon={PageIcons.nav}>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+          >
+            <option value="ALL">All</option>
+            <option value="USA">USA</option>
+            <option value="INDIA">India</option>
+          </select>
+        </PageHeader>
       </div>
 
       {loading && <EmptyState type="loading" message="Calculating your net worth…" />}

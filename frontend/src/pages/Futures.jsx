@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
-import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { useCanWrite } from "../hooks/useCanWrite.js";
 import { Badge } from "../components/ui/Badge.jsx";
 
 function todayISO() {
@@ -134,6 +137,69 @@ function computeFuturesMetrics(transactions) {
   };
 }
 
+/* ── YTD realized gains — FIFO, split short / long term ─────── */
+
+function computeFuturesYTDRealized(transactions) {
+  const year = new Date().getFullYear();
+  const yearStart = `${year}-01-01`;
+  const txSorted = [...transactions].sort((a, b) => {
+    const d = String(a.tradeDate || "").localeCompare(String(b.tradeDate || ""));
+    return d !== 0 ? d : String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+  });
+
+  const state = {}; // ticker -> { longQueue, shortQueue }
+  let shortTerm = 0, longTerm = 0;
+
+  for (const tx of txSorted) {
+    const ticker = String(tx.ticker || "").toUpperCase();
+    if (!ticker) continue;
+    if (!state[ticker]) state[ticker] = { longQueue: [], shortQueue: [] };
+
+    const s = state[ticker];
+    const type = String(tx.type || "").toUpperCase();
+    const pv = safeNum(tx.pointValue, 50);
+    const qty = safeNum(tx.qty, 0);
+    const price = safeNum(tx.price, 0);
+    const fees = safeNum(tx.fees, 0);
+    const feePerQty = qty > 0 ? fees / qty : 0;
+    const tradeDate = tx.tradeDate || "";
+
+    if (type === "BUY") {
+      let rem = qty;
+      while (rem > 0 && s.shortQueue.length > 0) {
+        const oldest = s.shortQueue[0];
+        const closeQty = Math.min(rem, oldest.qty);
+        const pl = (oldest.price - price) * closeQty * pv - closeQty * feePerQty - closeQty * oldest.feePerQty;
+        if (tradeDate >= yearStart) {
+          const days = oldest.openDate ? (new Date(tradeDate) - new Date(oldest.openDate)) / 86400000 : 0;
+          if (days > 365) longTerm += pl; else shortTerm += pl;
+        }
+        oldest.qty -= closeQty; rem -= closeQty;
+        if (oldest.qty <= 0) s.shortQueue.shift();
+      }
+      if (rem > 0) s.longQueue.push({ price, qty: rem, feePerQty, openDate: tradeDate });
+    } else if (type === "SELL") {
+      let rem = qty;
+      while (rem > 0 && s.longQueue.length > 0) {
+        const oldest = s.longQueue[0];
+        const closeQty = Math.min(rem, oldest.qty);
+        const pl = (price - oldest.price) * closeQty * pv - closeQty * feePerQty - closeQty * oldest.feePerQty;
+        if (tradeDate >= yearStart) {
+          const days = oldest.openDate ? (new Date(tradeDate) - new Date(oldest.openDate)) / 86400000 : 0;
+          if (days > 365) longTerm += pl; else shortTerm += pl;
+        }
+        oldest.qty -= closeQty; rem -= closeQty;
+        if (oldest.qty <= 0) s.longQueue.shift();
+      }
+      if (rem > 0) s.shortQueue.push({ price, qty: rem, feePerQty, openDate: tradeDate });
+    } else if (type === "SUMMARY") {
+      // SUMMARY records have no lot history — treat as short-term if in current year
+      if (tradeDate >= yearStart) shortTerm += safeNum(tx.grossPL, 0);
+    }
+  }
+  return { shortTerm: round2(shortTerm), longTerm: round2(longTerm), total: round2(shortTerm + longTerm) };
+}
+
 /* ── Blank form ──────────────────────────────────────────────── */
 
 const BLANK_FORM = {
@@ -150,6 +216,7 @@ function normalizeTx(item) {
 ================================================================ */
 
 export default function Futures() {
+  const canWrite = useCanWrite("futures");
   const [error, setError] = useState("");
 
   const [showForm, setShowForm] = useState(false);
@@ -207,6 +274,8 @@ export default function Futures() {
 
   const metrics = useMemo(() => computeFuturesMetrics(tx), [tx]);
   const { plByTx } = metrics;
+  const ytd = useMemo(() => computeFuturesYTDRealized(tx), [tx]);
+  const currentYear = String(new Date().getFullYear());
 
   const filteredTx = useMemo(() => {
     let list = tx;
@@ -323,26 +392,15 @@ export default function Futures() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-baseline justify-between gap-3">
-        <h1
-          className="text-2xl font-black text-slate-100 tracking-tight"
-          style={{ fontFamily: "Epilogue, sans-serif" }}
-        >
-          Futures
-        </h1>
-        <span className="text-xs text-slate-500">
-          As of <strong className="text-slate-300 font-semibold">{todayISO()}</strong>
-          &nbsp;·&nbsp;FIFO position tracking
-        </span>
-      </div>
+      <PageHeader title="Futures" icon={PageIcons.futures} />
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <MetricCard
-          label="Realized P/L"
-          value={fmt(metrics.realizedPL)}
-          sub="FIFO-matched closed positions"
-          valueClass={metrics.realizedPL < 0 ? "text-red-400" : "text-green-400"}
+        <RealizedGainCard
+          total={ytd.total}
+          shortTerm={ytd.shortTerm}
+          longTerm={ytd.longTerm}
+          year={currentYear}
         />
         <MetricCard
           label="Open Positions"
@@ -364,9 +422,9 @@ export default function Futures() {
               Open Positions
             </h2>
           </div>
-          <BtnPrimary type="button" onClick={openAddForm} disabled={saving || loading}>
+          {canWrite && <BtnPrimary type="button" onClick={openAddForm} disabled={saving || loading}>
             + Add Transaction
-          </BtnPrimary>
+          </BtnPrimary>}
         </div>
 
         <div className="border-t border-white/[0.06]" />
@@ -405,9 +463,9 @@ export default function Futures() {
                     <Td className="numeric">${fmtNum(pos.pointValue, 2)}</Td>
                     <Td>{pos.lots}</Td>
                     <Td align="right">
-                      <Btn type="button" onClick={() => openCloseForm(pos)} disabled={saving}>
+                      {canWrite && <Btn type="button" onClick={() => openCloseForm(pos)} disabled={saving}>
                         Close Position
-                      </Btn>
+                      </Btn>}
                     </Td>
                   </tr>
                 ))}
@@ -418,7 +476,7 @@ export default function Futures() {
       </div>
 
       {/* Add / Edit / Close form */}
-      {showForm && (
+      {canWrite && showForm && (
         <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-black text-slate-100" style={{ fontFamily: "Epilogue, sans-serif" }}>
@@ -686,8 +744,8 @@ export default function Futures() {
                       </Td>
                       <Td align="right">
                         <div className="flex gap-1.5 justify-end">
-                          <Btn onClick={() => openEditForm(t)} disabled={saving}>Edit</Btn>
-                          <BtnDanger onClick={() => onDelete(t.id)} disabled={saving}>Delete</BtnDanger>
+                          {canWrite && <Btn onClick={() => openEditForm(t)} disabled={saving}>Edit</Btn>}
+                          {canWrite && <BtnDanger onClick={() => onDelete(t.id)} disabled={saving}>Delete</BtnDanger>}
                         </div>
                         {t.notes && (
                           <div className="mt-1 text-xs text-slate-500 text-right">{t.notes}</div>

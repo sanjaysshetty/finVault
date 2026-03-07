@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { useCanWrite } from "../hooks/useCanWrite.js";
 
 const COUNTRY_OPTIONS = ["USA", "India"];
 
@@ -96,6 +99,7 @@ function normalizeApiRow(item) {
 ================================================================ */
 
 export default function FixedIncome() {
+  const canWrite = useCanWrite("fixedIncome");
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -300,17 +304,7 @@ export default function FixedIncome() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-baseline justify-between gap-3">
-        <h1
-          className="text-2xl font-black text-slate-100 tracking-tight"
-          style={{ fontFamily: "Epilogue, sans-serif" }}
-        >
-          Fixed Income
-        </h1>
-        <span className="text-xs text-slate-500">
-          As of <strong className="text-slate-300 font-semibold">{asOfDate}</strong>
-        </span>
-      </div>
+      <PageHeader title="Fixed Income" icon={PageIcons.fixedIncome} />
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -322,7 +316,7 @@ export default function FixedIncome() {
       </div>
 
       {/* Form panel */}
-      {showForm && (
+      {canWrite && showForm && (
         <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
           <div className="flex items-center justify-between gap-3">
             <h2
@@ -529,9 +523,9 @@ export default function FixedIncome() {
             >
               {sortDir === "asc" ? "Asc ↑" : "Desc ↓"}
             </Btn>
-            <BtnPrimary type="button" onClick={openCreateForm} disabled={saving}>
+            {canWrite && <BtnPrimary type="button" onClick={openCreateForm} disabled={saving}>
               + Add Fixed Income
-            </BtnPrimary>
+            </BtnPrimary>}
           </div>
         </div>
 
@@ -589,8 +583,8 @@ export default function FixedIncome() {
                     <Td className={`numeric ${r.dailyAccrual > 0 ? "text-green-400 font-bold" : "text-slate-600"}`}>{r.dailyAccrual > 0 ? formatMoney(r.dailyAccrual) : "—"}</Td>
                     <Td align="right">
                       <div className="flex gap-1.5 justify-end">
-                        <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>
-                        <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>
+                        {canWrite && <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>}
+                        {canWrite && <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>}
                       </div>
                     </Td>
                   </tr>

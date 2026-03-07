@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
-import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { Badge }      from "../components/ui/Badge.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { useCanWrite } from "../hooks/useCanWrite.js";
 
 /* ── Utilities ───────────────────────────────────────────── */
 function todayISO() { return new Date().toISOString().slice(0, 10); }
@@ -123,8 +126,48 @@ function computeCryptoMetrics(transactions, spotMap, prevSpotMap = {}) {
   return { holdings, totals: { holdingValue: round2(totals.holdingValue), unrealized: round2(totals.unrealized), realized: round2(totals.realized), totalPL: round2(totals.unrealized + totals.realized), dayGL: hasDayGL ? round2(totals.dayGL) : null, totalCost: round2(totals.totalCost), prevDayValue: round2(totals.prevDayValue) } };
 }
 
+/* FIFO lot tracker — YTD realized gains split into short / long term */
+function computeCryptoYTDRealized(transactions) {
+  const year = new Date().getFullYear();
+  const yearStart = `${year}-01-01`;
+  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const lots = {}; // symbol -> [{date, qty, costPerUnit}]
+  let shortTerm = 0, longTerm = 0;
+
+  for (const t of txs) {
+    const raw = String(t.symbol || "").toUpperCase().trim();
+    const sym = raw ? (raw.includes("-") ? raw : `${raw}-USD`) : "";
+    if (!sym) continue;
+    const type = String(t.type || "BUY").toUpperCase();
+    const qty = safeNum(t.quantity, 0), price = safeNum(t.unitPrice, 0), fees = safeNum(t.fees, 0);
+    if (qty <= 0) continue;
+    if (!lots[sym]) lots[sym] = [];
+
+    if (type === "BUY") {
+      lots[sym].push({ date: t.date || "", qty, costPerUnit: (qty * price + fees) / qty });
+    } else if (type === "SELL") {
+      const netPerUnit = (qty * price - fees) / qty;
+      let rem = qty;
+      const isCY = t.date && t.date >= yearStart;
+      while (rem > 0 && lots[sym].length > 0) {
+        const lot = lots[sym][0];
+        const used = Math.min(rem, lot.qty);
+        if (isCY) {
+          const gain = used * (netPerUnit - lot.costPerUnit);
+          const days = lot.date ? (new Date(t.date) - new Date(lot.date)) / 86400000 : 0;
+          if (days > 365) longTerm += gain; else shortTerm += gain;
+        }
+        lot.qty -= used; rem -= used;
+        if (lot.qty <= 0) lots[sym].shift();
+      }
+    }
+  }
+  return { shortTerm: round2(shortTerm), longTerm: round2(longTerm), total: round2(shortTerm + longTerm) };
+}
+
 /* ── Component ───────────────────────────────────────────── */
 export default function Crypto() {
+  const canWrite = useCanWrite("crypto");
   const [form, setForm]           = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm]   = useState(false);
@@ -202,6 +245,8 @@ export default function Crypto() {
   }, [txSymbols, spots, form.symbol]);
 
   const metrics = useMemo(() => computeCryptoMetrics(tx, spots, prevSpots), [tx, spots, prevSpots]);
+  const ytd = useMemo(() => computeCryptoYTDRealized(tx), [tx]);
+  const currentYear = String(new Date().getFullYear());
 
   const filteredSortedTx = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -262,12 +307,7 @@ export default function Crypto() {
   /* ── Render ─────────────────────────────────────────────── */
   return (
     <div className="space-y-5">
-      <div className="flex items-baseline justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-black text-slate-100 tracking-tight" style={{ fontFamily: "Epilogue, sans-serif" }}>Crypto</h1>
-          <p className="mt-0.5 text-xs text-slate-500">As of <span className="text-slate-400 font-semibold">{todayISO()}</span></p>
-        </div>
-      </div>
+      <PageHeader title="Crypto" icon={PageIcons.crypto} />
 
       {(txError || error) && (
         <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">
@@ -283,16 +323,17 @@ export default function Crypto() {
             const unrealizedPct = metrics.totals.totalCost > 0 ? formatPct((metrics.totals.unrealized / metrics.totals.totalCost) * 100) : null;
             const dayGLPct = metrics.totals.prevDayValue > 0 && metrics.totals.dayGL != null ? formatPct((metrics.totals.dayGL / metrics.totals.prevDayValue) * 100) : null;
             return (
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <MetricCard label="Total Holding Value"    value={formatMoney(metrics.totals.holdingValue)} sub="Based on latest spot prices" accent />
                 <MetricCard label="Unrealized Gain / Loss" value={formatMoney(metrics.totals.unrealized)}   pct={unrealizedPct} sub="Spot vs avg cost"            valueClass={plClass(metrics.totals.unrealized)} />
                 <MetricCard label="Day's Gain / Loss"      value={metrics.totals.dayGL != null ? formatMoney(metrics.totals.dayGL) : "—"} pct={dayGLPct} sub="vs. yesterday's close" valueClass={metrics.totals.dayGL != null ? plClass(metrics.totals.dayGL) : "text-slate-500"} />
+                <RealizedGainCard total={ytd.total} shortTerm={ytd.shortTerm} longTerm={ytd.longTerm} year={currentYear} />
               </div>
             );
           })()}
 
           {/* Add/Edit form */}
-          {showForm && (
+          {canWrite && showForm && (
             <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-5">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <p className="text-sm font-bold text-slate-200">{editingId ? "Edit Crypto Transaction" : "Add Crypto Transaction"}</p>
@@ -350,7 +391,7 @@ export default function Crypto() {
               </div>
               <div className="flex gap-2">
                 <Btn onClick={refreshSpots} disabled={saving || pricesFetching}>Refresh</Btn>
-                <BtnPrimary onClick={openCreate} disabled={saving}>+ Add Transaction</BtnPrimary>
+                {canWrite && <BtnPrimary onClick={openCreate} disabled={saving}>+ Add Transaction</BtnPrimary>}
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -429,8 +470,8 @@ export default function Crypto() {
                           <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(net)}</td>
                           <td className="px-4 py-3">
                             <div className="flex gap-2 justify-end">
-                              <button type="button" onClick={() => startEdit(t)} disabled={saving} className={btnSmCls}>Edit</button>
-                              <button type="button" onClick={() => onDelete(t.id)} disabled={saving} className={btnDangerSmCls}>Delete</button>
+                              {canWrite && <button type="button" onClick={() => startEdit(t)} disabled={saving} className={btnSmCls}>Edit</button>}
+                              {canWrite && <button type="button" onClick={() => onDelete(t.id)} disabled={saving} className={btnDangerSmCls}>Delete</button>}
                             </div>
                             {t.notes && <p className="text-[11px] text-slate-600 mt-1 text-right pr-1">{t.notes}</p>}
                           </td>

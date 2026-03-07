@@ -2,14 +2,18 @@ const crypto = require("crypto");
 
 const { json, badRequest, notFound } = require("finvault-shared/http");
 const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/ddb");
+const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
 
 /* ---------------- helpers ---------------- */
 
-function getUserIdFromJwt(event) {
-  const claims = event?.requestContext?.authorizer?.jwt?.claims;
-  const sub = claims?.sub || claims?.username || claims?.email;
-  if (!sub) throw new Error("Unauthorized");
-  return String(sub);
+async function resolveCtxCached(event) {
+  if (!event._ctx) event._ctx = await resolveContext(event);
+  return event._ctx;
+}
+
+async function getUserIdFromJwt(event) {
+  const { accountId } = await resolveCtxCached(event);
+  return accountId;
 }
 
 function parseBody(event) {
@@ -63,7 +67,7 @@ const BASE = "/liabilities";
 const ASSET_TYPE = "LIABILITY";
 
 async function listLiabilities(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   // Using GSI pattern consistent with your other modules:
   // gsi1sk starts with LIABILITY#
   const items = await queryByGSI1(userId, "LIABILITY#");
@@ -71,7 +75,7 @@ async function listLiabilities(event) {
 }
 
 async function createLiability(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -109,14 +113,14 @@ async function createLiability(event) {
 }
 
 async function getLiability(event, liabilityId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const item = await getItem(userId, liabilityId);
   if (!item || item.assetType !== ASSET_TYPE) return notFound();
   return json(200, item);
 }
 
 async function updateLiability(event, liabilityId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -156,7 +160,7 @@ async function updateLiability(event, liabilityId) {
 }
 
 async function removeLiability(event, liabilityId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, liabilityId);
   if (!existing || existing.assetType !== ASSET_TYPE) return notFound();
 
@@ -167,18 +171,35 @@ async function removeLiability(event, liabilityId) {
 /* ---------------- router ---------------- */
 
 exports.handler = async (event) => {
-  const path = event?.rawPath || event?.path || "";
-  const method = String(event?.requestContext?.http?.method || event?.httpMethod || "").toUpperCase();
+  try {
+    const path = event?.rawPath || event?.path || "";
+    const method = String(event?.requestContext?.http?.method || event?.httpMethod || "").toUpperCase();
 
-  if (path === BASE && method === "GET") return listLiabilities(event);
-  if (path === BASE && method === "POST") return createLiability(event);
+    if (method === "OPTIONS") return json(200, {});
 
-  if (path.startsWith(`${BASE}/`)) {
-    const id = decodeURIComponent(path.slice(BASE.length + 1));
-    if (method === "GET") return getLiability(event, id);
-    if (method === "PATCH") return updateLiability(event, id);
-    if (method === "DELETE") return removeLiability(event, id);
+    const ctx = await resolveCtxCached(event);
+    if (method === "GET") {
+      assertRead(ctx, "liabilities");
+    } else {
+      assertWrite(ctx, "liabilities");
+    }
+
+    if (path === BASE && method === "GET") return listLiabilities(event);
+    if (path === BASE && method === "POST") return createLiability(event);
+
+    if (path.startsWith(`${BASE}/`)) {
+      const id = decodeURIComponent(path.slice(BASE.length + 1));
+      if (method === "GET") return getLiability(event, id);
+      if (method === "PATCH") return updateLiability(event, id);
+      if (method === "DELETE") return removeLiability(event, id);
+    }
+
+    return notFound();
+  } catch (e) {
+    const status = e?.statusCode;
+    if (status === 401) return json(401, { message: "Unauthorized" });
+    if (status === 403) return json(403, { message: e.message || "Forbidden" });
+    console.error("LiabilitiesApi error:", e);
+    return json(500, { message: "Internal Server Error" });
   }
-
-  return notFound();
 };

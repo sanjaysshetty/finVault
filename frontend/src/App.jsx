@@ -16,10 +16,20 @@ import NAV from "./pages/NAV";
 import Liabilities from "./pages/Liabilities";
 import Insurance from "./pages/Insurance";
 
+import AccountsPage from "./pages/AccountsPage";
 import AuthCallback from "./auth/AuthCallback";
 import RequireAuth from "./auth/RequireAuth";
+import { useAccounts } from "./hooks/useAccounts.js";
+import { firstAccessiblePath } from "./lib/pages.js";
 
 import "./App.css";
+
+/** Redirects to the first page the active account can access. */
+function DefaultRedirect() {
+  const { activeAccount, isLoading } = useAccounts();
+  if (isLoading) return null;
+  return <Navigate to={firstAccessiblePath(activeAccount)} replace />;
+}
 
 function computeBasename() {
   const p = window.location.pathname || "/";
@@ -40,8 +50,8 @@ export default function App() {
             </RequireAuth>
           }
         >
-          {/* Default */}
-          <Route path="/" element={<Navigate to="/assets/portfolio" replace />} />
+          {/* Default — redirect to first page the account can access */}
+          <Route path="/" element={<DefaultRedirect />} />
 
           {/* Prices */}
           <Route path="/prices" element={<Prices />} />
@@ -68,6 +78,9 @@ export default function App() {
           {/* Spending */}
           <Route path="/spending/dashboard" element={<SpendingDash />} />
           <Route path="/spending/receipts-ledger" element={<Spending />} />
+
+          {/* Accounts */}
+          <Route path="/accounts" element={<AccountsPage />} />
         </Route>
 
         {/* Fallback */}

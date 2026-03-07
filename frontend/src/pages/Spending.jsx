@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client.js";
+import { useCanWrite } from "../hooks/useCanWrite.js";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 
 function fmtUSD(x) {
   const n = typeof x === "string" ? Number(x) : x;
@@ -82,9 +85,10 @@ function groupByReceipt(items) {
   }
   const groups = Array.from(map.entries()).map(([receipt, rows]) => {
     const maxDate = rows.map((r) => r.date).filter(Boolean).sort().slice(-1)[0] || "";
-    return { receipt, rows, maxDate };
+    const maxUpdatedAt = rows.map((r) => r.updatedAt).filter(Boolean).sort().slice(-1)[0] || "";
+    return { receipt, rows, maxDate, maxUpdatedAt };
   });
-  groups.sort((a, b) => (b.maxDate || "").localeCompare(a.maxDate || ""));
+  groups.sort((a, b) => (b.maxUpdatedAt || b.maxDate || "").localeCompare(a.maxUpdatedAt || a.maxDate || ""));
   return groups;
 }
 
@@ -129,6 +133,7 @@ function safeDomId(str) { return `date_${String(str).replace(/[^a-zA-Z0-9_-]/g, 
 ================================================================ */
 
 export default function Spending() {
+  const canWrite = useCanWrite("receiptsLedger");
   const [raw, setRaw] = useState([]);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
@@ -323,29 +328,27 @@ export default function Spending() {
       `}</style>
 
       {/* Header */}
-      <div className="flex gap-3 items-center justify-between flex-wrap mb-4">
-        <div>
-          <h1 className="text-xl font-black text-slate-100">Spending</h1>
-          <p className="mt-1 text-xs text-slate-400">Upload/Scan Store Receipts</p>
-        </div>
-        <div className="flex gap-2.5 items-center flex-wrap">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search product description…"
-            className="w-64 bg-[#080D1A] border border-white/[0.08] text-slate-200 px-3 py-2.5 rounded-xl text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
-          />
-          <button onClick={openScanner} disabled={uploading} className={btnCls(uploading)}>Scan</button>
-          <input ref={fileInputRef} type="file" accept="image/*,application/pdf" multiple onChange={(e) => handleUploadFiles(Array.from(e.target.files || []))} className="hidden" id="receipt-file-input" />
-          <button onClick={() => document.getElementById("receipt-file-input")?.click()} disabled={uploading} className={btnCls(uploading)}>Upload</button>
-          <button
-            onClick={() => refetch()}
-            disabled={isFetching}
-            className={btnCls(isFetching)}
-          >
-            {isFetching ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
+      <div className="mb-4">
+        <PageHeader title="Spending" icon={PageIcons.spending}>
+          <div className="flex gap-2.5 items-center flex-wrap">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search product description…"
+              className="w-64 bg-[#080D1A] border border-white/[0.08] text-slate-200 px-3 py-2.5 rounded-xl text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+            />
+            {canWrite && <button onClick={openScanner} disabled={uploading} className={btnCls(uploading)}>Scan</button>}
+            {canWrite && <input ref={fileInputRef} type="file" accept="image/*,application/pdf" multiple onChange={(e) => handleUploadFiles(Array.from(e.target.files || []))} className="hidden" id="receipt-file-input" />}
+            {canWrite && <button onClick={() => document.getElementById("receipt-file-input")?.click()} disabled={uploading} className={btnCls(uploading)}>Upload</button>}
+            <button
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className={btnCls(isFetching)}
+            >
+              {isFetching ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+        </PageHeader>
       </div>
 
       {(uploadMsg || uploading) && (
@@ -354,7 +357,7 @@ export default function Spending() {
         </div>
       )}
 
-      {scanOpen && (
+      {canWrite && scanOpen && (
         <div className="rounded-2xl border border-white/[0.08] bg-[#0F1729] p-3 mb-3">
           <div className="flex justify-between gap-2.5 items-center mb-2">
             <span className="font-black text-slate-100">Scan receipt</span>
@@ -466,9 +469,9 @@ export default function Spending() {
                                   <button onClick={() => saveRow(row)} disabled={!hasEdits(rowKey) || saving[rowKey]} className={saveBtnCls(!hasEdits(rowKey) || saving[rowKey])}>
                                     {saving[rowKey] ? "Saving…" : "Save"}
                                   </button>
-                                  <button onClick={() => deleteRow(row)} disabled={deleting[rowKey]} className={delBtnCls(deleting[rowKey])}>
+                                  {canWrite && <button onClick={() => deleteRow(row)} disabled={deleting[rowKey]} className={delBtnCls(deleting[rowKey])}>
                                     {deleting[rowKey] ? "Deleting…" : "Delete"}
-                                  </button>
+                                  </button>}
                                 </td>
                               </tr>
                             );
