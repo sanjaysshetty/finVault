@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
 
 function formatMoney(n) {
@@ -210,16 +212,8 @@ export default function SpendingDash() {
 
   return (
     <div className="p-4 text-slate-300">
-      <div className="flex items-baseline justify-between gap-3 mb-4">
-        <div>
-          <h1 className="text-2xl font-black text-slate-100 tracking-tight">Spending Dashboard</h1>
-          <p className="mt-1.5 text-sm text-slate-500">
-            Insights from your receipts ledger (Subtotal/Total excluded; Tax tracked separately).
-          </p>
-        </div>
-        <span className="text-xs text-slate-500 text-right whitespace-nowrap">
-          As of <span className="text-slate-300 font-bold">{asOf}</span>
-        </span>
+      <div className="mb-4">
+        <PageHeader title="Spending Dashboard" icon={PageIcons.spendingDash} />
       </div>
 
       {/* Summary + filters */}

@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { useCanWrite } from "../hooks/useCanWrite.js";
 
 const CATEGORY_OPTIONS = ["Education", "Retirement", "Robo", "Cash", "Options", "Property"];
 const COUNTRY_OPTIONS = ["USA", "India"];
@@ -22,6 +25,7 @@ function normalizeApiRow(item) {
 }
 
 export default function OtherAssets() {
+  const canWrite = useCanWrite("otherAssets");
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -155,13 +159,13 @@ export default function OtherAssets() {
 
   return (
     <div className="p-4 text-slate-300">
-      <h1 className="text-2xl font-black text-slate-100 tracking-tight mb-4">Other Assets</h1>
+      <div className="mb-4"><PageHeader title="Other Assets" icon={PageIcons.otherAssets} /></div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         <MetricCard label="Total Other Assets" value={formatMoney(totalValue)} sub="Sum of all listed records" />
       </div>
 
-      {showForm && (
+      {canWrite && showForm && (
         <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4 mb-4">
           <div className="flex items-center justify-between gap-3 mb-3">
             <span className="text-sm font-black text-slate-100">
@@ -227,7 +231,7 @@ export default function OtherAssets() {
             <Btn onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))} disabled={loading}>
               {sortDir === "asc" ? "Asc" : "Desc ↓"}
             </Btn>
-            <BtnPrimary onClick={openCreateForm} disabled={saving}>+ Add Other Asset</BtnPrimary>
+            {canWrite && <BtnPrimary onClick={openCreateForm} disabled={saving}>+ Add Other Asset</BtnPrimary>}
           </div>
         </div>
 
@@ -265,8 +269,8 @@ export default function OtherAssets() {
                     <Td><span className="font-black text-slate-100">{formatMoney(r.value)}</span></Td>
                     <Td align="right">
                       <div className="flex gap-2 justify-end pr-2">
-                        <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>
-                        <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>
+                        {canWrite && <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>}
+                        {canWrite && <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>}
                       </div>
                     </Td>
                   </tr>

@@ -1,6 +1,11 @@
 import { NavLink, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 
+function canSee(activeAccount, pageKey) {
+  if (!activeAccount || activeAccount.role === "owner") return true;
+  return (activeAccount.pages?.[pageKey] || "none") !== "none";
+}
+
 /* ── Section (collapsible group) ──────────────────────────── */
 function Section({ title, open, onToggle, children }) {
   return (
@@ -51,7 +56,7 @@ function Item({ to, label, onClose }) {
 }
 
 /* ── Drawer ────────────────────────────────────────────────── */
-export default function MobileDrawer({ open, onClose }) {
+export default function MobileDrawer({ open, onClose, activeAccount }) {
   const location = useLocation();
 
   const [openAssets, setOpenAssets]           = useState(true);
@@ -64,6 +69,9 @@ export default function MobileDrawer({ open, onClose }) {
   useEffect(() => {
     onClose();
   }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const has = (key) => canSee(activeAccount, key);
+  const showSpending = has("spendingDashboard") || has("receiptsLedger");
 
   return (
     <div
@@ -122,33 +130,56 @@ export default function MobileDrawer({ open, onClose }) {
 
         {/* Nav sections */}
         <nav className="flex-1 py-4 px-3 space-y-1">
-          <Section title="Assets" open={openAssets} onToggle={() => setOpenAssets((v) => !v)}>
-            <Item to="/assets/portfolio"   label="Portfolio"    onClose={onClose} />
-            <Item to="/assets/stocks"      label="Stocks"       onClose={onClose} />
-            <Item to="/assets/crypto"      label="Crypto"       onClose={onClose} />
-            <Item to="/assets/bullion"     label="Bullion"      onClose={onClose} />
-            <Item to="/assets/fixedincome" label="Fixed Income" onClose={onClose} />
-            <Item to="/assets/options"     label="Options"      onClose={onClose} />
-            <Item to="/assets/otherassets" label="Others"       onClose={onClose} />
-            <Item to="/assets/futures"     label="Futures"      onClose={onClose} />
-          </Section>
+          {(has("portfolio") || has("stocks") || has("crypto") ||
+            has("bullion")   || has("futures") || has("options") ||
+            has("fixedIncome") || has("otherAssets")) && (
+            <Section title="Assets" open={openAssets} onToggle={() => setOpenAssets((v) => !v)}>
+              {has("portfolio")   && <Item to="/assets/portfolio"   label="Portfolio"    onClose={onClose} />}
+              {has("stocks")      && <Item to="/assets/stocks"      label="Stocks"       onClose={onClose} />}
+              {has("crypto")      && <Item to="/assets/crypto"      label="Crypto"       onClose={onClose} />}
+              {has("bullion")     && <Item to="/assets/bullion"     label="Bullion"      onClose={onClose} />}
+              {has("fixedIncome") && <Item to="/assets/fixedincome" label="Fixed Income" onClose={onClose} />}
+              {has("options")     && <Item to="/assets/options"     label="Options"      onClose={onClose} />}
+              {has("otherAssets") && <Item to="/assets/otherassets" label="Others"       onClose={onClose} />}
+              {has("futures")     && <Item to="/assets/futures"     label="Futures"      onClose={onClose} />}
+            </Section>
+          )}
 
-          <Section title="Net Asset Value" open={openNav} onToggle={() => setOpenNav((v) => !v)}>
-            <Item to="/nav/dashboard" label="NAV" onClose={onClose} />
-          </Section>
+          {has("nav") && (
+            <Section title="Net Asset Value" open={openNav} onToggle={() => setOpenNav((v) => !v)}>
+              <Item to="/nav/dashboard" label="NAV" onClose={onClose} />
+            </Section>
+          )}
 
-          <Section title="Liabilities" open={openLiabilities} onToggle={() => setOpenLiabilities((v) => !v)}>
-            <Item to="/liabilities/dashboard" label="Liabilities" onClose={onClose} />
-          </Section>
+          {has("liabilities") && (
+            <Section title="Liabilities" open={openLiabilities} onToggle={() => setOpenLiabilities((v) => !v)}>
+              <Item to="/liabilities/dashboard" label="Liabilities" onClose={onClose} />
+            </Section>
+          )}
 
-          <Section title="Insurance" open={openInsurance} onToggle={() => setOpenInsurance((v) => !v)}>
-            <Item to="/insurance/dashboard" label="Insurance" onClose={onClose} />
-          </Section>
+          {has("insurance") && (
+            <Section title="Insurance" open={openInsurance} onToggle={() => setOpenInsurance((v) => !v)}>
+              <Item to="/insurance/dashboard" label="Insurance" onClose={onClose} />
+            </Section>
+          )}
 
-          <Section title="Spending" open={openSpending} onToggle={() => setOpenSpending((v) => !v)}>
-            <Item to="/spending/dashboard"       label="Dashboard"       onClose={onClose} />
-            <Item to="/spending/receipts-ledger" label="Receipts Ledger" onClose={onClose} />
-          </Section>
+          {showSpending && (
+            <Section title="Spending" open={openSpending} onToggle={() => setOpenSpending((v) => !v)}>
+              {has("spendingDashboard") && (
+                <Item to="/spending/dashboard"       label="Dashboard"       onClose={onClose} />
+              )}
+              {has("receiptsLedger") && (
+                <Item to="/spending/receipts-ledger" label="Receipts Ledger" onClose={onClose} />
+              )}
+            </Section>
+          )}
+
+          {/* Accounts link — owners only */}
+          {(!activeAccount || activeAccount.role === "owner") && (
+            <div className="mt-4 pt-4 border-t border-white/[0.06]">
+              <Item to="/accounts" label="Accounts" onClose={onClose} />
+            </div>
+          )}
         </nav>
       </div>
     </div>

@@ -3,8 +3,9 @@ import { useMemo } from "react";
 import PricesBar from "./PricesBar";
 import { logout } from "../auth/logout";
 import { getLoggedInUser } from "../auth/user";
+import AccountSwitcher from "../components/AccountSwitcher";
 
-export default function TopBar() {
+export default function TopBar({ accounts, activeAccount, onSwitchAccount }) {
   const navigate = useNavigate();
   const user = useMemo(() => getLoggedInUser(), []);
   const logoSrc = `${import.meta.env.BASE_URL}favicon.svg`;
@@ -49,8 +50,14 @@ export default function TopBar() {
         </div>
       </div>
 
-      {/* RIGHT: welcome + logout */}
+      {/* RIGHT: account switcher + welcome + logout */}
       <div className="flex items-center gap-3 shrink-0 whitespace-nowrap">
+        <AccountSwitcher
+          accounts={accounts}
+          activeAccount={activeAccount}
+          onSwitch={onSwitchAccount}
+        />
+
         <span className="text-sm text-slate-500">
           Welcome{" "}
           <strong className="text-slate-300 font-semibold">

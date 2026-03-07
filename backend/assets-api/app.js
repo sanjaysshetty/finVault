@@ -3,14 +3,34 @@ const crypto = require("crypto");
 const { json, badRequest, notFound } = require("finvault-shared/http");
 const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/ddb");
 const { addMonths, computeValue } = require("finvault-shared/financeMath");
+const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
 
 /* ---------------- helpers ---------------- */
 
-function getUserIdFromJwt(event) {
-  const claims = event?.requestContext?.authorizer?.jwt?.claims;
-  const sub = claims?.sub;
-  if (!sub) throw new Error("Unauthorized");
-  return sub;
+// Resolves and caches context on the event object (one DDB read per request).
+async function resolveCtxCached(event) {
+  if (!event._ctx) event._ctx = await resolveContext(event);
+  return event._ctx;
+}
+
+// Shim: returns accountId (equals userId for primary accounts — zero data migration).
+async function getUserIdFromJwt(event) {
+  const { accountId } = await resolveCtxCached(event);
+  return accountId;
+}
+
+// Maps a request path to the page key used for permission checks.
+function pageKeyForPath(path) {
+  if (path.startsWith(NAV_BASE))          return "nav";
+  if (path.startsWith(FIXED_BASE))        return "fixedIncome";
+  if (path.startsWith(BULL_TX_BASE))      return "bullion";
+  if (path.startsWith(STOCK_TX_BASE))     return "stocks";
+  if (path.startsWith(CRYPTO_TX_BASE))    return "crypto";
+  if (path.startsWith(OPTIONS_TX_BASE))   return "options";
+  if (path.startsWith(FUTURES_TX_BASE))   return "futures";
+  if (path.startsWith(INSURANCE_BASE))    return "insurance";
+  if (path.startsWith(OTHER_ASSETS_BASE)) return "otherAssets";
+  return null;
 }
 
 function getMethod(event) {
@@ -93,13 +113,13 @@ function validateInsurance(body) {
 }
 
 async function insuranceList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "INSURANCE#");
   return json(200, items);
 }
 
 async function insuranceCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -129,14 +149,14 @@ async function insuranceCreate(event) {
 }
 
 async function insuranceGet(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const item = await getItem(userId, assetId);
   if (!item || item.assetType !== "INSURANCE") return notFound();
   return json(200, item);
 }
 
 async function insuranceUpdate(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -168,7 +188,7 @@ async function insuranceUpdate(event, assetId) {
 }
 
 async function insuranceDelete(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, assetId);
   if (!existing || existing.assetType !== "INSURANCE") return notFound();
 
@@ -216,14 +236,14 @@ function validateNavState(body) {
 }
 
 async function navGet(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const item = await getItem(userId, NAV_ASSET_ID);
   if (!item) return json(200, {});
   return json(200, item.data || {});
 }
 
 async function navPut(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -251,7 +271,7 @@ async function navPut(event) {
 }
 
 async function navDelete(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   await deleteItem(userId, NAV_ASSET_ID);
   return json(200, { ok: true });
 }
@@ -321,13 +341,13 @@ function validateFixedIncome(body) {
 }
 
 async function fixedList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "FIXEDINCOME#");
   return json(200, items);
 }
 
 async function fixedCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -368,14 +388,14 @@ async function fixedCreate(event) {
 }
 
 async function fixedGet(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const item = await getItem(userId, assetId);
   if (!item || item.assetType !== "FIXEDINCOME") return notFound();
   return json(200, item);
 }
 
 async function fixedUpdate(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -418,7 +438,7 @@ async function fixedUpdate(event, assetId) {
 }
 
 async function fixedDelete(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, assetId);
   if (!existing || existing.assetType !== "FIXEDINCOME") return notFound();
 
@@ -483,13 +503,13 @@ function validateOtherAsset(body) {
 }
 
 async function otherAssetsList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "OTHERASSET#");
   return json(200, items);
 }
 
 async function otherAssetsCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -524,14 +544,14 @@ async function otherAssetsCreate(event) {
 }
 
 async function otherAssetsGet(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const item = await getItem(userId, assetId);
   if (!item || item.assetType !== OTHER_ASSET_TYPE) return notFound();
   return json(200, item);
 }
 
 async function otherAssetsUpdate(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -568,7 +588,7 @@ async function otherAssetsUpdate(event, assetId) {
 }
 
 async function otherAssetsDelete(event, assetId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, assetId);
   if (!existing || existing.assetType !== OTHER_ASSET_TYPE) return notFound();
 
@@ -611,13 +631,13 @@ function validateBullionTx(body) {
 }
 
 async function bullList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "BULLION_TX#");
   return json(200, items);
 }
 
 async function bullCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -648,7 +668,7 @@ async function bullCreate(event) {
 }
 
 async function bullUpdate(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -679,7 +699,7 @@ async function bullUpdate(event, txId) {
 }
 
 async function bullDelete(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, txId);
   if (!existing || existing.assetType !== "BULLION_TX") return notFound();
 
@@ -722,13 +742,13 @@ function validateStockTx(body) {
 }
 
 async function stockList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "STOCK_TX#");
   return json(200, items);
 }
 
 async function stockCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -759,7 +779,7 @@ async function stockCreate(event) {
 }
 
 async function stockUpdate(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -790,7 +810,7 @@ async function stockUpdate(event, txId) {
 }
 
 async function stockDelete(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, txId);
   if (!existing || existing.assetType !== "STOCK_TX") return notFound();
 
@@ -833,13 +853,13 @@ function validateCryptoTx(body) {
 }
 
 async function cryptoList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "CRYPTO_TX#");
   return json(200, items);
 }
 
 async function cryptoCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -870,7 +890,7 @@ async function cryptoCreate(event) {
 }
 
 async function cryptoUpdate(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -901,7 +921,7 @@ async function cryptoUpdate(event, txId) {
 }
 
 async function cryptoDelete(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, txId);
   if (!existing || existing.assetType !== "CRYPTO_TX") return notFound();
 
@@ -973,13 +993,13 @@ function validateOptionsTx(body) {
 }
 
 async function optionsList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "OPTIONS_TX#");
   return json(200, items);
 }
 
 async function optionsCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -1010,7 +1030,7 @@ async function optionsCreate(event) {
 }
 
 async function optionsUpdate(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -1041,7 +1061,7 @@ async function optionsUpdate(event, txId) {
 }
 
 async function optionsDelete(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, txId);
   if (!existing || existing.assetType !== "OPTIONS_TX") return notFound();
 
@@ -1096,13 +1116,13 @@ function validateFuturesTx(body) {
 }
 
 async function futuresList(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const items = await queryByGSI1(userId, "FUTURES_TX#");
   return json(200, items);
 }
 
 async function futuresCreate(event) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const body = parseBody(event);
   if (!body) return badRequest("Invalid JSON body");
 
@@ -1133,7 +1153,7 @@ async function futuresCreate(event) {
 }
 
 async function futuresUpdate(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const patch = parseBody(event);
   if (!patch) return badRequest("Invalid JSON body");
 
@@ -1164,7 +1184,7 @@ async function futuresUpdate(event, txId) {
 }
 
 async function futuresDelete(event, txId) {
-  const userId = getUserIdFromJwt(event);
+  const userId = await getUserIdFromJwt(event);
   const existing = await getItem(userId, txId);
   if (!existing || existing.assetType !== "FUTURES_TX") return notFound();
 
@@ -1181,7 +1201,17 @@ module.exports.handler = async (event) => {
 
     if (method === "OPTIONS") return json(204, null);
 
-    
+    // Resolve auth context and enforce page-level permissions.
+    const ctx = await resolveCtxCached(event);
+    const pageKey = pageKeyForPath(path);
+    if (pageKey) {
+      if (method === "GET") {
+        assertRead(ctx, pageKey);
+      } else {
+        assertWrite(ctx, pageKey);
+      }
+    }
+
     // NAV state (liabilities)
     if (path === NAV_BASE) {
       if (method === "GET") return navGet(event);
@@ -1307,6 +1337,9 @@ if (path.startsWith(`${OTHER_ASSETS_BASE}/`)) {
 
     return notFound();
   } catch (e) {
+    const status = e?.statusCode;
+    if (status === 401) return json(401, { message: "Unauthorized" });
+    if (status === 403) return json(403, { message: e.message || "Forbidden" });
     const msg = String(e?.message || e);
     if (msg.toLowerCase().includes("unauthorized")) return json(401, { message: "Unauthorized" });
     return json(500, { message: "Internal Server Error", detail: msg });

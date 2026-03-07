@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { PageHeader } from "../components/ui/PageHeader.jsx";
+import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { Badge } from "../components/ui/Badge.jsx";
 
 function todayISO() {
@@ -395,10 +397,7 @@ export default function Options() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-baseline justify-between gap-3">
-        <h1 className="text-2xl font-black text-slate-100 tracking-tight" style={{ fontFamily: "Epilogue, sans-serif" }}>
-          Options
-        </h1>
+      <PageHeader title="Options" icon={PageIcons.options}>
         <button
           type="button"
           onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.optionsTx() })}
@@ -407,7 +406,7 @@ export default function Options() {
         >
           Refresh
         </button>
-      </div>
+      </PageHeader>
 
       {/* Summary filter bar */}
       <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-3">
@@ -443,7 +442,7 @@ export default function Options() {
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         <MetricCard
-          label="Realized P/L"
+          label="YTD Realized P/L"
           value={formatMoney(summary.realizedPL)}
           sub="Filtered by Close Date + Ticker"
           valueClass={summary.realizedPL < 0 ? "text-red-400" : "text-green-400"}
