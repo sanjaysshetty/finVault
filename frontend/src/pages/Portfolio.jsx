@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { safeNum as _safeNum } from "../utils/format.js";
@@ -431,9 +432,9 @@ export default function Portfolio() {
   const asOfDate = todayISO();
 
   const rows = useMemo(() => [
-    { key: "stocks",      label: "Stocks",       ...rollups.stocks,      realized: ytdRealized.stocks    },
-    { key: "crypto",      label: "Crypto",        ...rollups.crypto,      realized: ytdRealized.crypto    },
-    { key: "bullion",     label: "Bullion",       ...rollups.bullion,     realized: ytdRealized.bullion   },
+    { key: "stocks",      label: "Stocks",       href: "/assets/stocks",  ...rollups.stocks,      realized: ytdRealized.stocks    },
+    { key: "crypto",      label: "Crypto",        href: "/assets/crypto",  ...rollups.crypto,      realized: ytdRealized.crypto    },
+    { key: "bullion",     label: "Bullion",       href: "/assets/bullion", ...rollups.bullion,     realized: ytdRealized.bullion   },
     { key: "fixedIncome", label: "Fixed Income",  ...rollups.fixedIncome, realized: 0                     },
     { key: "futures",     label: "Futures",       ytdOnly: true,          realized: futuresYTD.total      },
     { key: "options",     label: "Options",       ytdOnly: true,          realized: optionsYTDTotal       },
@@ -536,7 +537,10 @@ export default function Portfolio() {
                     return (
                       <tr key={r.key} className="hover:bg-white/[0.02] transition-colors">
                         <td className="w-[22%] px-5 py-3.5">
-                          <p className="font-semibold text-slate-200 text-sm">{r.label}</p>
+                          {r.href
+                            ? <Link to={r.href} className="font-semibold text-slate-200 text-sm hover:text-blue-400 transition-colors">{r.label}</Link>
+                            : <p className="font-semibold text-slate-200 text-sm">{r.label}</p>
+                          }
                         </td>
                         <td className="w-[15%] px-5 py-3.5 text-right font-bold text-slate-200 text-sm numeric">
                           {showHolding ? formatMoney(r.holdingValue) : "—"}
