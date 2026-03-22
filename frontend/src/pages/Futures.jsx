@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
@@ -21,9 +21,11 @@ function round2(n) {
   return Number(safeNum(n, 0).toFixed(2));
 }
 
-function fmt(n) {
-  const x = safeNum(n, 0);
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+const COUNTRY_CURRENCY = { USA: "USD", INDIA: "INR" };
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+function _fmtMoney(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
 }
 
 function fmtNum(n, decimals = 2) {
@@ -204,7 +206,7 @@ function computeFuturesYTDRealized(transactions) {
 
 const BLANK_FORM = {
   type: "BUY", ticker: "", contractMonth: "",
-  tradeDate: todayISO(), qty: "", price: "", pointValue: "", fees: "", notes: "",
+  tradeDate: todayISO(), qty: "", price: "", pointValue: "", fees: "", notes: "", country: "USA",
 };
 
 function normalizeTx(item) {
@@ -217,12 +219,19 @@ function normalizeTx(item) {
 
 export default function Futures() {
   const canWrite = useCanWrite("futures");
+  const [country, setCountry] = useState("USA");
+  const currency = COUNTRY_CURRENCY[country] ?? "USD";
+  const fmt = (n) => _fmtMoney(n, currency);
+
   const [error, setError] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [formMode, setFormMode] = useState("add");
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(BLANK_FORM);
+
+  // Sync page-level country filter → new transaction default country
+  useEffect(() => { setForm((f) => ({ ...f, country })); }, [country]);
 
   const [search, setSearch] = useState("");
   const [tickerFilter, setTickerFilter] = useState("");
@@ -272,13 +281,18 @@ export default function Futures() {
 
   /* ---------- Derived / computed ---------- */
 
-  const metrics = useMemo(() => computeFuturesMetrics(tx), [tx]);
+  const txByCountry = useMemo(
+    () => tx.filter((t) => String(t.country || "USA").toUpperCase() === country),
+    [tx, country]
+  );
+
+  const metrics = useMemo(() => computeFuturesMetrics(txByCountry), [txByCountry]);
   const { plByTx } = metrics;
-  const ytd = useMemo(() => computeFuturesYTDRealized(tx), [tx]);
+  const ytd = useMemo(() => computeFuturesYTDRealized(txByCountry), [txByCountry]);
   const currentYear = String(new Date().getFullYear());
 
   const filteredTx = useMemo(() => {
-    let list = tx;
+    let list = txByCountry;
     if (tickerFilter) list = list.filter((t) => String(t.ticker || "").toUpperCase().includes(tickerFilter.toUpperCase()));
     if (dateFrom) list = list.filter((t) => String(t.tradeDate || "") >= dateFrom);
     if (dateTo) list = list.filter((t) => String(t.tradeDate || "") <= dateTo);
@@ -302,17 +316,17 @@ export default function Futures() {
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [tx, search, tickerFilter, sortKey, sortDir, dateFrom, dateTo]);
+  }, [txByCountry, search, tickerFilter, sortKey, sortDir, dateFrom, dateTo]);
 
   const allTickers = useMemo(
-    () => [...new Set(tx.map((t) => t.ticker).filter(Boolean))].sort(),
-    [tx]
+    () => [...new Set(txByCountry.map((t) => t.ticker).filter(Boolean))].sort(),
+    [txByCountry]
   );
 
   /* ---------- Form helpers ---------- */
 
   function openAddForm() {
-    setError(""); setEditingId(null); setFormMode("add"); setForm(BLANK_FORM); setShowForm(true);
+    setError(""); setEditingId(null); setFormMode("add"); setForm({ ...BLANK_FORM, country }); setShowForm(true);
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
 
@@ -323,6 +337,7 @@ export default function Futures() {
       contractMonth: t.contractMonth || "", tradeDate: t.tradeDate || todayISO(),
       qty: String(t.qty ?? ""), price: String(t.price ?? ""),
       pointValue: String(t.pointValue ?? ""), fees: String(t.fees ?? ""), notes: t.notes || "",
+      country: String(t.country || "USA").toUpperCase(),
     });
     setShowForm(true);
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
@@ -334,7 +349,7 @@ export default function Futures() {
       type: pos.direction === "LONG" ? "SELL" : "BUY", ticker: pos.ticker,
       contractMonth: "", tradeDate: todayISO(), qty: String(round2(pos.qty)),
       price: "", pointValue: String(pos.pointValue), fees: "",
-      notes: `Close ${pos.direction} ${pos.ticker}`,
+      notes: `Close ${pos.direction} ${pos.ticker}`, country,
     });
     setShowForm(true);
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
@@ -362,6 +377,7 @@ export default function Futures() {
       type, ticker, contractMonth: String(form.contractMonth || "").trim(),
       tradeDate: form.tradeDate, qty: round2(qty), price: round2(price),
       pointValue: round2(pointValue), fees: round2(fees), notes: String(form.notes || "").trim(),
+      country: String(form.country || "USA").toUpperCase(),
     };
   }
 
@@ -392,7 +408,16 @@ export default function Futures() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <PageHeader title="Futures" icon={PageIcons.futures} />
+      <PageHeader title="Futures" icon={PageIcons.futures}>
+        <select
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+        >
+          <option value="USA">USA</option>
+          <option value="INDIA">India</option>
+        </select>
+      </PageHeader>
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -401,6 +426,7 @@ export default function Futures() {
           shortTerm={ytd.shortTerm}
           longTerm={ytd.longTerm}
           year={currentYear}
+          currency={currency}
         />
         <MetricCard
           label="Open Positions"
@@ -599,7 +625,7 @@ export default function Futures() {
             </div>
 
             {/* Row 3 */}
-            <div className="grid gap-3" style={{ gridTemplateColumns: "3fr 1fr" }}>
+            <div className="grid gap-3" style={{ gridTemplateColumns: "2fr 1fr 1fr" }}>
               <FLabel label="Notes (optional)">
                 <input
                   value={form.notes}
@@ -608,6 +634,12 @@ export default function Futures() {
                   className={inputCls}
                   disabled={saving}
                 />
+              </FLabel>
+              <FLabel label="Country">
+                <select value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} className={inputCls} disabled={saving}>
+                  <option value="USA">USA</option>
+                  <option value="INDIA">India</option>
+                </select>
               </FLabel>
               <div className="flex gap-2 items-end justify-end">
                 <Btn

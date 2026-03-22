@@ -619,6 +619,8 @@ function validateBullionTx(body) {
   if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new Error("unitPrice must be > 0");
   if (!Number.isFinite(fees) || fees < 0) throw new Error("fees must be >= 0");
 
+  const country = String(body.country || "USA").toUpperCase().trim() || "USA";
+
   return {
     type,
     metal,
@@ -627,6 +629,7 @@ function validateBullionTx(body) {
     unitPrice: Number(unitPrice.toFixed(2)),
     fees: Number(fees.toFixed(2)),
     notes: String(body.notes || "").trim(),
+    country,
   };
 }
 
@@ -730,6 +733,8 @@ function validateStockTx(body) {
   if (!Number.isFinite(price) || price <= 0) throw new Error("price must be > 0");
   if (!Number.isFinite(fees) || fees < 0) throw new Error("fees must be >= 0");
 
+  const country = String(body.country || "USA").toUpperCase().trim() || "USA";
+
   return {
     type,
     symbol,
@@ -738,6 +743,7 @@ function validateStockTx(body) {
     price: Number(price.toFixed(4)),
     fees: Number(fees.toFixed(2)),
     notes: String(body.notes || "").trim(),
+    country,
   };
 }
 
@@ -841,6 +847,8 @@ function validateCryptoTx(body) {
   if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new Error("unitPrice must be > 0");
   if (!Number.isFinite(fees) || fees < 0) throw new Error("fees must be >= 0");
 
+  const country = String(body.country || "USA").toUpperCase().trim() || "USA";
+
   return {
     type,
     symbol,
@@ -849,6 +857,7 @@ function validateCryptoTx(body) {
     unitPrice: Number(unitPrice.toFixed(8)),
     fees: Number(fees.toFixed(2)),
     notes: String(body.notes || "").trim(),
+    country,
   };
 }
 
@@ -974,6 +983,8 @@ function validateOptionsTx(body) {
 
   const notes = String(body.notes || "").trim();
 
+  const country = String(body.country || "USA").toUpperCase().trim() || "USA";
+
   return {
     type,
     openDate,
@@ -989,6 +1000,7 @@ function validateOptionsTx(body) {
     coll: coll === "" ? "" : Number(coll),
     rollOver,
     notes,
+    country,
   };
 }
 
@@ -1102,6 +1114,8 @@ function validateFuturesTx(body) {
   const fees = body.fees === undefined || body.fees === "" ? 0 : Number(body.fees);
   if (!Number.isFinite(fees) || fees < 0) throw new Error("fees must be >= 0");
 
+  const country = String(body.country || "USA").toUpperCase().trim() || "USA";
+
   return {
     type,
     ticker,
@@ -1112,6 +1126,7 @@ function validateFuturesTx(body) {
     pointValue: Number(pointValue.toFixed(2)),
     fees: Number(fees.toFixed(2)),
     notes: String(body.notes || "").trim(),
+    country,
   };
 }
 

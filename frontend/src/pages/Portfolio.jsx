@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
@@ -14,8 +14,11 @@ const safeNum = _safeNum;
 function round2(n) { return Number(safeNum(n, 0).toFixed(2)); }
 function formatPct(n) { const x = safeNum(n, 0); return `${x > 0 ? "+" : ""}${x.toFixed(2)}%`; }
 
-function formatMoney(n) {
-  return safeNum(n, 0).toLocaleString(undefined, { style: "currency", currency: "USD" });
+const COUNTRY_CURRENCY = { USA: "USD", INDIA: "INR" };
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+function _fmtMoney(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
 }
 
 function plColorClass(v) {
@@ -297,6 +300,10 @@ function extractItems(res) {
 
 /* ── Component ───────────────────────────────────────────── */
 export default function Portfolio() {
+  const [country, setCountry] = useState("USA");
+  const currency = COUNTRY_CURRENCY[country] ?? "USD";
+  const formatMoney = (n) => _fmtMoney(n, currency);
+
   const { data: fiRes,     isLoading: loadingFI,     isFetching: fetchingFI,     refetch: refetchFI }     = useQuery({ queryKey: queryKeys.fixedIncome(),  queryFn: () => api.get("/assets/fixedincome") });
   const { data: bullRes,   isLoading: loadingBull,   isFetching: fetchingBull,   refetch: refetchBull }   = useQuery({ queryKey: queryKeys.bullionTx(),    queryFn: () => api.get("/assets/bullion/transactions") });
   const { data: stockRes,  isLoading: loadingStock,  isFetching: fetchingStock,  refetch: refetchStock }  = useQuery({ queryKey: queryKeys.stocksTx(),     queryFn: () => api.get("/assets/stocks/transactions") });
@@ -330,6 +337,11 @@ export default function Portfolio() {
     );
     return Array.from(set).sort();
   }, [cryptoTx]);
+
+  const fixedIncomeByCountry = useMemo(() =>
+    fixedIncome.filter((r) => String(r.country || "").toUpperCase() === country),
+    [fixedIncome, country]
+  );
 
   // Exclude Property from Other Assets
   const otherAssetsNoProperty = useMemo(() =>
@@ -373,15 +385,36 @@ export default function Portfolio() {
     refetchPrices();
   }
 
+  const otherAssetsByCountry = useMemo(() =>
+    otherAssetsNoProperty.filter((r) => String(r.country || "").toUpperCase() === country),
+    [otherAssetsNoProperty, country]
+  );
+
+  const stockTxByCountry   = useMemo(() => stockTx.filter((t)   => String(t.country   || "USA").toUpperCase() === country), [stockTx,   country]);
+  const cryptoTxByCountry  = useMemo(() => cryptoTx.filter((t)  => String(t.country   || "USA").toUpperCase() === country), [cryptoTx,  country]);
+  const bullionTxByCountry = useMemo(() => bullionTx.filter((t) => String(t.country   || "USA").toUpperCase() === country), [bullionTx, country]);
+  const futuresTxByCountry = useMemo(() => futuresTx.filter((t) => String(t.country   || "USA").toUpperCase() === country), [futuresTx, country]);
+  const optionsTxByCountry = useMemo(() => optionsTx.filter((t) => String(t.country   || "USA").toUpperCase() === country), [optionsTx, country]);
+
   const rollups = useMemo(() => ({
-    stocks:      computeStocks(stockTx, quotes),
-    crypto:      computeCrypto(cryptoTx, cryptoSpots, pricesRes?.crypto),
-    bullion:     computeBullion(bullionTx, spot, pricesRes),
-    fixedIncome: computeFixedIncome(fixedIncome),
-    otherAssets: computeOtherAssets(otherAssetsNoProperty),
-  }), [fixedIncome, bullionTx, stockTx, cryptoTx, otherAssetsNoProperty, spot, quotes, cryptoSpots, pricesRes]);
+    stocks:      computeStocks(stockTxByCountry, quotes),
+    crypto:      computeCrypto(cryptoTxByCountry, cryptoSpots, pricesRes?.crypto),
+    bullion:     computeBullion(bullionTxByCountry, spot, pricesRes),
+    fixedIncome: computeFixedIncome(fixedIncomeByCountry),
+    otherAssets: computeOtherAssets(otherAssetsByCountry),
+  }), [fixedIncomeByCountry, bullionTxByCountry, stockTxByCountry, cryptoTxByCountry, otherAssetsByCountry, spot, quotes, cryptoSpots, pricesRes]);
 
   const totals = useMemo(() => {
+    if (country === "INDIA") {
+      return {
+        holdingValue: round2(rollups.fixedIncome.holdingValue + rollups.otherAssets.holdingValue),
+        unrealized: round2(rollups.fixedIncome.unrealized),
+        realized: 0,
+        dayGL: rollups.fixedIncome.dayGL,
+        totalCost: round2(rollups.fixedIncome.totalCost ?? 0),
+        prevDayValue: round2(rollups.fixedIncome.prevDayValue ?? 0),
+      };
+    }
     const dayGLParts = [rollups.stocks.dayGL, rollups.bullion.dayGL, rollups.crypto.dayGL, rollups.fixedIncome.dayGL];
     const hasDayGL = dayGLParts.some((v) => v != null);
     const totalCost    = round2((rollups.stocks.totalCost    ?? 0) + (rollups.bullion.totalCost    ?? 0) + (rollups.crypto.totalCost    ?? 0) + (rollups.fixedIncome.totalCost    ?? 0));
@@ -403,12 +436,12 @@ export default function Portfolio() {
       dayGL: hasDayGL ? round2(dayGLParts.reduce((s, v) => s + (v ?? 0), 0)) : null,
       totalCost, prevDayValue,
     };
-  }, [rollups]);
+  }, [rollups, country]);
 
   const ytdRealized = useMemo(() => {
-    const stocks  = _fifoYTD(stockTx,   (t) => String(t.symbol || "").toUpperCase().trim(),                                    (t) => t.shares,     (t) => t.price,     (t) => t.fees);
-    const bullion = _fifoYTD(bullionTx,  (t) => String(t.metal  || "GOLD").toUpperCase(),                                       (t) => t.quantityOz, (t) => t.unitPrice, (t) => t.fees);
-    const crypto  = _fifoYTD(cryptoTx,  (t) => { const s = String(t.symbol || "").toUpperCase().trim(); return s ? (s.includes("-") ? s : `${s}-USD`) : ""; }, (t) => t.quantity,  (t) => t.unitPrice, (t) => t.fees);
+    const stocks  = _fifoYTD(stockTxByCountry,   (t) => String(t.symbol || "").toUpperCase().trim(),                                    (t) => t.shares,     (t) => t.price,     (t) => t.fees);
+    const bullion = _fifoYTD(bullionTxByCountry,  (t) => String(t.metal  || "GOLD").toUpperCase(),                                       (t) => t.quantityOz, (t) => t.unitPrice, (t) => t.fees);
+    const crypto  = _fifoYTD(cryptoTxByCountry,  (t) => { const s = String(t.symbol || "").toUpperCase().trim(); return s ? (s.includes("-") ? s : `${s}-USD`) : ""; }, (t) => t.quantity,  (t) => t.unitPrice, (t) => t.fees);
     const shortTerm = round2(stocks.shortTerm + bullion.shortTerm + crypto.shortTerm);
     const longTerm  = round2(stocks.longTerm  + bullion.longTerm  + crypto.longTerm);
     return {
@@ -417,29 +450,36 @@ export default function Portfolio() {
       bullion: round2(bullion.shortTerm + bullion.longTerm),
       crypto:  round2(crypto.shortTerm  + crypto.longTerm),
     };
-  }, [stockTx, bullionTx, cryptoTx]);
+  }, [stockTxByCountry, bullionTxByCountry, cryptoTxByCountry]);
 
-  const futuresYTD      = useMemo(() => computeFuturesYTDRealized(futuresTx), [futuresTx]);
-  const optionsYTDTotal = useMemo(() => computeOptionsYTDRealized(optionsTx), [optionsTx]);
+  const futuresYTD      = useMemo(() => computeFuturesYTDRealized(futuresTxByCountry), [futuresTxByCountry]);
+  const optionsYTDTotal = useMemo(() => computeOptionsYTDRealized(optionsTxByCountry), [optionsTxByCountry]);
   // allYTDRealized: combines all asset classes; options have no ST/LT split so treated as short-term
   const allYTDRealized  = useMemo(() => {
+    if (country === "INDIA") return { shortTerm: 0, longTerm: 0, total: 0 };
     const shortTerm = round2(ytdRealized.shortTerm + futuresYTD.shortTerm + optionsYTDTotal);
     const longTerm  = round2(ytdRealized.longTerm  + futuresYTD.longTerm);
     return { shortTerm, longTerm, total: round2(shortTerm + longTerm) };
-  }, [ytdRealized.shortTerm, ytdRealized.longTerm, futuresYTD.shortTerm, futuresYTD.longTerm, optionsYTDTotal]);
+  }, [ytdRealized.shortTerm, ytdRealized.longTerm, futuresYTD.shortTerm, futuresYTD.longTerm, optionsYTDTotal, country]);
 
   const currentYear = String(new Date().getFullYear());
   const asOfDate = todayISO();
 
-  const rows = useMemo(() => [
-    { key: "stocks",      label: "Stocks",       href: "/assets/stocks",  ...rollups.stocks,      realized: ytdRealized.stocks    },
-    { key: "crypto",      label: "Crypto",        href: "/assets/crypto",  ...rollups.crypto,      realized: ytdRealized.crypto    },
-    { key: "bullion",     label: "Bullion",       href: "/assets/bullion", ...rollups.bullion,     realized: ytdRealized.bullion   },
-    { key: "fixedIncome", label: "Fixed Income",  ...rollups.fixedIncome, realized: 0                     },
-    { key: "futures",     label: "Futures",       ytdOnly: true,          realized: futuresYTD.total      },
-    { key: "options",     label: "Options",       ytdOnly: true,          realized: optionsYTDTotal       },
-    { key: "otherAssets", label: "Other Assets",  ...rollups.otherAssets, realized: 0                     },
-  ], [rollups, ytdRealized, futuresYTD.total, optionsYTDTotal]);
+  const rows = useMemo(() => {
+    const indiaRows = [
+      { key: "fixedIncome", label: "Fixed Income",  ...rollups.fixedIncome, realized: 0 },
+      { key: "otherAssets", label: "Other Assets",  ...rollups.otherAssets, realized: 0 },
+    ];
+    if (country === "INDIA") return indiaRows;
+    return [
+      { key: "stocks",      label: "Stocks",       href: "/assets/stocks",  ...rollups.stocks,      realized: ytdRealized.stocks  },
+      { key: "crypto",      label: "Crypto",        href: "/assets/crypto",  ...rollups.crypto,      realized: ytdRealized.crypto  },
+      { key: "bullion",     label: "Bullion",       href: "/assets/bullion", ...rollups.bullion,     realized: ytdRealized.bullion },
+      ...indiaRows,
+      { key: "futures",     label: "Futures",       ytdOnly: true,           realized: futuresYTD.total    },
+      { key: "options",     label: "Options",       ytdOnly: true,           realized: optionsYTDTotal     },
+    ];
+  }, [rollups, ytdRealized, futuresYTD.total, optionsYTDTotal, country]);
 
   /* ── Render ───────────────────────────────────────────── */
   return (
@@ -450,6 +490,14 @@ export default function Portfolio() {
         title="Portfolio"
         icon={PageIcons.portfolio}
       >
+        <select
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+        >
+          <option value="USA">USA</option>
+          <option value="INDIA">India</option>
+        </select>
         <button
           type="button"
           onClick={handleRefresh}
@@ -496,6 +544,7 @@ export default function Portfolio() {
                   shortTerm={allYTDRealized.shortTerm}
                   longTerm={allYTDRealized.longTerm}
                   year={currentYear}
+                  currency={currency}
                 />
               </div>
             );

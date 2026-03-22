@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
@@ -12,23 +12,33 @@ import { useCanWrite } from "../hooks/useCanWrite.js";
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function safeNum(v, fallback = 0) { const x = Number(v); return Number.isFinite(x) ? x : fallback; }
 function round2(n) { return Number(safeNum(n, 0).toFixed(2)); }
-function formatMoney(n) { return safeNum(n, 0).toLocaleString(undefined, { style: "currency", currency: "USD" }); }
 function plClass(v) { return safeNum(v, 0) >= 0 ? "text-green-400" : "text-red-400"; }
 function formatPct(n) { const x = safeNum(n, 0); return `${x > 0 ? "+" : ""}${x.toFixed(2)}%`; }
 
-function formatMoneySmart(n) {
+// Currency helpers — extend maps to support more countries
+const COUNTRY_CURRENCY = { USA: "USD", INDIA: "INR" };
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+
+function _fmtMoney(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
+}
+
+function _fmtMoneySmart(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
   const x = safeNum(n, 0);
   const r2 = Number(x.toFixed(2)), r8 = Number(x.toFixed(8));
   const useTwoDecimals = Math.abs(r8 - r2) < 1e-10;
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: useTwoDecimals ? 2 : 8, maximumFractionDigits: useTwoDecimals ? 2 : 8 });
+  return x.toLocaleString(locale, { style: "currency", currency: cur, minimumFractionDigits: useTwoDecimals ? 2 : 8, maximumFractionDigits: useTwoDecimals ? 2 : 8 });
 }
 
-function formatSpot(n) {
+function _fmtSpot(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
   const x = safeNum(n, 0);
-  if (!Number.isFinite(x) || x === 0) return "$0.00";
+  if (!Number.isFinite(x) || x === 0) return _fmtMoney(0, cur);
   const abs = Math.abs(x);
   const digits = abs > 0 && abs < 0.01 ? 10 : abs > 0 && abs < 1 ? 6 : 2;
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits });
+  return x.toLocaleString(locale, { style: "currency", currency: cur, minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 /* ── Spot price parsing ──────────────────────────────────── */
@@ -81,7 +91,7 @@ function extractCryptoPrevCloses(pricesResponse) {
 }
 
 /* ── Domain ─────────────────────────────────────────────── */
-const DEFAULT_FORM = { type: "BUY", symbol: "", date: todayISO(), quantity: "", unitPrice: "", fees: "", notes: "" };
+const DEFAULT_FORM = { type: "BUY", symbol: "", date: todayISO(), quantity: "", unitPrice: "", fees: "", notes: "", country: "USA" };
 
 function normalizeTx(item) {
   const raw = String(item.symbol || "").toUpperCase().trim();
@@ -168,6 +178,12 @@ function computeCryptoYTDRealized(transactions) {
 /* ── Component ───────────────────────────────────────────── */
 export default function Crypto() {
   const canWrite = useCanWrite("crypto");
+  const [country, setCountry] = useState("USA");
+  const currency = COUNTRY_CURRENCY[country] ?? "USD";
+  const formatMoney      = (n) => _fmtMoney(n, currency);
+  const formatMoneySmart = (n) => _fmtMoneySmart(n, currency);
+  const formatSpot       = (n) => _fmtSpot(n, currency);
+
   const [form, setForm]           = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm]   = useState(false);
@@ -175,6 +191,9 @@ export default function Crypto() {
   const [search, setSearch]       = useState("");
   const [sortKey, setSortKey]     = useState("date");
   const [sortDir, setSortDir]     = useState("desc");
+
+  // Sync page-level country filter → new transaction default country
+  useEffect(() => { setForm((f) => ({ ...f, country })); }, [country]);
 
   const queryClient = useQueryClient();
 
@@ -237,6 +256,11 @@ export default function Crypto() {
   const saving = saveMut.isPending || deleteMut.isPending;
   const loading = txLoading;
 
+  const txByCountry = useMemo(
+    () => tx.filter((t) => String(t.country || "USA").toUpperCase() === country),
+    [tx, country]
+  );
+
   const availableSymbols = useMemo(() => {
     const set = new Set(txSymbols);
     Object.keys(spots || {}).forEach((s) => { const sym = String(s || "").toUpperCase().trim(); if (sym) set.add(sym); });
@@ -244,32 +268,32 @@ export default function Crypto() {
     return Array.from(set).sort();
   }, [txSymbols, spots, form.symbol]);
 
-  const metrics = useMemo(() => computeCryptoMetrics(tx, spots, prevSpots), [tx, spots, prevSpots]);
-  const ytd = useMemo(() => computeCryptoYTDRealized(tx), [tx]);
+  const metrics = useMemo(() => computeCryptoMetrics(txByCountry, spots, prevSpots), [txByCountry, spots, prevSpots]);
+  const ytd = useMemo(() => computeCryptoYTDRealized(txByCountry), [txByCountry]);
   const currentYear = String(new Date().getFullYear());
 
   const filteredSortedTx = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = q ? tx.filter((t) => `${t.type || ""} ${t.symbol || ""} ${t.notes || ""}`.toLowerCase().includes(q)) : tx;
+    let list = q ? txByCountry.filter((t) => `${t.type || ""} ${t.symbol || ""} ${t.notes || ""}`.toLowerCase().includes(q)) : txByCountry;
     const dir = sortDir === "asc" ? 1 : -1;
     const getVal = (t) => ({ symbol: t.symbol || "", type: t.type || "", quantity: safeNum(t.quantity, 0), unitPrice: safeNum(t.unitPrice, 0), date: t.date || "" }[sortKey] ?? t.date ?? "");
     return [...list].sort((a, b) => {
       const va = getVal(a), vb = getVal(b);
       return (typeof va === "number" && typeof vb === "number") ? (va - vb) * dir : String(va).localeCompare(String(vb)) * dir;
     });
-  }, [tx, search, sortKey, sortDir]);
+  }, [txByCountry, search, sortKey, sortDir]);
 
-  function resetForm()  { setForm((prev) => ({ ...DEFAULT_FORM, symbol: prev.symbol || "" })); setEditingId(null); setError(""); }
+  function resetForm()  { setForm((prev) => ({ ...DEFAULT_FORM, symbol: prev.symbol || "", country })); setEditingId(null); setError(""); }
   function closeForm()  { setShowForm(false); resetForm(); }
   function openCreate() {
     setError(""); setEditingId(null);
-    setForm((prev) => ({ ...DEFAULT_FORM, symbol: prev.symbol || availableSymbols[0] || "" }));
+    setForm((prev) => ({ ...DEFAULT_FORM, symbol: prev.symbol || availableSymbols[0] || "", country }));
     setShowForm(true); setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
 
   function startEdit(t) {
     setError(""); setEditingId(t.id);
-    setForm({ type: String(t.type || "BUY").toUpperCase(), symbol: String(t.symbol || "").toUpperCase(), date: t.date || todayISO(), quantity: String(t.quantity ?? ""), unitPrice: String(t.unitPrice ?? ""), fees: String(t.fees ?? ""), notes: t.notes || "" });
+    setForm({ type: String(t.type || "BUY").toUpperCase(), symbol: String(t.symbol || "").toUpperCase(), date: t.date || todayISO(), quantity: String(t.quantity ?? ""), unitPrice: String(t.unitPrice ?? ""), fees: String(t.fees ?? ""), notes: t.notes || "", country: String(t.country || "USA").toUpperCase() });
     setShowForm(true); setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
 
@@ -283,7 +307,7 @@ export default function Crypto() {
     if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be a positive number");
     if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new Error("Unit Price must be positive");
     if (!Number.isFinite(fees) || fees < 0) throw new Error("Fees must be valid");
-    return { type, symbol, date: form.date, quantity: Number(quantity.toFixed(8)), unitPrice: Number(unitPrice.toFixed(8)), fees: Number(fees.toFixed(2)), notes: form.notes?.trim() || "" };
+    return { type, symbol, date: form.date, quantity: Number(quantity.toFixed(8)), unitPrice: Number(unitPrice.toFixed(8)), fees: Number(fees.toFixed(2)), notes: form.notes?.trim() || "", country: String(form.country || "USA").toUpperCase() };
   }
 
   function onSubmit(e) {
@@ -307,7 +331,16 @@ export default function Crypto() {
   /* ── Render ─────────────────────────────────────────────── */
   return (
     <div className="space-y-5">
-      <PageHeader title="Crypto" icon={PageIcons.crypto} />
+      <PageHeader title="Crypto" icon={PageIcons.crypto}>
+        <select
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+        >
+          <option value="USA">USA</option>
+          <option value="INDIA">India</option>
+        </select>
+      </PageHeader>
 
       {(txError || error) && (
         <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">
@@ -327,7 +360,7 @@ export default function Crypto() {
                 <MetricCard label="Total Holding Value"    value={formatMoney(metrics.totals.holdingValue)} sub="Based on latest spot prices" accent />
                 <MetricCard label="Unrealized Gain / Loss" value={formatMoney(metrics.totals.unrealized)}   pct={unrealizedPct} sub="Spot vs avg cost"            valueClass={plClass(metrics.totals.unrealized)} />
                 <MetricCard label="Day's Gain / Loss"      value={metrics.totals.dayGL != null ? formatMoney(metrics.totals.dayGL) : "—"} pct={dayGLPct} sub="vs. yesterday's close" valueClass={metrics.totals.dayGL != null ? plClass(metrics.totals.dayGL) : "text-slate-500"} />
-                <RealizedGainCard total={ytd.total} shortTerm={ytd.shortTerm} longTerm={ytd.longTerm} year={currentYear} />
+                <RealizedGainCard total={ytd.total} shortTerm={ytd.shortTerm} longTerm={ytd.longTerm} year={currentYear} currency={currency} />
               </div>
             );
           })()}
@@ -341,7 +374,7 @@ export default function Crypto() {
               </div>
               {error && <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">{error}</div>}
               <form onSubmit={onSubmit} className="space-y-3">
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-4 gap-3">
                   <FLabel label="Type">
                     <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className={inputCls} disabled={saving}>
                       <option value="BUY">Buy</option>
@@ -356,6 +389,12 @@ export default function Crypto() {
                   </FLabel>
                   <FLabel label="Date">
                     <input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} className={inputCls} disabled={saving} />
+                  </FLabel>
+                  <FLabel label="Country">
+                    <select value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} className={inputCls} disabled={saving}>
+                      <option value="USA">USA</option>
+                      <option value="INDIA">India</option>
+                    </select>
                   </FLabel>
                 </div>
                 <div className="grid grid-cols-3 gap-3">

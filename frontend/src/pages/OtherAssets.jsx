@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
@@ -13,9 +13,11 @@ const DEFAULT_FORM = { country: "USA", category: "Education", description: "", v
 
 function clamp(n, min, max) { return Math.min(max, Math.max(min, n)); }
 function safeNum(v, fallback = 0) { const x = Number(v); return Number.isFinite(x) ? x : fallback; }
-function formatMoney(n) {
-  const x = safeNum(n, 0);
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+const COUNTRY_CURRENCY = { USA: "USD", INDIA: "INR" };
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+function _fmtMoney(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
 }
 
 function normalizeApiRow(item) {
@@ -30,8 +32,11 @@ export default function OtherAssets() {
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  const [country, setCountry] = useState("USA");
+  const currency = COUNTRY_CURRENCY[country] ?? "USD";
+  const formatMoney = (n) => _fmtMoney(n, currency);
+
   const [search, setSearch] = useState("");
-  const [countryFilter, setCountryFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState("updatedAt");
   const [sortDir, setSortDir] = useState("desc");
 
@@ -70,11 +75,7 @@ export default function OtherAssets() {
 
   const filteredSortedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = rows;
-    if (countryFilter !== "ALL") {
-      const want = countryFilter === "India" ? "INDIA" : "USA";
-      list = list.filter((r) => String(r.country || "").toUpperCase() === want);
-    }
+    let list = rows.filter((r) => String(r.country || "").toUpperCase() === country);
     if (q) {
       list = list.filter((r) => {
         const hay = `${r.country || ""} ${r.category || ""} ${r.description || ""}`.toLowerCase();
@@ -96,21 +97,23 @@ export default function OtherAssets() {
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [rows, search, countryFilter, sortKey, sortDir]);
+  }, [rows, search, country, sortKey, sortDir]);
 
   const totalValue = useMemo(() => {
-    const base = countryFilter === "ALL"
-      ? rows
-      : rows.filter((r) => String(r.country || "").toUpperCase() === (countryFilter === "India" ? "INDIA" : "USA"));
+    const base = rows.filter((r) => String(r.country || "").toUpperCase() === country);
     return base.reduce((s, r) => s + safeNum(r.value, 0), 0);
-  }, [rows, countryFilter]);
+  }, [rows, country]);
+
+  // Page filter uses "INDIA" but form dropdown uses "India" — map between them
+  const formCountry = country === "INDIA" ? "India" : "USA";
+  useEffect(() => { setForm((f) => ({ ...f, country: formCountry })); }, [formCountry]);
 
   function resetForm({ hide } = {}) {
-    setForm(DEFAULT_FORM); setEditingId(null); setError("");
+    setForm({ ...DEFAULT_FORM, country: formCountry }); setEditingId(null); setError("");
     if (hide) setShowForm(false);
   }
   function openCreateForm() {
-    setError(""); setEditingId(null); setForm(DEFAULT_FORM); setShowForm(true);
+    setError(""); setEditingId(null); setForm({ ...DEFAULT_FORM, country: formCountry }); setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   function startEdit(r) {
@@ -159,7 +162,18 @@ export default function OtherAssets() {
 
   return (
     <div className="p-4 text-slate-300">
-      <div className="mb-4"><PageHeader title="Other Assets" icon={PageIcons.otherAssets} /></div>
+      <div className="mb-4">
+        <PageHeader title="Other Assets" icon={PageIcons.otherAssets}>
+          <select
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+          >
+            <option value="USA">USA</option>
+            <option value="INDIA">India</option>
+          </select>
+        </PageHeader>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         <MetricCard label="Total Other Assets" value={formatMoney(totalValue)} sub="Sum of all listed records" />
@@ -216,11 +230,6 @@ export default function OtherAssets() {
           <span className="text-sm font-black text-slate-100">All Records</span>
           <div className="flex gap-2 items-center flex-wrap">
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" className={`${inputCls} !w-48`} disabled={loading} />
-            <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} className={`${inputCls} !w-32`} disabled={loading}>
-              <option value="ALL">All</option>
-              <option value="USA">USA</option>
-              <option value="India">India</option>
-            </select>
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className={`${inputCls} !w-40`} disabled={loading}>
               <option value="updatedAt">Sort: Updated</option>
               <option value="country">Sort: Country</option>
