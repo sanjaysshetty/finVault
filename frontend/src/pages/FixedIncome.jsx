@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
@@ -22,9 +22,11 @@ function safeNum(v, fallback = 0) {
   return Number.isFinite(x) ? x : fallback;
 }
 
-function formatMoney(n) {
-  const x = safeNum(n, 0);
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+const COUNTRY_CURRENCY = { USA: "USD", INDIA: "INR" };
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+function _fmtMoney(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
 }
 
 function formatPct(n) {
@@ -104,8 +106,11 @@ export default function FixedIncome() {
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  const [country, setCountry] = useState("USA");
+  const currency = COUNTRY_CURRENCY[country] ?? "USD";
+  const formatMoney = (n) => _fmtMoney(n, currency);
+
   const [search, setSearch] = useState("");
-  const [countryFilter, setCountryFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState("startDate");
   const [sortDir, setSortDir] = useState("desc");
 
@@ -170,11 +175,7 @@ export default function FixedIncome() {
 
   const filteredSortedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = enrichedRows;
-    if (countryFilter !== "ALL") {
-      const want = countryFilter === "India" ? "INDIA" : "USA";
-      list = list.filter((r) => String(r.country || "").toUpperCase() === want);
-    }
+    let list = enrichedRows.filter((r) => String(r.country || "").toUpperCase() === country);
     if (q) list = list.filter((r) =>
       `${r.country || ""} ${r.name || ""} ${r.notes || ""}`.toLowerCase().includes(q)
     );
@@ -194,14 +195,12 @@ export default function FixedIncome() {
       if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
       return String(va).localeCompare(String(vb)) * dir;
     });
-  }, [enrichedRows, search, countryFilter, sortKey, sortDir]);
+  }, [enrichedRows, search, country, sortKey, sortDir]);
 
   const summary = useMemo(() => {
-    const base = countryFilter === "ALL"
-      ? enrichedRows
-      : enrichedRows.filter((r) =>
-          String(r.country || "").toUpperCase() === (countryFilter === "India" ? "INDIA" : "USA")
-        );
+    const base = enrichedRows.filter((r) =>
+      String(r.country || "").toUpperCase() === country
+    );
     return {
       invested: base.reduce((s, r) => s + safeNum(r.principal, 0), 0),
       current: base.reduce((s, r) => s + safeNum(r.currentValue, 0), 0),
@@ -209,7 +208,7 @@ export default function FixedIncome() {
       maturity: base.reduce((s, r) => s + safeNum(r.maturityAmount, 0), 0),
       dailyAccrual: base.reduce((s, r) => s + safeNum(r.dailyAccrual, 0), 0),
     };
-  }, [enrichedRows, countryFilter]);
+  }, [enrichedRows, country]);
 
   const currentGainPct = summary.invested > 0
     ? formatPct(((summary.current - summary.invested) / summary.invested) * 100)
@@ -221,8 +220,12 @@ export default function FixedIncome() {
     ? formatPct((summary.dailyAccrual / summary.current) * 100)
     : null;
 
+  // Page filter uses "INDIA" but form dropdown uses "India" — map between them
+  const formCountry = country === "INDIA" ? "India" : "USA";
+  useEffect(() => { setForm((f) => ({ ...f, country: formCountry })); }, [formCountry]);
+
   function resetForm({ hide } = {}) {
-    setForm(DEFAULT_FORM);
+    setForm({ ...DEFAULT_FORM, country: formCountry });
     setEditingId(null);
     setError("");
     if (hide) setShowForm(false);
@@ -231,7 +234,7 @@ export default function FixedIncome() {
   function openCreateForm() {
     setError("");
     setEditingId(null);
-    setForm(DEFAULT_FORM);
+    setForm({ ...DEFAULT_FORM, country: formCountry });
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -304,7 +307,16 @@ export default function FixedIncome() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <PageHeader title="Fixed Income" icon={PageIcons.fixedIncome} />
+      <PageHeader title="Fixed Income" icon={PageIcons.fixedIncome}>
+        <select
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+        >
+          <option value="USA">USA</option>
+          <option value="INDIA">India</option>
+        </select>
+      </PageHeader>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -494,16 +506,6 @@ export default function FixedIncome() {
               className={`${inputCls} !w-52`}
               disabled={loading}
             />
-            <select
-              value={countryFilter}
-              onChange={(e) => setCountryFilter(e.target.value)}
-              className={`${inputCls} !w-36`}
-              disabled={loading}
-            >
-              <option value="ALL">All Countries</option>
-              <option value="USA">USA</option>
-              <option value="India">India</option>
-            </select>
             <select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value)}

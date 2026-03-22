@@ -45,7 +45,13 @@ export function MetricCard({ label, value, pct = null, valueClass = "text-slate-
 }
 
 /* ── helpers local to this file ─────────────────────────── */
-function _fmt(n) { return (Math.abs(Number(n) || 0)).toLocaleString(undefined, { style: "currency", currency: "USD" }); }
+// Locale map — add entries here as new country options are introduced
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+
+function _fmt(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return (Math.abs(Number(n) || 0)).toLocaleString(locale, { style: "currency", currency: cur });
+}
 function _plCls(v) { return (Number(v) || 0) >= 0 ? "text-green-400" : "text-red-400"; }
 
 /**
@@ -59,7 +65,7 @@ function _plCls(v) { return (Number(v) || 0) >= 0 ? "text-green-400" : "text-red
  *   year       {string}  e.g. "2026"
  *   className  {string?} extra wrapper classes
  */
-export function RealizedGainCard({ total = 0, shortTerm = 0, longTerm = 0, year = "", className = "" }) {
+export function RealizedGainCard({ total = 0, shortTerm = 0, longTerm = 0, year = "", currency = "USD", className = "" }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -90,7 +96,7 @@ export function RealizedGainCard({ total = 0, shortTerm = 0, longTerm = 0, year 
         className={`flex items-baseline gap-x-1.5 min-w-0 overflow-hidden ${_plCls(total)}`}
         style={{ fontFamily: "Epilogue, sans-serif", fontSize: "clamp(1rem, 3.6vw, 1.44rem)" }}
       >
-        <span className="font-black leading-tight">{_fmt(total)}</span>
+        <span className="font-black leading-tight">{_fmt(total, currency)}</span>
       </div>
 
       <span className="text-[10px] text-slate-600">Closed positions · YTD</span>
@@ -104,7 +110,7 @@ export function RealizedGainCard({ total = 0, shortTerm = 0, longTerm = 0, year 
               className={`font-black leading-tight ${_plCls(shortTerm)}`}
               style={{ fontFamily: "Epilogue, sans-serif", fontSize: "clamp(0.85rem, 2.5vw, 1.05rem)" }}
             >
-              {_fmt(shortTerm)}
+              {_fmt(shortTerm, currency)}
             </p>
             <p className="text-[10px] text-slate-600 mt-0.5">≤ 1 yr hold</p>
           </div>
@@ -114,7 +120,7 @@ export function RealizedGainCard({ total = 0, shortTerm = 0, longTerm = 0, year 
               className={`font-black leading-tight ${_plCls(longTerm)}`}
               style={{ fontFamily: "Epilogue, sans-serif", fontSize: "clamp(0.85rem, 2.5vw, 1.05rem)" }}
             >
-              {_fmt(longTerm)}
+              {_fmt(longTerm, currency)}
             </p>
             <p className="text-[10px] text-slate-600 mt-0.5">&gt; 1 yr hold</p>
           </div>

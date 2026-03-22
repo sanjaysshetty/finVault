@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
@@ -22,9 +22,11 @@ const DEFAULT_FORM = {
 };
 
 function safeNum(v, fallback = 0) { const x = Number(v); return Number.isFinite(x) ? x : fallback; }
-function formatMoney(n) {
-  const x = safeNum(n, 0);
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+const COUNTRY_CURRENCY = { USA: "USD", INDIA: "INR" };
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+function _fmtMoney(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
 }
 
 function normalizeApiRow(item) {
@@ -39,8 +41,11 @@ export default function Insurance() {
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  const [country, setCountry] = useState("USA");
+  const currency = COUNTRY_CURRENCY[country] ?? "USD";
+  const formatMoney = (n) => _fmtMoney(n, currency);
+
   const [search, setSearch] = useState("");
-  const [countryFilter, setCountryFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState("provider");
   const [sortDir, setSortDir] = useState("asc");
 
@@ -78,24 +83,15 @@ export default function Insurance() {
   const saving = saveMut.isPending || deleteMut.isPending;
 
   const summary = useMemo(() => {
-    const totalCovered = rows.reduce((acc, r) => acc + safeNum(r.coveredAmount, 0), 0);
-    const usaCovered = rows
-      .filter((r) => String(r.country || "").toUpperCase() !== "INDIA")
-      .reduce((acc, r) => acc + safeNum(r.coveredAmount, 0), 0);
-    const indiaCovered = rows
-      .filter((r) => String(r.country || "").toUpperCase() === "INDIA")
-      .reduce((acc, r) => acc + safeNum(r.coveredAmount, 0), 0);
-    return { count: rows.length, totalCovered, usaCovered, indiaCovered };
-  }, [rows]);
+    const filtered = rows.filter((r) => String(r.country || "").toUpperCase() === country);
+    const totalCovered = filtered.reduce((acc, r) => acc + safeNum(r.coveredAmount, 0), 0);
+    return { count: filtered.length, totalCovered };
+  }, [rows, country]);
 
   const filteredSortedRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = rows.filter((r) => {
-      if (countryFilter !== "ALL") {
-        const isIndia = String(r.country || "").toUpperCase() === "INDIA";
-        if (countryFilter === "USA" && isIndia) return false;
-        if (countryFilter === "India" && !isIndia) return false;
-      }
+      if (String(r.country || "").toUpperCase() !== country) return false;
       if (!q) return true;
       const hay = [r.insuranceType, r.provider, r.remarks, String(r.coveredAmount ?? ""), String(r.country ?? "")]
         .filter(Boolean).join(" ").toLowerCase();
@@ -111,13 +107,18 @@ export default function Insurance() {
       return 0;
     });
     return list;
-  }, [rows, search, countryFilter, sortKey, sortDir]);
+  }, [rows, search, country, sortKey, sortDir]);
+
+  // Sync page-level country filter → new record default country
+  // Insurance form uses "India" (mixed case) while page filter uses "INDIA"
+  const formCountry = country === "INDIA" ? "India" : "USA";
+  useEffect(() => { setForm((f) => ({ ...f, country: formCountry })); }, [formCountry]);
 
   function openCreateForm() {
-    setEditingId(null); setForm(DEFAULT_FORM); setError(""); setShowForm(true);
+    setEditingId(null); setForm({ ...DEFAULT_FORM, country: formCountry }); setError(""); setShowForm(true);
   }
   function resetForm({ hide } = {}) {
-    setEditingId(null); setForm(DEFAULT_FORM); setError("");
+    setEditingId(null); setForm({ ...DEFAULT_FORM, country: formCountry }); setError("");
     if (hide) setShowForm(false);
   }
   function startEdit(r) {
@@ -168,13 +169,22 @@ export default function Insurance() {
 
   return (
     <div className="p-4 text-slate-300">
-      <div className="mb-4"><PageHeader title="Insurance" icon={PageIcons.insurance} /></div>
+      <div className="mb-4">
+        <PageHeader title="Insurance" icon={PageIcons.insurance}>
+          <select
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+          >
+            <option value="USA">USA</option>
+            <option value="INDIA">India</option>
+          </select>
+        </PageHeader>
+      </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <div className="grid grid-cols-2 gap-3 mb-4">
         <MetricCard label="Policies" value={String(summary.count)} />
         <MetricCard label="Total Covered" value={formatMoney(summary.totalCovered)} />
-        <MetricCard label="USA Covered" value={formatMoney(summary.usaCovered)} />
-        <MetricCard label="India Covered" value={formatMoney(summary.indiaCovered)} />
       </div>
 
       {canWrite && showForm && (
@@ -243,11 +253,6 @@ export default function Insurance() {
           <span className="text-sm font-black text-slate-100">All Records</span>
           <div className="flex gap-2 items-center flex-wrap">
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" className={`${inputCls} !w-52`} disabled={loading} />
-            <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} className={`${inputCls} !w-32`} disabled={loading}>
-              <option value="ALL">All</option>
-              <option value="USA">USA</option>
-              <option value="India">India</option>
-            </select>
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className={`${inputCls} !w-44`} disabled={loading}>
               <option value="provider">Sort: Provider</option>
               <option value="insuranceType">Sort: Type</option>

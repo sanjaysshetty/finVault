@@ -31,9 +31,11 @@ function safeNum(v, fallback = 0) {
   return Number.isFinite(x) ? x : fallback;
 }
 
-function formatMoney(n) {
-  const x = safeNum(n, 0);
-  return x.toLocaleString(undefined, { style: "currency", currency: "USD" });
+const COUNTRY_CURRENCY = { USA: "USD", INDIA: "INR" };
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
+function _fmtMoney(n, cur = "USD") {
+  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
+  return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
 }
 
 function formatPct01(n01) {
@@ -125,11 +127,11 @@ function calcOpenCashFlow(row) {
   return 0;
 }
 
-function blankNewRow() {
+function blankNewRow(country = "USA") {
   return {
     ticker: "SPY", type: "SELL", event: "", strikes: "",
     openDate: todayISO(), expiry: "", qty: "", fill: "",
-    closePrice: "", fee: "", collateral: "", rollOver: "", closeDate: "", notes: "",
+    closePrice: "", fee: "", collateral: "", rollOver: "", closeDate: "", notes: "", country,
   };
 }
 
@@ -162,6 +164,7 @@ function toPayload(d) {
     roll_over: String(d.rollOver || "").trim(),
     closeDate: String(d.closeDate || "").slice(0, 10),
     notes: String(d.notes || "").trim(),
+    country: String(d.country || "USA").toUpperCase().trim() || "USA",
   };
   if (!payload.ticker) throw new Error("Ticker is required");
   if (!payload.type) throw new Error("Type is required");
@@ -180,7 +183,14 @@ function toPayload(d) {
 ================================================================ */
 
 export default function Options() {
+  const [country, setCountry] = useState("USA");
+  const currency = COUNTRY_CURRENCY[country] ?? "USD";
+  const formatMoney = (n) => _fmtMoney(n, currency);
+
   const [busyId, setBusyId] = useState(null);
+
+  // Sync page-level country filter → new transaction default country
+  useEffect(() => { setNewDraft((d) => ({ ...d, country })); }, [country]);
   const [error, setError] = useState("");
 
   const [expanded, setExpanded] = useState(() => new Set());
@@ -274,8 +284,13 @@ export default function Options() {
     });
   }
 
+  const rowsByCountry = useMemo(
+    () => rows.filter((r) => String(r.country || "USA").toUpperCase() === country),
+    [rows, country]
+  );
+
   const computedBase = useMemo(() => {
-    return rows.map((r) => {
+    return rowsByCountry.map((r) => {
       const pl = calcPL(r);
       const days = r.closeDate ? daysBetweenISO(r.openDate, r.closeDate) : null;
       const collateral = getEffectiveCollateral(r);
@@ -283,7 +298,7 @@ export default function Options() {
       const anl = roc !== null && days ? (roc / days) * 365 : null;
       return { ...r, _calc: { pl, days, collateral, anl }, _isOpen: pl === null };
     });
-  }, [rows]);
+  }, [rowsByCountry]);
 
   const summary = useMemo(() => {
     const tf = String(tickerFilter || "").toUpperCase().trim();
@@ -353,6 +368,7 @@ export default function Options() {
       qty: row.qty ?? "", fill: row.fill ?? "", closePrice: row.closePrice ?? "",
       fee: row.fee ?? "", collateral: row.collateral ?? "", rollOver: row.rollOver ?? "",
       closeDate: row.closeDate ?? "", notes: row.notes ?? "",
+      country: String(row.country || "USA").toUpperCase(),
     });
     setExpanded((prev) => new Set(prev).add(row.id));
   }
@@ -398,6 +414,14 @@ export default function Options() {
     <div className="space-y-5">
       {/* Header */}
       <PageHeader title="Options" icon={PageIcons.options}>
+        <select
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          className="bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+        >
+          <option value="USA">USA</option>
+          <option value="INDIA">India</option>
+        </select>
         <button
           type="button"
           onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.optionsTx() })}
@@ -533,6 +557,7 @@ export default function Options() {
                 busy={busyId !== null}
                 onPrimary={addRow}
                 primaryLabel={busyId === "__new__" ? "Adding…" : "Add"}
+                formatMoney={formatMoney}
               />
 
               {loading ? (
@@ -565,6 +590,7 @@ export default function Options() {
                       onCancel={cancelEdit}
                       onDelete={() => deleteRow(r.id)}
                       busyId={busyId}
+                      formatMoney={formatMoney}
                     />
                   );
                 })
@@ -579,7 +605,7 @@ export default function Options() {
 
 /* ── Row components ─────────────────────────────────────────── */
 
-function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel }) {
+function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel, formatMoney }) {
   const pl = calcPL(row);
   const panelBg = "#0F1729";
 
@@ -651,7 +677,7 @@ function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel
   );
 }
 
-function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, editDraft, setEditDraft, onEdit, onSave, onCancel, onDelete, busyId }) {
+function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, editDraft, setEditDraft, onEdit, onSave, onCancel, onDelete, busyId, formatMoney }) {
   const c = row._calc || {};
   const isBusy = busyId !== null;
   const displayed = isEditing ? editDraft : row;
@@ -820,6 +846,21 @@ function Tier2DetailsRow({ row, setRow }) {
               value={anl === null ? "—" : formatPct01(anl)}
               valueColor={anl === null ? "#64748B" : plColor(anl)}
             />
+            <div>
+              <div className="text-xs font-bold text-slate-500 mb-1.5">Country</div>
+              {isEditable ? (
+                <select
+                  value={row.country || "USA"}
+                  onChange={(e) => setRow((d) => ({ ...d, country: e.target.value }))}
+                  className={`${IC} w-full`}
+                >
+                  <option value="USA">USA</option>
+                  <option value="INDIA">India</option>
+                </select>
+              ) : (
+                <span className="text-xs text-slate-300">{row.country || "USA"}</span>
+              )}
+            </div>
             <div style={{ gridColumn: "1 / -1" }}>
               <DetailField
                 label="Notes"

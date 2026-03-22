@@ -17,10 +17,12 @@ function uid(prefix = "id") { return `${prefix}_${Math.random().toString(16).sli
 
 /* ---------------- formatting ---------------- */
 
+const LOCALE_FOR_CURRENCY = { USD: "en-US", INR: "en-IN" };
 function formatMoney(n, currency = "USD") {
   const x = safeNum(n, 0);
+  const locale = LOCALE_FOR_CURRENCY[currency] ?? "en-US";
   try {
-    return x.toLocaleString(undefined, {
+    return x.toLocaleString(locale, {
       style: "currency", currency,
       minimumFractionDigits: 2, maximumFractionDigits: 2,
     });
@@ -623,12 +625,12 @@ export default function NAV() {
         <div className="mt-6">
           <MetricCard
             label="Total India Networth"
-            value={formatMoney(indiaNet, "USD")}
-            sub={`Assets ${formatMoney(indiaAssetsTotal, "USD")} • Liabilities ${formatMoney(indiaLiabsTotal, "USD")}`}
+            value={formatMoney(indiaNet, "INR")}
+            sub={`Assets ${formatMoney(indiaAssetsTotal, "INR")} • Liabilities ${formatMoney(indiaLiabsTotal, "INR")}`}
             valueClass={indiaNet >= 0 ? "text-green-400" : "text-red-400"}
             accent
           />
-          <Region currency="USD" assetsRows={indiaAssetsRows} country="INDIA" liabilitiesItems={liabilitiesItems} />
+          <Region currency="INR" assetsRows={indiaAssetsRows} country="INDIA" liabilitiesItems={liabilitiesItems} />
         </div>
       )}
     </div>

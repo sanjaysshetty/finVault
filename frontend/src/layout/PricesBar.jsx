@@ -236,11 +236,18 @@ export default function PricesBar() {
     queryFn:  () => api.get(pricesPath),
   });
 
-  // ── Portfolio value
-  const portfolioValue = useMemo(() =>
-    computePortfolioValue({ fiItems, bullionTx, stockTx, cryptoTx, otherItems, pricesData }),
-    [fiItems, bullionTx, stockTx, cryptoTx, otherItems, pricesData]
-  );
+  // ── Portfolio value (USA only — PricesBar always displays in USD)
+  const portfolioValue = useMemo(() => {
+    const isUSA = (t) => String(t?.country || "USA").toUpperCase() === "USA";
+    return computePortfolioValue({
+      fiItems:   fiItems.filter(isUSA),
+      bullionTx: bullionTx.filter(isUSA),
+      stockTx:   stockTx.filter(isUSA),
+      cryptoTx:  cryptoTx.filter(isUSA),
+      otherItems: otherItems.filter(isUSA),
+      pricesData,
+    });
+  }, [fiItems, bullionTx, stockTx, cryptoTx, otherItems, pricesData]);
 
   // ── Display values
   const loading = pricesLoading || !pricesData;
