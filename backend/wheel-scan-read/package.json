@@ -1,0 +1,9 @@
+{
+  "name": "wheel-scan-read",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/client-lambda": "^3.0.0"
+  }
+}

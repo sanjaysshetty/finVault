@@ -145,6 +145,19 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 19c1.6-3 4-4.5 7-4.5s5.4 1.5 7 4.5" />
     </Icon>
   ),
+  sectionResearch: (
+    <Icon>
+      <circle cx="11" cy="11" r="7" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 16.5l3.5 3.5" />
+    </Icon>
+  ),
+  wheelScan: (
+    <Icon>
+      <circle cx="12" cy="12" r="7" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M12 8v8" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l6 6M15 9l-6 6" />
+    </Icon>
+  ),
 };
 
 /* ── Section (collapsible group) ─────────────────────────── */
@@ -207,6 +220,7 @@ export default function SideNav({ activeAccount }) {
   const [openLiabilities, setOpenLiabilities] = useState(true);
   const [openInsurance, setOpenInsurance]     = useState(true);
   const [openSpending, setOpenSpending]       = useState(true);
+  const [openResearch, setOpenResearch]       = useState(true);
 
   const hasAsset = (key) => canSee(activeAccount, key);
   const showSpending =
@@ -292,6 +306,17 @@ export default function SideNav({ activeAccount }) {
           {canSee(activeAccount, "receiptsLedger") && (
             <Item to="/spending/receipts-ledger" label="Receipts Ledger" icon={icons.receipts} />
           )}
+        </Section>
+      )}
+
+      {canSee(activeAccount, "wheelScan") && (
+        <Section
+          title="Research"
+          open={openResearch}
+          icon={icons.sectionResearch}
+          onToggle={() => setOpenResearch((v) => !v)}
+        >
+          <Item to="/research/wheel-scan" label="Wheel Scan" icon={icons.wheelScan} />
         </Section>
       )}
 

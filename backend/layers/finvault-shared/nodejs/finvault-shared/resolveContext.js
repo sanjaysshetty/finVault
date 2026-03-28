@@ -44,6 +44,7 @@ const ALL_PAGES_WRITE = {
   insurance:         "write",
   spendingDashboard: "write",
   receiptsLedger:    "write",
+  wheelScan:         "write",
 };
 
 /**
