@@ -113,4 +113,9 @@ export const queryKeys = {
   accounts:  ()          => ["accounts"],
   members:   (accountId) => ["accounts", accountId, "members"],
   invites:   (accountId) => ["accounts", accountId, "invites"],
+
+  // Wheel Scan
+  wheelHistory: ()         => ["wheel", "history"],
+  wheelLatest:  ()         => ["wheel", "latest"],
+  wheelScan:    (scanId)   => ["wheel", "scan", scanId],
 };

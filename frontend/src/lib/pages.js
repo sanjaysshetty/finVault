@@ -16,6 +16,7 @@ export const PAGE_ROUTES = [
   { pageKey: "insurance",         path: "/insurance/dashboard" },
   { pageKey: "spendingDashboard", path: "/spending/dashboard" },
   { pageKey: "receiptsLedger",    path: "/spending/receipts-ledger" },
+  { pageKey: "wheelScan",         path: "/research/wheel-scan" },
 ];
 
 /** Returns the pageKey for a given pathname, or null if not permission-gated. */

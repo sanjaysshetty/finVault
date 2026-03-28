@@ -240,6 +240,11 @@ input.spend-text:focus {
 input.spend-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 input.spend-date::-webkit-calendar-picker-indicator { opacity: 1 !important; cursor: pointer; }
 
+/* Date pickers: force dark color-scheme so text + calendar icon are white */
+input[type="date"] {
+  color-scheme: dark;
+}
+
 .sofi-alert {
   margin-top: 12px; padding: 12px; border-radius: 16px;
   background: rgba(15, 23, 42, 0.8);

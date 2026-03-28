@@ -101,4 +101,11 @@ export const PageIcons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 9h6M9 12h6" />
     </Icon>
   ),
+  wheelScan: (
+    <Icon>
+      <circle cx="11" cy="11" r="7" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 16.5l4 4" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 11h6M11 8v6" />
+    </Icon>
+  ),
 };

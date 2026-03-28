@@ -17,6 +17,8 @@ import Liabilities from "./pages/Liabilities";
 import Insurance from "./pages/Insurance";
 
 import AccountsPage from "./pages/AccountsPage";
+import WheelScanPageReports from "./pages/WheelScan/WheelScanPageReports";
+import WheelScanResult from "./pages/WheelScan/WheelScanResult";
 import AuthCallback from "./auth/AuthCallback";
 import RequireAuth from "./auth/RequireAuth";
 import { useAccounts } from "./hooks/useAccounts.js";
@@ -78,6 +80,10 @@ export default function App() {
           {/* Spending */}
           <Route path="/spending/dashboard" element={<SpendingDash />} />
           <Route path="/spending/receipts-ledger" element={<Spending />} />
+
+          {/* Research */}
+          <Route path="/research/wheel-scan" element={<WheelScanPageReports />} />
+          <Route path="/research/wheel-scan/:scanId" element={<WheelScanResult />} />
 
           {/* Accounts */}
           <Route path="/accounts" element={<AccountsPage />} />

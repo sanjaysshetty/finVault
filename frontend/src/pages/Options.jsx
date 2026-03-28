@@ -110,9 +110,28 @@ function calcPL(row) {
   if (typeU === "SELL") return (fill - close - fee / 100) * qty * 100;
   if (typeU === "BUY") return (close - fill - fee / 100) * qty * 100;
   if (typeU === "ASS") return (close - fill - fee / 100) * qty * 100;
-  if (typeU === "ASSIGNED") return (close - fill - fee / 100) * qty * 100;
   if (typeU === "SDI") return (close - fill) * qty - fee;
   return null;
+}
+
+function calcUnrealizedPL(row, markPrice) {
+  const isOpen = !row.closeDate || String(row.closeDate).trim() === "";
+  if (!isOpen) return null;
+  if (markPrice === null || markPrice === undefined) return null;
+  const typeU = String(row.type || "").trim().toUpperCase();
+  const qty = safeNum(row.qty, 0);
+  const fill = safeNum(row.fill, 0);
+  const mark = Number(markPrice);
+  if (!Number.isFinite(mark) || mark <= 0) return null;
+  if (typeU === "SELL") return (fill - mark) * qty * 100;
+  if (typeU === "BUY")  return (mark - fill) * qty * 100;
+  if (typeU === "ASS")  return (mark - fill) * qty * 100;
+  return null;
+}
+
+function markKey(row) {
+  const optType = String(row.event || "").toLowerCase();
+  return `${row.ticker}_${row.strikes}_${row.expiry}_${optType}`;
 }
 
 function calcOpenCashFlow(row) {
@@ -149,7 +168,7 @@ function toPayload(d) {
   const payload = {
     ticker: String(d.ticker || "").toUpperCase().trim(),
     type: String(d.type || "").trim(),
-    event: String(d.event || "").trim(),
+    event: String(d.event || "").trim().toLowerCase() === "assigned" ? "Ass" : String(d.event || "").trim(),
     strikes: String(d.strikes || "").trim(),
     openDate: String(d.openDate || "").slice(0, 10),
     expiry: String(d.expiry || "").slice(0, 10),
@@ -219,6 +238,31 @@ export default function Options() {
     return items.map(normalizeItem);
   }, [rawData]);
 
+  /* ---------- Live option marks (unrealized P/L) ---------- */
+
+  const [marks, setMarks] = useState({});
+
+  useEffect(() => {
+    if (!rows.length) return;
+    const positions = rows
+      .filter(r => {
+        const isOpen = !r.closeDate || String(r.closeDate).trim() === "";
+        const optType = String(r.event || "").toLowerCase();
+        return isOpen && r.ticker && r.strikes && r.expiry && (optType === "call" || optType === "put");
+      })
+      .map(r => ({
+        key: markKey(r),
+        ticker: r.ticker,
+        strike: Number(r.strikes),
+        expiry: r.expiry,
+        optionType: String(r.event || "").toLowerCase(),
+      }));
+    if (!positions.length) return;
+    api.post("/assets/options/marks", { positions })
+      .then(data => setMarks(data.marks || {}))
+      .catch(err => console.warn("Option marks fetch failed:", err));
+  }, [rows]);
+
   /* ---------- Mutations ---------- */
 
   const addMut = useMutation({
@@ -255,15 +299,6 @@ export default function Options() {
 
   /* ---------- Date-picker CSS injection ---------- */
 
-  useEffect(() => {
-    const __dpId = "fv-date-picker-white";
-    if (typeof document !== "undefined" && !document.getElementById(__dpId)) {
-      const s = document.createElement("style");
-      s.id = __dpId;
-      s.textContent = 'input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:0.9;}';
-      document.head.appendChild(s);
-    }
-  }, []);
 
   /* ---------- Derived / computed ---------- */
 
@@ -324,6 +359,17 @@ export default function Options() {
 
     return { realizedPL, cashCollected, annualRocSummary };
   }, [computedBase, fromDate, toDate, tickerFilter]);
+
+  const totalUnrealizedPL = useMemo(() => {
+    let total = 0;
+    let hasAny = false;
+    for (const r of computedBase) {
+      const mark = (marks || {})[markKey(r)];
+      const unpl = calcUnrealizedPL(r, mark);
+      if (unpl !== null) { total += unpl; hasAny = true; }
+    }
+    return hasAny ? total : null;
+  }, [computedBase, marks]);
 
   const listRows = useMemo(() => {
     let out = computedBase.slice();
@@ -464,7 +510,7 @@ export default function Options() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard
           label="YTD Realized P/L"
           value={formatMoney(summary.realizedPL)}
@@ -482,6 +528,12 @@ export default function Options() {
           value={formatPct01(summary.annualRocSummary)}
           sub="Weighted annual ROC (Close Date filtered)"
           valueClass={summary.annualRocSummary === null ? "text-slate-500" : summary.annualRocSummary < 0 ? "text-red-400" : "text-green-400"}
+        />
+        <MetricCard
+          label="Unrealized P/L"
+          value={totalUnrealizedPL === null ? "—" : formatMoney(totalUnrealizedPL)}
+          sub="Open positions with live marks"
+          valueClass={totalUnrealizedPL === null ? "text-slate-500" : totalUnrealizedPL < 0 ? "text-red-400" : "text-green-400"}
         />
       </div>
 
@@ -509,42 +561,41 @@ export default function Options() {
 
         <div className="overflow-x-auto">
           <table
-            className="w-full"
-            style={{ borderCollapse: "separate", borderSpacing: 0 }}
+            style={{ borderCollapse: "separate", borderSpacing: 0, width: "max-content", minWidth: "100%", tableLayout: "fixed" }}
           >
             <thead>
               <tr>
                 <Th style={{ width: 40 }} />
-                <Th style={{ width: 110, position: "sticky", left: 0, zIndex: 6, background: "#0F1729", boxShadow: "inset -1px 0 0 rgba(148,163,184,0.16)" }}>
+                <Th style={{ width: 66, position: "sticky", left: 0, zIndex: 6, background: "#0F1729", boxShadow: "inset -1px 0 0 rgba(148,163,184,0.16)" }}>
                   Ticker
                 </Th>
-                <Th style={{ width: 80 }}>Type</Th>
-                <Th style={{ width: 80 }}>Event</Th>
+                <Th style={{ width: 70 }}>Type</Th>
+                <Th style={{ width: 88 }}>Event</Th>
                 <Th style={{ width: 73 }}>Strike</Th>
-                <Th style={{ width: 133 }}>
+                <Th style={{ width: 81 }}>
                   <div className="flex items-center gap-1.5">
                     <span>Open Dt</span>
                     <SortIcon active={sortSpec.field === "openDate"} dir={sortSpec.dir} onClick={() => toggleSort("openDate")} title="Sort by Open Date" />
                   </div>
                 </Th>
-                <Th style={{ width: 133 }}>
+                <Th style={{ width: 81 }}>
                   <div className="flex items-center gap-1.5">
                     <span>Close Dt</span>
                     <SortIcon active={sortSpec.field === "closeDate"} dir={sortSpec.dir} onClick={() => toggleSort("closeDate")} title="Sort by Close Date" />
                   </div>
                 </Th>
-                <Th style={{ width: 133 }}>
+                <Th style={{ width: 81 }}>
                   <div className="flex items-center gap-1.5">
                     <span>Expiry Dt</span>
                     <SortIcon active={sortSpec.field === "expiry"} dir={sortSpec.dir} onClick={() => toggleSort("expiry")} title="Sort by Expiry" />
                   </div>
                 </Th>
-                <Th style={{ width: 70 }}>Qty</Th>
-                <Th style={{ width: 69 }}>Fill</Th>
-                <Th style={{ width: 69 }}>Close</Th>
-                <Th style={{ width: 80 }}>Fee</Th>
+                <Th style={{ width: 52 }}>Qty</Th>
+                <Th style={{ width: 59 }}>Fill</Th>
+                <Th style={{ width: 59 }}>Close</Th>
                 <Th style={{ width: 95 }}>P/L</Th>
-                <Th align="right" style={{ width: 120 }}>Actions</Th>
+                <Th style={{ width: 81 }}>UN.P/L</Th>
+                <Th align="right" style={{ width: 114 }}>Actions</Th>
               </tr>
             </thead>
 
@@ -591,6 +642,7 @@ export default function Options() {
                       onDelete={() => deleteRow(r.id)}
                       busyId={busyId}
                       formatMoney={formatMoney}
+                      marks={marks}
                     />
                   );
                 })
@@ -607,6 +659,7 @@ export default function Options() {
 
 function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel, formatMoney }) {
   const pl = calcPL(row);
+  const unpl = calcUnrealizedPL(row, null);
   const panelBg = "#0F1729";
 
   return (
@@ -619,7 +672,7 @@ function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel
         </Td>
         <Td style={{ position: "sticky", left: 0, zIndex: 5, background: panelBg, boxShadow: "inset -1px 0 0 rgba(148,163,184,0.12)" }}>
           <input value={row.ticker ?? ""} onChange={(e) => setRow((d) => ({ ...d, ticker: e.target.value.toUpperCase() }))}
-            className={`${IC} w-24 font-black`} />
+            className={`${IC} w-16 font-black`} />
         </Td>
         <Td>
           <input value={row.type ?? ""} onChange={(e) => setRow((d) => ({ ...d, type: e.target.value.toUpperCase() }))}
@@ -635,15 +688,15 @@ function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel
         </Td>
         <Td>
           <input type="date" value={row.openDate ?? ""} onChange={(e) => setRow((d) => ({ ...d, openDate: e.target.value }))}
-            className={`${IC} w-32`} />
+            className={`${IC} w-full`} />
         </Td>
         <Td>
           <input type="date" value={row.closeDate ?? ""} onChange={(e) => setRow((d) => ({ ...d, closeDate: e.target.value }))}
-            className={`${IC} w-32`} />
+            className={`${IC} w-full`} />
         </Td>
         <Td>
           <input type="date" value={row.expiry ?? ""} onChange={(e) => setRow((d) => ({ ...d, expiry: e.target.value }))}
-            className={`${IC} w-32`} />
+            className={`${IC} w-full`} />
         </Td>
         <Td>
           <input value={row.qty ?? ""} onChange={(e) => setRow((d) => ({ ...d, qty: e.target.value }))}
@@ -658,12 +711,13 @@ function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel
             className={`${IC} w-[70px]`} inputMode="decimal" />
         </Td>
         <Td>
-          <input value={row.fee ?? ""} onChange={(e) => setRow((d) => ({ ...d, fee: e.target.value }))}
-            className={`${IC} w-[70px]`} inputMode="decimal" />
-        </Td>
-        <Td>
           <span className="font-black text-xs" style={{ color: pl === null ? "#64748B" : plColor(pl) }}>
             {pl === null ? "OPEN" : formatMoney(pl)}
+          </span>
+        </Td>
+        <Td>
+          <span className="font-black text-xs" style={{ color: unpl === null ? "#64748B" : plColor(unpl) }}>
+            {unpl === null ? "-" : formatMoney(unpl)}
           </span>
         </Td>
         <Td align="right">
@@ -677,12 +731,14 @@ function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel
   );
 }
 
-function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, editDraft, setEditDraft, onEdit, onSave, onCancel, onDelete, busyId, formatMoney }) {
+function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, editDraft, setEditDraft, onEdit, onSave, onCancel, onDelete, busyId, formatMoney, marks }) {
   const c = row._calc || {};
   const isBusy = busyId !== null;
   const displayed = isEditing ? editDraft : row;
   const setDisplayed = isEditing ? setEditDraft : null;
   const pl = isEditing ? calcPL(displayed) : c.pl;
+  const markPrice = (marks || {})[markKey(isEditing ? displayed : row)];
+  const unpl = calcUnrealizedPL(isEditing ? displayed : row, markPrice);
 
   return (
     <>
@@ -702,7 +758,7 @@ function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, ed
         <Td style={{ position: "sticky", left: 0, zIndex: 5, background: stickyBg, boxShadow: "inset -1px 0 0 rgba(148,163,184,0.12)" }}>
           {isEditing ? (
             <input value={displayed.ticker ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, ticker: e.target.value.toUpperCase() }))}
-              className={`${IC} w-24 font-black`} />
+              className={`${IC} w-16 font-black`} />
           ) : (
             <span className="font-black text-slate-100 text-sm">{row.ticker}</span>
           )}
@@ -715,11 +771,11 @@ function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, ed
           ) : <Badge variant={String(row.type || "").toUpperCase() === "BUY" ? "buy" : String(row.type || "").toUpperCase() === "SELL" ? "sell" : "summary"}>{row.type}</Badge>}
         </Td>
 
-        <Td style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.25 }}>
+        <Td style={{ whiteSpace: "nowrap" }}>
           {isEditing ? (
             <input value={displayed.event ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, event: e.target.value }))}
               className={`${IC} w-full`} />
-          ) : row.event}
+          ) : (String(row.event || "").toLowerCase() === "assigned" ? "Ass" : row.event)}
         </Td>
 
         <Td style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.25 }}>
@@ -732,21 +788,21 @@ function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, ed
         <Td>
           {isEditing ? (
             <input type="date" value={displayed.openDate ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, openDate: e.target.value }))}
-              className={`${IC} w-32`} />
+              className={`${IC} w-full`} />
           ) : (row.openDate || "-")}
         </Td>
 
         <Td>
           {isEditing ? (
             <input type="date" value={displayed.closeDate ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, closeDate: e.target.value }))}
-              className={`${IC} w-32`} />
+              className={`${IC} w-full`} />
           ) : (row.closeDate || "-")}
         </Td>
 
         <Td>
           {isEditing ? (
             <input type="date" value={displayed.expiry ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, expiry: e.target.value }))}
-              className={`${IC} w-32`} />
+              className={`${IC} w-full`} />
           ) : (row.expiry || "-")}
         </Td>
 
@@ -772,15 +828,14 @@ function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, ed
         </Td>
 
         <Td>
-          {isEditing ? (
-            <input value={displayed.fee ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, fee: e.target.value }))}
-              className={`${IC} w-[70px]`} inputMode="decimal" />
-          ) : (row.fee === "" ? "" : formatMoney(row.fee))}
+          <span className="font-black text-xs" style={{ color: pl === null ? "#64748B" : plColor(pl) }}>
+            {pl === null ? "OPEN" : formatMoney(pl)}
+          </span>
         </Td>
 
         <Td>
-          <span className="font-black text-xs" style={{ color: pl === null ? "#64748B" : plColor(pl) }}>
-            {pl === null ? "OPEN" : formatMoney(pl)}
+          <span className="font-black text-xs" style={{ color: unpl === null ? "#64748B" : plColor(unpl) }}>
+            {unpl === null ? "-" : formatMoney(unpl)}
           </span>
         </Td>
 
