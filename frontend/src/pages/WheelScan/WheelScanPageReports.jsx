@@ -20,6 +20,49 @@ function parseDateInput(val) {
   return val ? new Date(val + "T00:00:00Z") : null;
 }
 
+function ConfirmScanModal({ onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative w-full max-w-sm rounded-2xl border border-white/[0.1] bg-[#0F1729] p-6 shadow-2xl">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/[0.15] border border-blue-500/[0.25]">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" className="w-5 h-5 text-blue-400">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18V12M11 18V8M16 18v-5" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 18h16" />
+            </svg>
+          </div>
+          <div>
+            <div className="text-sm font-bold text-slate-100">Run Wheel Scan?</div>
+            <div className="text-xs text-slate-500">Scans the full options universe · takes 5–10 min</div>
+          </div>
+        </div>
+        <div className="mb-5 rounded-xl bg-white/[0.04] border border-white/[0.07] px-4 py-3">
+          <p className="text-xs text-slate-400 leading-relaxed">
+            This will fetch live options data across all tracked tickers and run the wheel strategy analysis. A new scan report will appear in the history when complete.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex-1 rounded-xl border border-white/[0.1] bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-slate-400 hover:bg-white/[0.07] hover:text-slate-200 transition-all cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-all cursor-pointer"
+          >
+            Run Scan →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Badge({ label, color }) {
   const colorMap = {
     green:  "bg-emerald-500/[0.15] text-emerald-400 border border-emerald-500/[0.25]",
@@ -69,6 +112,13 @@ export default function WheelScanPageReports() {
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-5xl mx-auto">
+      {confirmScan && (
+        <ConfirmScanModal
+          onConfirm={() => { setConfirmScan(false); triggerMutation.mutate(); }}
+          onCancel={() => setConfirmScan(false)}
+        />
+      )}
+
       <PageHeader
         title="Wheel Strategy Scans"
         subtitle="Daily options scan — Cash-Secured Puts & Covered Calls"
@@ -104,41 +154,20 @@ export default function WheelScanPageReports() {
             Clear
           </button>
         )}
-        <div className="ml-auto flex items-center gap-2">
-          {confirmScan ? (
-            <>
-              <span className="text-xs text-slate-400">Run a new scan?</span>
-              <button
-                type="button"
-                onClick={() => { setConfirmScan(false); triggerMutation.mutate(); }}
-                disabled={triggerMutation.isPending}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors cursor-pointer"
-              >
-                Yes, run it
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmScan(false)}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmScan(true)}
-              disabled={triggerMutation.isPending}
-              className={[
-                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all cursor-pointer",
-                triggerMutation.isPending
-                  ? "bg-blue-600/50 text-blue-300 cursor-not-allowed"
-                  : "bg-blue-600 hover:bg-blue-500 text-white",
-              ].join(" ")}
-            >
-              {triggerMutation.isPending ? "Triggering..." : "Run Scan Now"}
-            </button>
-          )}
+        <div className="ml-auto">
+          <button
+            type="button"
+            onClick={() => setConfirmScan(true)}
+            disabled={triggerMutation.isPending}
+            className={[
+              "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all cursor-pointer",
+              triggerMutation.isPending
+                ? "bg-blue-600/50 text-blue-300 cursor-not-allowed"
+                : "bg-blue-600 hover:bg-blue-500 text-white",
+            ].join(" ")}
+          >
+            {triggerMutation.isPending ? "Triggering…" : "Run Scan Now"}
+          </button>
         </div>
       </div>
 

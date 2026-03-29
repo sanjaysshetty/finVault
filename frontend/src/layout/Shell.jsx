@@ -59,7 +59,7 @@ export default function Shell() {
       <div className="flex flex-1 min-h-0">
         <SideNav activeAccount={activeAccount} />
         <main
-          className="flex-1 overflow-auto min-w-0 p-5"
+          className="flex-1 overflow-auto min-w-0 p-3 sm:p-5"
           style={{
             background:
               "radial-gradient(ellipse 1200px 800px at 20% 0%, rgba(99,102,241,0.05) 0%, transparent 55%), #0A0F1E",

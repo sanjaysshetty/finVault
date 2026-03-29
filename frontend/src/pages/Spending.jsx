@@ -329,26 +329,25 @@ export default function Spending() {
 
       {/* Header */}
       <div className="mb-4">
-        <PageHeader title="Spending" icon={PageIcons.spending}>
-          <div className="flex gap-2.5 items-center flex-wrap">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search product description…"
-              className="w-64 bg-[#080D1A] border border-white/[0.08] text-slate-200 px-3 py-2.5 rounded-xl text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
-            />
-            {canWrite && <button onClick={openScanner} disabled={uploading} className={btnCls(uploading)}>Scan</button>}
-            {canWrite && <input ref={fileInputRef} type="file" accept="image/*,application/pdf" multiple onChange={(e) => handleUploadFiles(Array.from(e.target.files || []))} className="hidden" id="receipt-file-input" />}
-            {canWrite && <button onClick={() => document.getElementById("receipt-file-input")?.click()} disabled={uploading} className={btnCls(uploading)}>Upload</button>}
-            <button
-              onClick={() => refetch()}
-              disabled={isFetching}
-              className={btnCls(isFetching)}
-            >
-              {isFetching ? "Refreshing…" : "Refresh"}
-            </button>
-          </div>
-        </PageHeader>
+        <PageHeader title="Spending" icon={PageIcons.spending} />
+        <div className="mt-3 flex flex-wrap gap-2.5 items-center">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search product description…"
+            className="flex-1 min-w-[160px] bg-[#080D1A] border border-white/[0.08] text-slate-200 px-3 py-2.5 rounded-xl text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
+          />
+          {canWrite && <button onClick={openScanner} disabled={uploading} className={btnCls(uploading)}>Scan</button>}
+          {canWrite && <input ref={fileInputRef} type="file" accept="image/*,application/pdf" multiple onChange={(e) => handleUploadFiles(Array.from(e.target.files || []))} className="hidden" id="receipt-file-input" />}
+          {canWrite && <button onClick={() => document.getElementById("receipt-file-input")?.click()} disabled={uploading} className={btnCls(uploading)}>Upload</button>}
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className={btnCls(isFetching)}
+          >
+            {isFetching ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {(uploadMsg || uploading) && (

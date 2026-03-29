@@ -361,7 +361,6 @@ export default function Bullion() {
                     <tr key={h.metal} className="hover:bg-white/[0.02] transition-colors">
                       <td className="px-4 py-3">
                         <p className="font-bold text-slate-100 text-sm">{h.label}</p>
-                        <p className="text-[11px] text-slate-600 mt-0.5">Buys: {h.buys} · Sells: {h.sells}</p>
                       </td>
                       <td className="px-4 py-3 text-sm text-slate-300 numeric">{round2(h.qty).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                       <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>

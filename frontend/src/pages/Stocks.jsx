@@ -315,7 +315,7 @@ export default function Stocks() {
               )}
 
               <form onSubmit={onSubmit} className="space-y-3">
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <FLabel label="Type">
                     <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className={inputCls} disabled={saving}>
                       <option value="BUY">Buy</option>
@@ -339,7 +339,7 @@ export default function Stocks() {
                   </FLabel>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <FLabel label="Shares">
                     <input value={form.shares} onChange={(e) => setForm((f) => ({ ...f, shares: e.target.value }))} placeholder="e.g., 10" inputMode="decimal" className={inputCls} disabled={saving} />
                   </FLabel>
@@ -351,7 +351,7 @@ export default function Stocks() {
                   </FLabel>
                 </div>
 
-                <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+                <div className="flex flex-col sm:grid sm:grid-cols-[1fr_auto] gap-3 items-end">
                   <FLabel label="Notes (optional)">
                     <input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="e.g., earnings buy, long-term" className={inputCls} disabled={saving} />
                   </FLabel>
@@ -396,13 +396,12 @@ export default function Stocks() {
                       <tr key={h.symbol} className="hover:bg-white/[0.02] transition-colors">
                         <td className="px-4 py-3">
                           <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
-                          <p className="text-[11px] text-slate-600 mt-0.5">Buys: {h.buys} · Sells: {h.sells}</p>
                         </td>
                         <td className="px-4 py-3 text-sm text-slate-300 numeric">{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                         <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
                         <td className="px-4 py-3">
-                          <p className={`text-sm font-bold numeric ${plClass(mv.change)}`}>{formatMoney(h.spot)}</p>
-                          {mv.hasPrev && <p className={`text-[11px] font-semibold mt-0.5 numeric ${plClass(mv.change)}`}>{formatPct(mv.pct)}</p>}
+                          <span className={`text-sm font-bold numeric ${plClass(mv.change)}`}>{formatMoney(h.spot)}</span>
+                          {mv.hasPrev && <span className={`ml-1.5 text-[11px] font-semibold numeric ${plClass(mv.change)}`}>{formatPct(mv.pct)}</span>}
                         </td>
                         <td className={`px-4 py-3 text-sm font-bold numeric ${mv.hasPrev ? plClass(dayGL) : "text-slate-600"}`}>
                           {mv.hasPrev ? formatMoney(dayGL) : "—"}
