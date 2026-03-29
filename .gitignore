@@ -45,3 +45,10 @@ backend/keys.json
 
 # Local-only files
 local/
+
+# Python virtual environments
+.venv/
+**/.venv/
+
+# Architecture Diagrams
+finVault-architecture.html

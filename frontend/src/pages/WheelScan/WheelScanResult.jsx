@@ -339,7 +339,7 @@ export default function WheelScanResult() {
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
         {[
           { label: "Stocks Scanned",  value: data.universe_size,  color: "text-slate-200" },
           { label: "Proceed",         value: data.proceed_count,  color: "text-emerald-400" },
@@ -347,9 +347,9 @@ export default function WheelScanResult() {
           { label: "Skip",            value: data.skip_count,     color: "text-slate-400" },
           { label: "Duration",        value: data.duration_s ? `${Math.round(data.duration_s / 60)}m ${data.duration_s % 60}s` : "—", color: "text-slate-300" },
         ].map(({ label, value, color }) => (
-          <div key={label} className="rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-center">
-            <p className="text-xs text-slate-500 mb-1">{label}</p>
-            <p className={`text-2xl font-black ${color}`}>{value}</p>
+          <div key={label} className="rounded-2xl border border-white/[0.06] bg-white/[0.02] px-3 py-3 text-center">
+            <p className="text-xs text-slate-500 mb-1 truncate">{label}</p>
+            <p className={`text-xl font-black ${color}`}>{value ?? "—"}</p>
           </div>
         ))}
       </div>
@@ -393,24 +393,26 @@ export default function WheelScanResult() {
           <h2 className="text-base font-black text-slate-500 uppercase tracking-wide mb-4">
             Skip ({skip.length})
           </h2>
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-            <div className="grid px-4 py-3 border-b border-white/[0.06] bg-white/[0.02]"
-              style={{ gridTemplateColumns: "80px 1fr 70px 70px 80px" }}>
-              {["Ticker", "Sector", "Score", "Rev%", "Reason"].map(h => (
-                <span key={h} className="text-xs font-bold uppercase tracking-wide text-slate-600">{h}</span>
+          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden overflow-x-auto">
+            <div className="min-w-[520px]">
+              <div className="grid px-4 py-3 border-b border-white/[0.06] bg-white/[0.02]"
+                style={{ gridTemplateColumns: "90px 1fr 70px 70px 100px" }}>
+                {["Ticker", "Sector", "Score", "Rev%", "Reason"].map(h => (
+                  <span key={h} className="text-xs font-bold uppercase tracking-wide text-slate-600 text-center first:text-left">{h}</span>
+                ))}
+              </div>
+              {skip.map((s, i) => (
+                <div key={s.ticker}
+                  className={`grid items-center px-4 py-2.5 ${i < skip.length - 1 ? "border-b border-white/[0.04]" : ""}`}
+                  style={{ gridTemplateColumns: "90px 1fr 70px 70px 100px" }}>
+                  <span className="text-sm font-bold text-slate-400">{s.ticker}</span>
+                  <span className="text-xs text-slate-600">{s.sector}</span>
+                  <span className="text-sm text-slate-500 text-center">{s.adj_score}</span>
+                  <span className="text-xs text-slate-500 text-center">{fmtPct(s.rev_growth)}</span>
+                  <span className="text-xs text-slate-600 truncate" title={s.macro_summary}>{s.macro_summary?.slice(0, 50) || "—"}</span>
+                </div>
               ))}
             </div>
-            {skip.map((s, i) => (
-              <div key={s.ticker}
-                className={`grid items-center px-4 py-2.5 ${i < skip.length - 1 ? "border-b border-white/[0.04]" : ""}`}
-                style={{ gridTemplateColumns: "80px 1fr 70px 70px 80px" }}>
-                <span className="text-sm font-bold text-slate-400">{s.ticker}</span>
-                <span className="text-xs text-slate-600">{s.sector}</span>
-                <span className="text-sm text-slate-500">{s.adj_score}</span>
-                <span className="text-xs text-slate-500">{fmtPct(s.rev_growth)}</span>
-                <span className="text-xs text-slate-600 truncate" title={s.macro_summary}>{s.macro_summary?.slice(0, 40) || "—"}</span>
-              </div>
-            ))}
           </div>
         </section>
       )}

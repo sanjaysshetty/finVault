@@ -533,7 +533,7 @@ export default function Futures() {
 
           <form onSubmit={onSubmit} className="mt-4 grid gap-3">
             {/* Row 1 */}
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <FLabel label="Type">
                 <select
                   value={form.type}
@@ -580,7 +580,7 @@ export default function Futures() {
             </div>
 
             {/* Row 2 */}
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <FLabel label="Qty (contracts)">
                 <input
                   value={form.qty}
@@ -625,7 +625,7 @@ export default function Futures() {
             </div>
 
             {/* Row 3 */}
-            <div className="grid gap-3" style={{ gridTemplateColumns: "2fr 1fr 1fr" }}>
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
               <FLabel label="Notes (optional)">
                 <input
                   value={form.notes}

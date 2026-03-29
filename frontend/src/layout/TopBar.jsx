@@ -16,7 +16,7 @@ export default function TopBar({ accounts, activeAccount, onSwitchAccount }) {
     <header
       className={[
         "hidden md:grid shrink-0",
-        "h-16 px-4 gap-4",
+        "h-[54px] px-4 gap-4",
         "grid-cols-[auto_1fr_auto] items-center",
         "bg-[#080D1A] border-b border-white/[0.06]",
         "shadow-[0_1px_0_rgba(255,255,255,0.04),0_8px_32px_rgba(0,0,0,0.5)]",

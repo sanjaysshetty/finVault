@@ -14,15 +14,15 @@ export function PageHeader({ title, icon, subtitle, children }) {
         {icon && (
           <span className="text-blue-400 opacity-75 shrink-0">{icon}</span>
         )}
-        <div className="min-w-0">
+        <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
           <h1
-            className="text-2xl font-black text-slate-100 tracking-tight"
+            className="text-lg font-black text-slate-100 tracking-tight shrink-0"
             style={{ fontFamily: "Epilogue, sans-serif" }}
           >
             {title}
           </h1>
           {subtitle && (
-            <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>
+            <span className="text-xs text-slate-500">{subtitle}</span>
           )}
         </div>
       </div>

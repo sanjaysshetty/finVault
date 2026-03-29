@@ -158,38 +158,53 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l6 6M15 9l-6 6" />
     </Icon>
   ),
+  assetHub: (
+    <Icon>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75H4.5A.75.75 0 0 0 3.75 4.5v5.25c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 3.75h-5.25a.75.75 0 0 0-.75.75v5.25c0 .414.336.75.75.75H19.5a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 13.5H4.5a.75.75 0 0 0-.75.75V19.5c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75v-5.25a.75.75 0 0 0-.75-.75Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 13.5a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5Z" />
+    </Icon>
+  ),
 };
 
-/* ── Section (collapsible group) ─────────────────────────── */
+/* ── Section header (main menu row) ──────────────────────── */
 function Section({ title, open, onToggle, icon, children }) {
   return (
-    <div className="mb-1.5">
+    <div className="mb-0.5">
       <button
         type="button"
         onClick={onToggle}
         className={[
           "w-full flex items-center justify-between",
-          "px-2 py-1.5 rounded-lg",
-          "text-sm font-bold uppercase tracking-wide",
-          "text-slate-100 hover:text-white",
-          "transition-colors cursor-pointer",
+          "px-3 py-2.5 rounded-xl mx-0",
+          "text-sm font-semibold text-slate-200 hover:text-white",
+          "hover:bg-white/[0.05] transition-all duration-150 cursor-pointer group",
         ].join(" ")}
       >
-        <span className="truncate flex items-center gap-2">
-          {icon}
+        <span className="flex items-center gap-2.5">
+          <span className="text-slate-400 group-hover:text-slate-300 transition-colors shrink-0">{icon}</span>
           <span>{title}</span>
         </span>
-        <span className="ml-1 text-slate-100 text-xs">
-          {open ? "▾" : "▸"}
-        </span>
+        <svg
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+          className={`w-3.5 h-3.5 text-slate-600 transition-transform duration-200 shrink-0 ${open ? "rotate-180" : ""}`}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+        </svg>
       </button>
 
-      {open && <div className="mt-0.5 space-y-0 ml-2">{children}</div>}
+      <div className={`overflow-hidden transition-all duration-200 ${open ? "max-h-96 opacity-100" : "max-h-0 opacity-0"}`}>
+        {/* Indent guide + sub-items */}
+        <div className="ml-[22px] pl-3.5 border-l border-white/[0.07] mb-0.5 mt-0 space-y-0">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }
 
-/* ── Nav item ─────────────────────────────────────────────── */
+/* ── Sub-menu item ────────────────────────────────────────── */
 function Item({ to, label, icon }) {
   return (
     <NavLink
@@ -197,18 +212,23 @@ function Item({ to, label, icon }) {
       title={label}
       className={({ isActive }) =>
         [
-          "gap-1.5",
-          "flex items-center px-3 py-[2px] rounded-xl",
-          "text-[1.05rem] font-medium transition-all duration-150",
-          "whitespace-nowrap overflow-hidden text-ellipsis",
+          "flex items-center gap-2 px-2.5 py-1 rounded-lg",
+          "text-[13px] font-medium transition-all duration-150",
+          "whitespace-nowrap overflow-hidden",
           isActive
-            ? "bg-blue-500/[0.12] text-blue-300 font-bold border border-blue-500/[0.2]"
-            : "text-slate-500 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent",
+            ? "bg-blue-500/[0.12] text-blue-300 font-semibold"
+            : "text-slate-500 hover:text-slate-200 hover:bg-white/[0.05]",
         ].join(" ")
       }
     >
-      <span className="mr-1.5 text-slate-300">{icon}</span>
-      <span className="truncate">{label}</span>
+      {({ isActive }) => (
+        <>
+          <span className={`shrink-0 transition-colors ${isActive ? "text-blue-400" : "text-slate-600"}`}>
+            {icon}
+          </span>
+          <span className="truncate">{label}</span>
+        </>
+      )}
     </NavLink>
   );
 }
@@ -317,13 +337,35 @@ export default function SideNav({ activeAccount }) {
           onToggle={() => setOpenResearch((v) => !v)}
         >
           <Item to="/research/wheel-scan" label="Wheel Scan" icon={icons.wheelScan} />
+          <Item to="/research/asset-hub"  label="Asset Hub"  icon={icons.assetHub} />
         </Section>
       )}
 
       {/* Accounts link — owners only */}
       {(!activeAccount || activeAccount.role === "owner") && (
-        <div className="mt-6 pt-4 border-t border-white/[0.06]">
-          <Item to="/accounts" label="Accounts" icon={icons.accounts} />
+        <div className="mt-4 pt-4 border-t border-white/[0.06]">
+          <NavLink
+            to="/accounts"
+            title="Accounts"
+            className={({ isActive }) =>
+              [
+                "flex items-center gap-2.5 px-3 py-2.5 rounded-xl",
+                "text-sm font-semibold transition-all duration-150",
+                isActive
+                  ? "bg-blue-500/[0.12] text-blue-300"
+                  : "text-slate-200 hover:text-white hover:bg-white/[0.05]",
+              ].join(" ")
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <span className={`shrink-0 transition-colors ${isActive ? "text-blue-400" : "text-slate-400"}`}>
+                  {icons.accounts}
+                </span>
+                <span>Accounts</span>
+              </>
+            )}
+          </NavLink>
         </div>
       )}
     </aside>
