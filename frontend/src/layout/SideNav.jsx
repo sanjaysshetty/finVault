@@ -158,6 +158,14 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l6 6M15 9l-6 6" />
     </Icon>
   ),
+  capitalGains: (
+    <Icon>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6h14" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6l-2 5h4l-2-5z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 6l-2 5h4l-2-5z" />
+    </Icon>
+  ),
   assetHub: (
     <Icon>
       <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75H4.5A.75.75 0 0 0 3.75 4.5v5.25c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" />
@@ -262,7 +270,7 @@ export default function SideNav({ activeAccount }) {
       {/* Assets section — only rendered if at least one asset page is visible */}
       {(hasAsset("portfolio") || hasAsset("stocks") || hasAsset("crypto") ||
         hasAsset("bullion")   || hasAsset("futures") || hasAsset("options") ||
-        hasAsset("fixedIncome") || hasAsset("otherAssets")) && (
+        hasAsset("fixedIncome") || hasAsset("otherAssets") || hasAsset("capitalGains")) && (
         <Section
           title="Assets"
           open={openAssets}
@@ -276,7 +284,8 @@ export default function SideNav({ activeAccount }) {
           {hasAsset("futures")     && <Item to="/assets/futures"     label="Futures"      icon={icons.futures} />}
           {hasAsset("options")     && <Item to="/assets/options"     label="Options"      icon={icons.options} />}
           {hasAsset("fixedIncome") && <Item to="/assets/fixedincome" label="Fixed Income" icon={icons.fixedIncome} />}
-          {hasAsset("otherAssets") && <Item to="/assets/otherassets" label="Others"       icon={icons.others} />}
+          {hasAsset("otherAssets")   && <Item to="/assets/otherassets"    label="Others"        icon={icons.others} />}
+          {hasAsset("capitalGains")  && <Item to="/assets/capital-gains"  label="Capital Gains" icon={icons.capitalGains} />}
         </Section>
       )}
 

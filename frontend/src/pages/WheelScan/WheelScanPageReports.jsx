@@ -184,15 +184,16 @@ export default function WheelScanPageReports() {
       )}
 
       {/* Table */}
-      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
+      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
         {/* Header */}
-        <div
-          className="grid items-center px-4 py-3 border-b border-white/[0.06] bg-white/[0.02]"
-          style={{ gridTemplateColumns: "140px 1fr 80px 80px 80px 100px 90px" }}
-        >
-          {["Scan Date", "Summary", "Proceed", "Watch", "Skip", "Duration", ""].map((h) => (
-            <span key={h} className="text-xs font-bold uppercase tracking-wide text-slate-500">{h}</span>
-          ))}
+        <div className="grid items-center px-4 py-3 border-b border-white/[0.06] bg-white/[0.02] [grid-template-columns:120px_minmax(0,1fr)_64px_64px_64px] sm:[grid-template-columns:140px_minmax(0,1fr)_80px_80px_80px_100px_48px]">
+          <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Scan Date</span>
+          <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Summary</span>
+          <span className="text-xs font-bold uppercase tracking-wide text-slate-500 text-center">Proceed</span>
+          <span className="text-xs font-bold uppercase tracking-wide text-slate-500 text-center">Watch</span>
+          <span className="text-xs font-bold uppercase tracking-wide text-slate-500 text-center">Skip</span>
+          <span className="hidden sm:block text-xs font-bold uppercase tracking-wide text-slate-500 text-center">Duration</span>
+          <span className="hidden sm:block" />
         </div>
 
         {isLoading && (
@@ -213,17 +214,17 @@ export default function WheelScanPageReports() {
             onClick={() => navigate(`/research/wheel-scan/${scan.scan_id}`)}
             className={[
               "grid items-center px-4 py-3.5 cursor-pointer transition-colors",
+              "[grid-template-columns:120px_minmax(0,1fr)_64px_64px_64px] sm:[grid-template-columns:140px_minmax(0,1fr)_80px_80px_80px_100px_48px]",
               "hover:bg-white/[0.04]",
               idx < scans.length - 1 ? "border-b border-white/[0.04]" : "",
             ].join(" ")}
-            style={{ gridTemplateColumns: "140px 1fr 80px 80px 80px 100px 90px" }}
           >
             {/* Date */}
             <span className="text-sm font-semibold text-slate-200">{formatDate(scan.scan_date)}</span>
 
-            {/* Summary bar */}
+            {/* Summary — bar hidden on mobile, stocks text always visible */}
             <div className="flex items-center gap-1.5 min-w-0 pr-4">
-              <div className="flex-1 h-2 rounded-full bg-white/[0.06] overflow-hidden flex">
+              <div className="hidden sm:flex flex-1 h-2 rounded-full bg-white/[0.06] overflow-hidden">
                 {scan.proceed_count > 0 && (
                   <div
                     className="h-full bg-emerald-500"
@@ -241,21 +242,27 @@ export default function WheelScanPageReports() {
             </div>
 
             {/* Proceed */}
-            <Badge label={scan.proceed_count} color="green" />
+            <div className="flex justify-center">
+              <Badge label={scan.proceed_count} color="green" />
+            </div>
 
             {/* Watch */}
-            <Badge label={scan.watch_count} color="yellow" />
+            <div className="flex justify-center">
+              <Badge label={scan.watch_count} color="yellow" />
+            </div>
 
             {/* Skip */}
-            <span className="text-sm text-slate-500">{scan.skip_count}</span>
+            <div className="flex justify-center">
+              <span className="text-sm text-slate-500">{scan.skip_count}</span>
+            </div>
 
-            {/* Duration */}
-            <span className="text-xs text-slate-500">
+            {/* Duration — hidden on mobile */}
+            <span className="hidden sm:block text-xs text-slate-500 text-center">
               {scan.duration_s ? `${Math.round(scan.duration_s / 60)}m ${scan.duration_s % 60}s` : "—"}
             </span>
 
             {/* Arrow */}
-            <span className="text-slate-600 text-lg">›</span>
+            <span className="hidden sm:block text-slate-600 text-lg">›</span>
           </div>
         ))}
       </div>

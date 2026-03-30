@@ -11,6 +11,7 @@ export const PAGE_ROUTES = [
   { pageKey: "options",           path: "/assets/options" },
   { pageKey: "fixedIncome",       path: "/assets/fixedincome" },
   { pageKey: "otherAssets",       path: "/assets/otherassets" },
+  { pageKey: "capitalGains",      path: "/assets/capital-gains" },
   { pageKey: "nav",               path: "/nav/dashboard" },
   { pageKey: "liabilities",       path: "/liabilities/dashboard" },
   { pageKey: "insurance",         path: "/insurance/dashboard" },
