@@ -32,7 +32,12 @@ export default function TopBar({ accounts, activeAccount, onSwitchAccount }) {
         />
         <span
           onClick={goHome}
-          className="cursor-pointer text-xl font-black tracking-tight text-slate-50 whitespace-nowrap hover:text-white transition-colors"
+          className={[
+            "cursor-pointer text-xl font-black tracking-tight whitespace-nowrap transition-colors",
+            import.meta.env.VITE_APP_ENV === "dev"
+              ? "text-amber-400 hover:text-amber-300"
+              : "text-slate-50 hover:text-white",
+          ].join(" ")}
           style={{ fontFamily: "Epilogue, sans-serif" }}
         >
           finVault
