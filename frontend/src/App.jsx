@@ -20,6 +20,7 @@ import AccountsPage from "./pages/AccountsPage";
 import WheelScanPageReports from "./pages/WheelScan/WheelScanPageReports";
 import WheelScanResult from "./pages/WheelScan/WheelScanResult";
 import AssetHub from "./pages/AssetHub";
+import CapitalGains from "./pages/CapitalGains";
 import AuthCallback from "./auth/AuthCallback";
 import RequireAuth from "./auth/RequireAuth";
 import { useAccounts } from "./hooks/useAccounts.js";
@@ -68,6 +69,7 @@ export default function App() {
           <Route path="/assets/fixedincome" element={<FixedIncome />} />
           <Route path="/assets/otherassets" element={<OtherAssets />} />
           <Route path="/assets/crypto" element={<Crypto />} />
+          <Route path="/assets/capital-gains" element={<CapitalGains />} />
 
           {/* Net Asset Value */}
           <Route path="/nav/dashboard" element={<NAV />} />

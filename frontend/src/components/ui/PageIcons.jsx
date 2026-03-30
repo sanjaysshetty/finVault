@@ -108,6 +108,14 @@ export const PageIcons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M8 11h6M11 8v6" />
     </Icon>
   ),
+  capitalGains: (
+    <Icon>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6h14" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6l-2 5h4l-2-5z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 6l-2 5h4l-2-5z" />
+    </Icon>
+  ),
   assetHub: (
     <Icon>
       <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75H4.5A.75.75 0 0 0 3.75 4.5v5.25c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" />

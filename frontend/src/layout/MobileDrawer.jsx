@@ -32,6 +32,7 @@ const icons = {
   receipts:    <Icon><path strokeLinecap="round" strokeLinejoin="round" d="M7 4h10v16l-2-1.3L13 20l-2-1.3L9 20l-2-1.3L5 20V6a2 2 0 0 1 2-2z" /><path strokeLinecap="round" strokeLinejoin="round" d="M9 9h6M9 12h6" /></Icon>,
   wheelScan:   <Icon><circle cx="12" cy="12" r="7" /><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M12 8v8" /><path strokeLinecap="round" strokeLinejoin="round" d="M9 9l6 6M15 9l-6 6" /></Icon>,
   assetHub:    <Icon><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75H4.5A.75.75 0 0 0 3.75 4.5v5.25c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 3.75h-5.25a.75.75 0 0 0-.75.75v5.25c0 .414.336.75.75.75H19.5a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 13.5H4.5a.75.75 0 0 0-.75.75V19.5c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75v-5.25a.75.75 0 0 0-.75-.75Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M17.25 13.5a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5Z" /></Icon>,
+  capitalGains: <Icon><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18" /><path strokeLinecap="round" strokeLinejoin="round" d="M5 6h14" /><path strokeLinecap="round" strokeLinejoin="round" d="M5 6l-2 5h4l-2-5z" /><path strokeLinecap="round" strokeLinejoin="round" d="M19 6l-2 5h4l-2-5z" /></Icon>,
   accounts:    <Icon><circle cx="12" cy="8.2" r="3.2" /><path strokeLinecap="round" strokeLinejoin="round" d="M5 19c1.6-3 4-4.5 7-4.5s5.4 1.5 7 4.5" /></Icon>,
 };
 
@@ -174,7 +175,7 @@ export default function MobileDrawer({ open, onClose, activeAccount }) {
         <nav className="flex-1 py-3 space-y-0">
           {(has("portfolio") || has("stocks") || has("crypto") ||
             has("bullion")   || has("futures") || has("options") ||
-            has("fixedIncome") || has("otherAssets")) && (
+            has("fixedIncome") || has("otherAssets") || has("capitalGains")) && (
             <Section
               title="Assets"
               icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-3.5 h-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h16" /></svg>}
@@ -188,7 +189,8 @@ export default function MobileDrawer({ open, onClose, activeAccount }) {
               {has("fixedIncome") && <Item to="/assets/fixedincome" label="Fixed Income" icon={icons.fixedIncome} onClose={onClose} />}
               {has("options")     && <Item to="/assets/options"     label="Options"      icon={icons.options}     onClose={onClose} />}
               {has("otherAssets") && <Item to="/assets/otherassets" label="Others"       icon={icons.others}      onClose={onClose} />}
-              {has("futures")     && <Item to="/assets/futures"     label="Futures"      icon={icons.futures}     onClose={onClose} />}
+              {has("futures")      && <Item to="/assets/futures"       label="Futures"       icon={icons.futures}      onClose={onClose} />}
+              {has("capitalGains") && <Item to="/assets/capital-gains" label="Capital Gains" icon={icons.capitalGains}  onClose={onClose} />}
             </Section>
           )}
 
