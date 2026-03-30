@@ -32,7 +32,10 @@ export default function MobileHeader({ onMenuClick }) {
           className="w-7 h-7 object-contain shrink-0"
         />
         <span
-          className="text-xl font-black tracking-tight text-slate-50"
+          className={[
+            "text-xl font-black tracking-tight",
+            import.meta.env.VITE_APP_ENV === "dev" ? "text-amber-400" : "text-slate-50",
+          ].join(" ")}
           style={{ fontFamily: "Epilogue, sans-serif" }}
         >
           finVault

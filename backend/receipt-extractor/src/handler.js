@@ -102,13 +102,33 @@ function formatReceiptDateMMDDYYYY(purchaseDate) {
   return `${mm}-${dd}-${yyyy}`;
 }
 
+function getCurrentDateYYYYMMDD() {
+  const now = new Date();
+  if (Number.isNaN(now.getTime())) return null;
+  return now.toISOString().slice(0, 10);
+}
+
+function isYYYYMMDD(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? "").trim());
+}
+
+function resolvePurchaseDate(purchaseDate) {
+  const normalized = String(purchaseDate ?? "").trim();
+  if (isYYYYMMDD(normalized)) return normalized;
+  return getCurrentDateYYYYMMDD();
+}
+
+function resolveReceiptDateForKey(purchaseDate) {
+  return resolvePurchaseDate(purchaseDate) ?? "UnknownDate";
+}
+
 /**
  * Final format:
  *   <Store>_<MM-DD-YYYY>_<UniqueID>
  */
 function buildReceiptId({ store, purchaseDate, uniqueId }) {
   const storePart = simplifyStoreName(store);
-  const datePart = formatReceiptDateMMDDYYYY(purchaseDate);
+  const datePart = formatReceiptDateMMDDYYYY(resolveReceiptDateForKey(purchaseDate));
   return `${storePart}_${datePart}_${uniqueId}`;
 }
 
@@ -300,7 +320,7 @@ async function batchWriteAll(table, requests) {
 async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, userId }) {
   const table = requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
-  const purchaseDate = extracted?.receipt?.purchaseDate ?? null;
+  const purchaseDate = resolvePurchaseDate(extracted?.receipt?.purchaseDate);
 
   // META row (NOT part of curation queue)
   await ddb.send(
@@ -456,9 +476,12 @@ async function processRecord(rec) {
     console.log("OpenAI extraction done. Lines:", Array.isArray(extracted.lines) ? extracted.lines.length : 0);
 
     const store = extracted?.receipt?.store ?? null;
-    const purchaseDate = extracted?.receipt?.purchaseDate ?? null;
+    const purchaseDate = resolvePurchaseDate(extracted?.receipt?.purchaseDate);
 
     receiptId = buildReceiptId({ store, purchaseDate, uniqueId });
+    if (!isYYYYMMDD(extracted?.receipt?.purchaseDate)) {
+      console.log("OpenAI did not return a valid purchaseDate. Using current date fallback.");
+    }
     console.log("final receiptId:", receiptId);
 
     console.log("Writing to DynamoDB table:", process.env.RECEIPT_LEDGER_TABLE);
