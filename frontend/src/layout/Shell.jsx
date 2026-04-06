@@ -5,6 +5,7 @@ import TopBar from "./TopBar";
 import MobileHeader from "./MobileHeader";
 import MobileDrawer from "./MobileDrawer";
 import { useAccounts } from "../hooks/useAccounts.js";
+import { useTheme } from "../hooks/useTheme.js";
 import NoPermissionsPage from "../components/ui/NoPermissionsPage.jsx";
 import { pageKeyForPath, canSeePage, firstAccessiblePath } from "../lib/pages.js";
 
@@ -16,6 +17,7 @@ export default function Shell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const { accounts, activeAccount, switchAccount } = useAccounts();
+  const { theme, toggle: toggleTheme, resetToAuto, isManual } = useTheme();
   const location = useLocation();
 
   // Hooks must all be called before any early returns (Rules of Hooks).
@@ -44,10 +46,14 @@ export default function Shell() {
         accounts={accounts}
         activeAccount={activeAccount}
         onSwitchAccount={switchAccount}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        isManual={isManual}
+        onResetToAuto={resetToAuto}
       />
 
       {/* Mobile header (visible on small screens only) */}
-      <MobileHeader onMenuClick={() => setDrawerOpen(true)} />
+      <MobileHeader onMenuClick={() => setDrawerOpen(true)} theme={theme} onToggleTheme={toggleTheme} isManual={isManual} onResetToAuto={resetToAuto} />
 
       {/* Mobile slide-in drawer */}
       <MobileDrawer
@@ -60,10 +66,7 @@ export default function Shell() {
         <SideNav activeAccount={activeAccount} />
         <main
           className="flex-1 overflow-auto min-w-0 p-3 sm:p-5"
-          style={{
-            background:
-              "radial-gradient(ellipse 1200px 800px at 20% 0%, rgba(99,102,241,0.05) 0%, transparent 55%), #0A0F1E",
-          }}
+          style={{ background: "var(--fv-gradient)" }}
         >
           {noPermissions
             ? <NoPermissionsPage accountName={activeAccount?.accountName} />

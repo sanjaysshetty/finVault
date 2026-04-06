@@ -14,18 +14,22 @@ from boto3.dynamodb.conditions import Key
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
-FIN_ASSETS_TABLE   = os.environ.get("FIN_ASSETS_TABLE", "")
+ANTHROPIC_API_KEY         = os.environ.get("ANTHROPIC_API_KEY", "")
+FIN_ASSETS_TABLE          = os.environ.get("FIN_ASSETS_TABLE", "")
+FIN_ACCOUNT_MEMBERS_TABLE = os.environ.get("FIN_ACCOUNT_MEMBERS_TABLE", "")
+FIN_ACCOUNTS_TABLE        = os.environ.get("FIN_ACCOUNTS_TABLE", "")
 REPORTS_BUCKET     = os.environ.get("REPORTS_BUCKET", "")
 REPORTS_PREFIX     = os.environ.get("REPORTS_PREFIX", "AssetHubReports/")
 MODEL              = "claude-sonnet-4-6"
 SELF_FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "")  # auto-set by Lambda
 CACHE_MAX_AGE_DAYS = 7
 
-_ddb    = boto3.resource("dynamodb")
-_s3     = boto3.client("s3")
-_lambda = boto3.client("lambda")
-_table  = _ddb.Table(FIN_ASSETS_TABLE) if FIN_ASSETS_TABLE else None
+_ddb            = boto3.resource("dynamodb")
+_s3             = boto3.client("s3")
+_lambda         = boto3.client("lambda")
+_table          = _ddb.Table(FIN_ASSETS_TABLE)          if FIN_ASSETS_TABLE          else None
+_members_table  = _ddb.Table(FIN_ACCOUNT_MEMBERS_TABLE) if FIN_ACCOUNT_MEMBERS_TABLE else None
+_accounts_table = _ddb.Table(FIN_ACCOUNTS_TABLE)        if FIN_ACCOUNTS_TABLE        else None
 
 INVESTOR_PROFILE = {
     "horizon":       "3 months to 3 years",
@@ -36,21 +40,79 @@ INVESTOR_PROFILE = {
 HUB_JOB_PREFIX = "HUB_JOB#"
 
 
-# ── JWT decode (API GW already validated signature) ────────────
+# ── Auth: resolve accountId from JWT + X-Account-Id header ─────
 
-def get_user_id(event):
+class AuthError(Exception):
+    def __init__(self, status, message):
+        self.status  = status
+        self.message = message
+
+
+def resolve_context(event):
+    """
+    Decode JWT sub, resolve accountId from X-Account-Id header, and verify
+    membership in FinAccountMembers (same logic as the Node.js shared layer).
+    Returns { user_id, account_id, role, pages }.
+    Raises AuthError(401/403) on failure.
+    """
     try:
         auth = ((event.get("headers") or {}).get("authorization") or
                 (event.get("headers") or {}).get("Authorization") or "")
         if not auth.startswith("Bearer "):
-            return None
+            raise AuthError(401, "Unauthorized")
         payload = auth.split(".")[1]
         payload += "=" * (-len(payload) % 4)
-        claims = json.loads(base64.b64decode(payload))
-        return claims.get("sub")
+        claims  = json.loads(base64.b64decode(payload))
+        user_id = claims.get("sub")
+        if not user_id:
+            raise AuthError(401, "Unauthorized")
+    except AuthError:
+        raise
     except Exception as e:
         logger.warning(f"JWT decode failed: {e}")
-        return None
+        raise AuthError(401, "Unauthorized")
+
+    headers    = event.get("headers") or {}
+    hdr_acct   = (headers.get("x-account-id") or headers.get("X-Account-Id") or "").strip()
+    account_id = hdr_acct or user_id
+
+    if not _members_table:
+        # No members table configured — grant owner access (dev/local fallback)
+        return {"user_id": user_id, "account_id": account_id, "role": "owner", "pages": {}}
+
+    resp   = _members_table.get_item(Key={"accountId": account_id, "userId": user_id})
+    member = resp.get("Item")
+
+    if not member:
+        if account_id == user_id:
+            # Primary account — lazy bootstrap not needed here; grant owner access
+            return {"user_id": user_id, "account_id": account_id, "role": "owner", "pages": {}}
+        raise AuthError(403, "Forbidden: not a member of this account")
+
+    # Verify the account itself is not deleted (for non-primary shared accounts)
+    if account_id != user_id and _accounts_table:
+        acct_resp = _accounts_table.get_item(
+            Key={"accountId": account_id},
+            ProjectionExpression="#s",
+            ExpressionAttributeNames={"#s": "status"},
+        )
+        if not acct_resp.get("Item") or acct_resp["Item"].get("status") == "DELETED":
+            raise AuthError(403, "Forbidden: account not found or has been deleted")
+
+    return {
+        "user_id":    user_id,
+        "account_id": account_id,
+        "role":       member.get("role", "member"),
+        "pages":      member.get("pages") or {},
+    }
+
+
+def assert_read(ctx, page_key):
+    if ctx["role"] == "owner":
+        return
+    if (ctx["pages"].get(page_key) or "none") != "none":
+        return
+    raise AuthError(403, f"Forbidden: no access to page '{page_key}'")
 
 
 # ── DynamoDB job helpers ───────────────────────────────────────
@@ -718,9 +780,12 @@ def cors_headers():
 
 def handle_analyze(event):
     """POST /assets/hub/analyze — check S3 cache, or create async job."""
-    user_id = get_user_id(event)
-    if not user_id:
-        return {"statusCode": 401, "headers": cors_headers(), "body": json.dumps({"error": "Unauthorized"})}
+    try:
+        ctx        = resolve_context(event)
+        assert_read(ctx, "assetHub")
+        account_id = ctx["account_id"]
+    except AuthError as e:
+        return {"statusCode": e.status, "headers": cors_headers(), "body": json.dumps({"error": e.message})}
 
     try:
         body          = json.loads(event.get("body") or "{}")
@@ -735,11 +800,11 @@ def handle_analyze(event):
 
         # ── Cache check (skip if forceRefresh) ──────────────────
         if not force_refresh:
-            cached = get_cached_report(user_id, ticker)
+            cached = get_cached_report(account_id, ticker)
             if cached:
                 # Create a job already marked done — frontend polling works unchanged
-                job_id = create_job(user_id, ticker, asset_type)
-                update_job(user_id, job_id, "done", result=cached)
+                job_id = create_job(account_id, ticker, asset_type)
+                update_job(account_id, job_id, "done", result=cached)
                 logger.info(f"Serving cached report: jobId={job_id} ticker={ticker}")
                 return {
                     "statusCode": 202,
@@ -749,15 +814,15 @@ def handle_analyze(event):
                 }
 
         # ── No cache (or force refresh) — start async job ───────
-        job_id = create_job(user_id, ticker, asset_type)
-        logger.info(f"AssetHub job created: jobId={job_id} user={user_id} ticker={ticker} force={force_refresh}")
+        job_id = create_job(account_id, ticker, asset_type)
+        logger.info(f"AssetHub job created: jobId={job_id} account={account_id} ticker={ticker} force={force_refresh}")
 
         _lambda.invoke(
             FunctionName=SELF_FUNCTION_NAME,
             InvocationType="Event",
             Payload=json.dumps({
                 "jobId":     job_id,
-                "userId":    user_id,
+                "accountId": account_id,
                 "ticker":    ticker,
                 "assetType": asset_type,
             }),
@@ -776,15 +841,18 @@ def handle_analyze(event):
 
 def handle_result(event, job_id):
     """GET /assets/hub/result/{jobId} — return job status/result."""
-    user_id = get_user_id(event)
-    if not user_id:
-        return {"statusCode": 401, "headers": cors_headers(), "body": json.dumps({"error": "Unauthorized"})}
+    try:
+        ctx        = resolve_context(event)
+        assert_read(ctx, "assetHub")
+        account_id = ctx["account_id"]
+    except AuthError as e:
+        return {"statusCode": e.status, "headers": cors_headers(), "body": json.dumps({"error": e.message})}
 
     if not job_id:
         return {"statusCode": 400, "headers": cors_headers(), "body": json.dumps({"error": "jobId required"})}
 
     try:
-        job = get_job(user_id, job_id)
+        job = get_job(account_id, job_id)
         if not job:
             return {"statusCode": 404, "headers": cors_headers(), "body": json.dumps({"error": "Job not found"})}
 
@@ -818,16 +886,19 @@ def handle_result(event, job_id):
 # ── List cached reports ────────────────────────────────────────
 
 def handle_list_reports(event):
-    """GET /assets/hub/reports — list S3 cached reports < 7 days old for the user."""
-    user_id = get_user_id(event)
-    if not user_id:
-        return {"statusCode": 401, "headers": cors_headers(), "body": json.dumps({"error": "Unauthorized"})}
+    """GET /assets/hub/reports — list S3 cached reports < 7 days old for the account."""
+    try:
+        ctx        = resolve_context(event)
+        assert_read(ctx, "assetHub")
+        account_id = ctx["account_id"]
+    except AuthError as e:
+        return {"statusCode": e.status, "headers": cors_headers(), "body": json.dumps({"error": e.message})}
 
     if not REPORTS_BUCKET:
         return {"statusCode": 200, "headers": cors_headers(), "body": json.dumps({"reports": []})}
 
     try:
-        prefix = f"{REPORTS_PREFIX}{user_id}/"
+        prefix = f"{REPORTS_PREFIX}{account_id}/"
         resp   = _s3.list_objects_v2(Bucket=REPORTS_BUCKET, Prefix=prefix)
 
         now     = datetime.datetime.utcnow()
@@ -866,20 +937,20 @@ def handle_list_reports(event):
 
 def run_worker(payload):
     job_id     = payload["jobId"]
-    user_id    = payload["userId"]
+    account_id = payload.get("accountId") or payload.get("userId")  # accountId preferred; userId for back-compat
     ticker     = payload["ticker"]
     asset_type = payload["assetType"]
 
-    logger.info(f"AssetHub worker start: jobId={job_id} ticker={ticker}")
+    logger.info(f"AssetHub worker start: jobId={job_id} account={account_id} ticker={ticker}")
     try:
         with ThreadPoolExecutor(max_workers=2) as ex:
             fut_market    = ex.submit(fetch_market_data, ticker, asset_type)
-            fut_portfolio = ex.submit(fetch_portfolio, user_id)
+            fut_portfolio = ex.submit(fetch_portfolio, account_id)
             market_data   = fut_market.result()
             portfolio     = fut_portfolio.result()
 
         if not market_data.get("price"):
-            update_job(user_id, job_id, "error",
+            update_job(account_id, job_id, "error",
                        error_msg=f"Could not fetch market data for '{ticker}'. Check the ticker symbol.")
             return
 
@@ -910,13 +981,13 @@ def run_worker(payload):
             "generated_at":   now_iso,   # used by S3 cache age check
             "analysis":       analysis,
         }
-        update_job(user_id, job_id, "done", result=result)
-        store_report(user_id, ticker, result)   # cache to S3 for 7 days
+        update_job(account_id, job_id, "done", result=result)
+        store_report(account_id, ticker, result)   # cache to S3 for 7 days
         logger.info(f"AssetHub worker done: jobId={job_id}")
 
     except Exception as e:
         logger.error(f"AssetHub worker error: jobId={job_id} {e}", exc_info=True)
-        update_job(user_id, job_id, "error", error_msg="Analysis failed. Please try again.")
+        update_job(account_id, job_id, "error", error_msg="Analysis failed. Please try again.")
 
 
 # ── Main handler ───────────────────────────────────────────────

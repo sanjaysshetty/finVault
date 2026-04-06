@@ -51,6 +51,16 @@ local/
 **/.venv/
 
 # Architecture Diagrams
-finVault-architecture.html
-finVault-architecture-v2.html
-finVault-architecture-v2.md
+**/*.drawio
+
+# Markdown and HTML files (anywhere in the project)
+**/*.md
+**/*.html
+
+# Claude Code local memory (never push)
+.claude/
+
+# GitIgnore
+.gitignore
+
+

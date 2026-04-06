@@ -184,9 +184,9 @@ export default function WheelScanPageReports() {
       )}
 
       {/* Table */}
-      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
+      <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729]">
         {/* Header */}
-        <div className="grid items-center px-4 py-3 border-b border-white/[0.06] bg-white/[0.02] [grid-template-columns:120px_minmax(0,1fr)_64px_64px_64px] sm:[grid-template-columns:140px_minmax(0,1fr)_80px_80px_80px_100px_48px]">
+        <div className="grid items-center px-4 py-3 border-b border-white/[0.06] [grid-template-columns:120px_minmax(0,1fr)_64px_64px_64px] sm:[grid-template-columns:140px_minmax(0,1fr)_80px_80px_80px_100px_48px]">
           <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Scan Date</span>
           <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Summary</span>
           <span className="text-xs font-bold uppercase tracking-wide text-slate-500 text-center">Proceed</span>

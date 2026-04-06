@@ -1,23 +1,18 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
+import { PAGE_ROUTES } from "../lib/pages.js";
 
-/* ── Page key display labels ────────────────────────────────── */
-const PAGE_LABELS = {
-  portfolio:         "Portfolio",
-  stocks:            "Stocks",
-  crypto:            "Crypto",
-  bullion:           "Bullion",
-  futures:           "Futures",
-  options:           "Options",
-  fixedIncome:       "Fixed Income",
-  otherAssets:       "Others",
-  nav:               "NAV",
-  liabilities:       "Liabilities",
-  insurance:         "Insurance",
-  spendingDashboard: "Spending",
-  receiptsLedger:    "Receipts",
-};
+/* ── Derived page helpers (auto-updates when PAGE_ROUTES changes) ── */
+// All page keys with default "none" — used to initialise permission state
+const ALL_PAGE_DEFAULTS = Object.fromEntries(PAGE_ROUTES.map((r) => [r.pageKey, "none"]));
+
+// Routes grouped by their group property, in declaration order
+const PAGE_GROUPS = PAGE_ROUTES.reduce((acc, r) => {
+  if (!acc[r.group]) acc[r.group] = [];
+  acc[r.group].push(r);
+  return acc;
+}, {});
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 
@@ -27,7 +22,7 @@ function pagesLabel(pages) {
   const read  = Object.values(pages).filter((v) => v === "read").length;
   const total = write + read;
   if (total === 0) return "No access";
-  if (write === Object.keys(PAGE_LABELS).length) return "Full access";
+  if (write === PAGE_ROUTES.length) return "Full access";
   const parts = [];
   if (write) parts.push(`${write}w`);
   if (read)  parts.push(`${read}r`);
@@ -139,7 +134,8 @@ function MembersPanel({ accountId }) {
 
   function startEdit(m) {
     setEditingId(m.userId);
-    setEditPages({ ...m.pages });
+    // Merge all known page keys (defaulting to "none") with existing member permissions
+    setEditPages({ ...ALL_PAGE_DEFAULTS, ...m.pages });
   }
 
   function cyclePermission(key) {
@@ -187,29 +183,34 @@ function MembersPanel({ accountId }) {
 
               {/* Inline permission editor */}
               {editingId === m.userId && (
-                <div className="border-t border-white/[0.05] px-3 pb-3 pt-2 space-y-2">
-                  <p className="text-[11px] text-slate-600 mb-1">
+                <div className="border-t border-white/[0.05] px-3 pb-3 pt-2 space-y-3">
+                  <p className="text-[11px] text-slate-600">
                     Click to cycle:{" "}
                     <span className="text-slate-600">none</span>{" "}→{" "}
                     <span className="text-blue-500">read</span>{" "}→{" "}
                     <span className="text-emerald-500">write</span>
                   </p>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {Object.entries(PAGE_LABELS).map(([key, label]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => cyclePermission(key)}
-                        className={[
-                          "px-2 py-1.5 rounded-lg text-xs font-medium border",
-                          "transition-all cursor-pointer text-left",
-                          permColorCls(editPages[key]),
-                        ].join(" ")}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  {Object.entries(PAGE_GROUPS).map(([group, routes]) => (
+                    <div key={group}>
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-600 mb-1">{group}</p>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {routes.map(({ pageKey, label }) => (
+                          <button
+                            key={pageKey}
+                            type="button"
+                            onClick={() => cyclePermission(pageKey)}
+                            className={[
+                              "px-2 py-1.5 rounded-lg text-xs font-medium border",
+                              "transition-all cursor-pointer text-left",
+                              permColorCls(editPages[pageKey]),
+                            ].join(" ")}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                   <Btn
                     onClick={() => updateMut.mutate({ memberId: m.userId, pages: editPages })}
                     loading={updateMut.isPending}
@@ -232,9 +233,7 @@ function InvitesPanel({ accountId }) {
   const [email, setEmail] = useState("");
   const [inviteErr, setInviteErr] = useState("");
   const [showPerms, setShowPerms] = useState(false);
-  const [pages, setPages] = useState(() =>
-    Object.fromEntries(Object.keys(PAGE_LABELS).map((k) => [k, "none"]))
-  );
+  const [pages, setPages] = useState(() => ({ ...ALL_PAGE_DEFAULTS }));
 
   function cyclePermission(key) {
     setPages((prev) => {
@@ -320,20 +319,27 @@ function InvitesPanel({ accountId }) {
               <span className="text-blue-500">read</span>{" "}→{" "}
               <span className="text-emerald-500">write</span>
             </p>
-            <div className="grid grid-cols-3 gap-1.5">
-              {Object.entries(PAGE_LABELS).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => cyclePermission(key)}
-                  className={[
-                    "px-2 py-1.5 rounded-lg text-xs font-medium border",
-                    "transition-all cursor-pointer text-left",
-                    permColorCls(pages[key]),
-                  ].join(" ")}
-                >
-                  {label}
-                </button>
+            <div className="space-y-3">
+              {Object.entries(PAGE_GROUPS).map(([group, routes]) => (
+                <div key={group}>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-600 mb-1">{group}</p>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {routes.map(({ pageKey, label }) => (
+                      <button
+                        key={pageKey}
+                        type="button"
+                        onClick={() => cyclePermission(pageKey)}
+                        className={[
+                          "px-2 py-1.5 rounded-lg text-xs font-medium border",
+                          "transition-all cursor-pointer text-left",
+                          permColorCls(pages[pageKey]),
+                        ].join(" ")}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>

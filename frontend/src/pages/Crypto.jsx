@@ -24,22 +24,6 @@ function _fmtMoney(n, cur = "USD") {
   return safeNum(n, 0).toLocaleString(locale, { style: "currency", currency: cur });
 }
 
-function _fmtMoneySmart(n, cur = "USD") {
-  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
-  const x = safeNum(n, 0);
-  const r2 = Number(x.toFixed(2)), r8 = Number(x.toFixed(8));
-  const useTwoDecimals = Math.abs(r8 - r2) < 1e-10;
-  return x.toLocaleString(locale, { style: "currency", currency: cur, minimumFractionDigits: useTwoDecimals ? 2 : 8, maximumFractionDigits: useTwoDecimals ? 2 : 8 });
-}
-
-function _fmtSpot(n, cur = "USD") {
-  const locale = LOCALE_FOR_CURRENCY[cur] ?? "en-US";
-  const x = safeNum(n, 0);
-  if (!Number.isFinite(x) || x === 0) return _fmtMoney(0, cur);
-  const abs = Math.abs(x);
-  const digits = abs > 0 && abs < 0.01 ? 10 : abs > 0 && abs < 1 ? 6 : 2;
-  return x.toLocaleString(locale, { style: "currency", currency: cur, minimumFractionDigits: digits, maximumFractionDigits: digits });
-}
 
 /* ── Spot price parsing ──────────────────────────────────── */
 function writeSpotVal(out, sym, val) {
@@ -180,9 +164,7 @@ export default function Crypto() {
   const canWrite = useCanWrite("crypto");
   const [country, setCountry] = useState("USA");
   const currency = COUNTRY_CURRENCY[country] ?? "USD";
-  const formatMoney      = (n) => _fmtMoney(n, currency);
-  const formatMoneySmart = (n) => _fmtMoneySmart(n, currency);
-  const formatSpot       = (n) => _fmtSpot(n, currency);
+  const formatMoney = (n) => _fmtMoney(n, currency);
 
   const [form, setForm]           = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
@@ -191,6 +173,7 @@ export default function Crypto() {
   const [search, setSearch]       = useState("");
   const [sortKey, setSortKey]     = useState("date");
   const [sortDir, setSortDir]     = useState("desc");
+  const [holdingsTab, setHoldingsTab] = useState("my"); // "my" | "rh" | "diff"
 
   // Sync page-level country filter → new transaction default country
   useEffect(() => { setForm((f) => ({ ...f, country })); }, [country]);
@@ -225,6 +208,13 @@ export default function Crypto() {
 
   const spots = useMemo(() => extractCryptoSpots(pricesData), [pricesData]);
   const prevSpots = useMemo(() => extractCryptoPrevCloses(pricesData), [pricesData]);
+
+  const { data: rhData, isFetching: rhFetching, isError: rhIsError, error: rhError, refetch: refetchRh } = useQuery({
+    queryKey: queryKeys.cryptoRhHoldings(),
+    queryFn: () => api.get("/assets/crypto/rh-holdings"),
+    enabled: holdingsTab === "rh" || holdingsTab === "diff",
+    staleTime: 60_000,
+  });
 
   const spotStatus = pricesFetching
     ? "Refreshing spot prices…"
@@ -271,6 +261,66 @@ export default function Crypto() {
   const metrics = useMemo(() => computeCryptoMetrics(txByCountry, spots, prevSpots), [txByCountry, spots, prevSpots]);
   const ytd = useMemo(() => computeCryptoYTDRealized(txByCountry), [txByCountry]);
   const currentYear = String(new Date().getFullYear());
+
+  // Robinhood live holdings — enrich with spots already fetched
+  const rhHoldings = useMemo(() => {
+    const raw = Array.isArray(rhData?.items) ? rhData.items : [];
+    return raw.map((h) => {
+      const sym      = String(h.symbol || "").toUpperCase();
+      const spot     = safeNum(spots?.[sym], 0);
+      const prevClose = prevSpots?.[sym] ?? null;
+      const marketValue  = h.qty * spot;
+      const unrealized   = (spot - h.avgCost) * h.qty;
+      const dayGL        = prevClose != null && prevClose > 0 ? round2(h.qty * (spot - prevClose)) : null;
+      return { ...h, sym, spot, prevClose, marketValue: round2(marketValue), unrealized: round2(unrealized), dayGL };
+    }).sort((a, b) => b.marketValue - a.marketValue);
+  }, [rhData, spots, prevSpots]);
+
+  const rhTotals = useMemo(() => {
+    return rhHoldings.reduce(
+      (acc, h) => {
+        acc.holdingValue += h.marketValue;
+        acc.unrealized   += h.unrealized;
+        acc.totalCost    += h.qty * h.avgCost;
+        acc.dayGL        += h.dayGL ?? 0;
+        if (h.prevClose != null && h.prevClose > 0) acc.prevDayValue += h.qty * h.prevClose;
+        return acc;
+      },
+      { holdingValue: 0, unrealized: 0, totalCost: 0, dayGL: 0, prevDayValue: 0 }
+    );
+  }, [rhHoldings]);
+  const rhHasDayGL = rhHoldings.some((h) => h.dayGL != null);
+
+  // Compare: diff between My Entries and RH Live
+  const diffHoldings = useMemo(() => {
+    const QTY_TOL  = 1e-5;   // treat qty differences < this as rounding noise
+    const COST_TOL = 0.01;   // treat avg-cost differences < $0.01 as match
+
+    const myMap = Object.fromEntries(metrics.holdings.map((h) => [h.symbol, h]));
+    const rhMap = Object.fromEntries(rhHoldings.map((h) => [h.symbol, h]));
+    const allSyms = Array.from(new Set([...Object.keys(myMap), ...Object.keys(rhMap)]));
+
+    return allSyms.map((sym) => {
+      const my = myMap[sym];
+      const rh = rhMap[sym];
+      const myQty  = my ? safeNum(my.qty, 0) : 0;
+      const rhQty  = rh ? safeNum(rh.qty, 0) : 0;
+      const qtyDiff = round2(rhQty - myQty);
+
+      let status;
+      if (!my) status = "missing_entry";
+      else if (!rh || rhQty < QTY_TOL) status = "missing_rh";
+      else if (Math.abs(qtyDiff) > QTY_TOL) status = "qty_diff";
+      else status = "match";
+
+      return { sym, myQty, rhQty, qtyDiff, status };
+    }).sort((a, b) => {
+      const order = { missing_entry: 0, missing_rh: 1, qty_diff: 2, match: 3 };
+      return (order[a.status] ?? 5) - (order[b.status] ?? 5);
+    });
+  }, [metrics.holdings, rhHoldings]);
+
+  const diffMismatchCount = diffHoldings.filter((d) => d.status !== "match").length;
 
   const filteredSortedTx = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -423,45 +473,206 @@ export default function Crypto() {
 
           {/* Holdings */}
           <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
+            {/* Card header */}
             <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
               <div>
-                <p className="text-sm font-bold text-slate-200">Holdings Overview</p>
-                <p className="mt-0.5 text-xs text-slate-500">{spotStatus || "Spot prices from /prices"}</p>
+                <div className="flex items-center gap-1">
+                  {[
+                    { id: "my",   label: "My Entries" },
+                    { id: "rh",   label: "RH Live" },
+                    { id: "diff", label: "Compare", badge: rhData && diffMismatchCount > 0 ? diffMismatchCount : null },
+                  ].map(({ id, label, badge }) => (
+                    <button
+                      key={id}
+                      onClick={() => setHoldingsTab(id)}
+                      className={`relative px-3 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${holdingsTab === id ? "bg-blue-500/20 text-blue-300 border border-blue-500/30" : "text-slate-500 hover:text-slate-300"}`}
+                    >
+                      {label}
+                      {badge != null && (
+                        <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-400 text-[10px] font-bold leading-none border border-amber-500/30">
+                          {badge}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {holdingsTab === "rh"   ? (rhFetching ? "Fetching from Robinhood…" : rhIsError ? "RH fetch failed." : rhData ? "Live from Robinhood account." : "")
+                 : holdingsTab === "diff" ? (rhFetching ? "Loading RH data for comparison…" : "My Entries vs Robinhood — discrepancies sorted first.")
+                 : (spotStatus || "Spot prices from /prices")}
+                </p>
               </div>
               <div className="flex gap-2">
-                <Btn onClick={refreshSpots} disabled={saving || pricesFetching}>Refresh</Btn>
-                {canWrite && <BtnPrimary onClick={openCreate} disabled={saving}>+ Add Transaction</BtnPrimary>}
+                {holdingsTab === "rh" || holdingsTab === "diff"
+                  ? <Btn onClick={() => refetchRh()} disabled={rhFetching}>Refresh</Btn>
+                  : <Btn onClick={refreshSpots} disabled={saving || pricesFetching}>Refresh</Btn>}
+                {holdingsTab === "my" && canWrite && <BtnPrimary onClick={openCreate} disabled={saving}>+ Add Transaction</BtnPrimary>}
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px]">
-                <thead>
-                  <tr className="border-b border-white/[0.06]">
-                    {["Symbol", "Quantity", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
-                      <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {metrics.holdings.length === 0 ? (
-                    <tr><td colSpan={7}><EmptyState type="empty" message="No holdings yet. Add a BUY transaction." /></td></tr>
-                  ) : metrics.holdings.map((h) => (
-                    <tr key={h.symbol} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="px-4 py-3">
-                        <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
-                        {(!h.spot || h.spot === 0) && <p className="text-[11px] text-amber-600 mt-0.5">Spot missing</p>}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-300 numeric">{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 8 })}</td>
-                      <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoneySmart(h.avgCost)}</td>
-                      <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatSpot(h.spot)}</td>
-                      <td className={`px-4 py-3 text-sm font-bold numeric ${h.dayGL != null ? plClass(h.dayGL) : "text-slate-600"}`}>{h.dayGL != null ? formatMoney(h.dayGL) : "—"}</td>
-                      <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
-                      <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
+
+            {/* My Entries tab */}
+            {holdingsTab === "my" && (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px]">
+                  <thead>
+                    <tr className="border-b border-white/[0.06]">
+                      {["Symbol", "Quantity", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
+                        <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.04]">
+                    {metrics.holdings.length === 0 ? (
+                      <tr><td colSpan={7}><EmptyState type="empty" message="No holdings yet. Add a BUY transaction." /></td></tr>
+                    ) : metrics.holdings.map((h) => (
+                      <tr key={h.symbol} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="px-4 py-3">
+                          <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
+                          {(!h.spot || h.spot === 0) && <p className="text-[11px] text-amber-600 mt-0.5">Spot missing</p>}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
+                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${h.dayGL != null ? plClass(h.dayGL) : "text-slate-600"}`}>{h.dayGL != null ? formatMoney(h.dayGL) : "—"}</td>
+                        <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* RH Live tab */}
+            {holdingsTab === "rh" && (
+              <div className="overflow-x-auto">
+                {rhFetching && !rhData ? (
+                  <EmptyState type="loading" message="Fetching live holdings from Robinhood…" />
+                ) : rhIsError ? (
+                  <div className="p-6 space-y-1">
+                    <p className="text-sm font-semibold text-red-400">{rhError?.detail?.message || rhError?.message || "Failed to load Robinhood holdings."}</p>
+                    {rhError?.detail?.detail && (
+                      <p className="text-xs text-slate-500 font-mono break-all">{JSON.stringify(rhError.detail.detail)}</p>
+                    )}
+                  </div>
+                ) : (
+                  <table className="w-full min-w-[640px]">
+                    <thead>
+                      <tr className="border-b border-white/[0.06]">
+                        {["Symbol", "Quantity", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
+                          <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/[0.04]">
+                      {rhHoldings.length === 0 ? (
+                        <tr><td colSpan={7}><EmptyState type="empty" message="No crypto holdings found in Robinhood account." /></td></tr>
+                      ) : rhHoldings.map((h) => (
+                        <tr key={h.sym} className="hover:bg-white/[0.02] transition-colors">
+                          <td className="px-4 py-3">
+                            <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
+                            {(!h.spot || h.spot === 0) && <p className="text-[11px] text-amber-600 mt-0.5">Spot missing</p>}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
+                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
+                          <td className={`px-4 py-3 text-sm font-bold numeric ${h.dayGL != null ? plClass(h.dayGL) : "text-slate-600"}`}>{h.dayGL != null ? formatMoney(h.dayGL) : "—"}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
+                          <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {/* RH Live totals row */}
+            {holdingsTab === "rh" && rhHoldings.length > 0 && (
+              <div className="px-5 py-3 border-t border-white/[0.06] flex flex-wrap gap-4 text-xs text-slate-400">
+                <span>Value: <span className="text-slate-200 font-bold">{formatMoney(rhTotals.holdingValue)}</span></span>
+                <span>Unrealized: <span className={`font-bold ${plClass(rhTotals.unrealized)}`}>{formatMoney(rhTotals.unrealized)}</span></span>
+                {rhHasDayGL && <span>Day G/L: <span className={`font-bold ${plClass(rhTotals.dayGL)}`}>{formatMoney(rhTotals.dayGL)}</span></span>}
+                <span>Cost Basis: <span className="text-slate-300 font-bold">{formatMoney(rhTotals.totalCost)}</span></span>
+              </div>
+            )}
+
+            {/* Compare tab */}
+            {holdingsTab === "diff" && (
+              rhFetching && !rhData ? (
+                <EmptyState type="loading" message="Loading Robinhood data for comparison…" />
+              ) : rhIsError ? (
+                <div className="p-6 space-y-1">
+                  <p className="text-sm font-semibold text-red-400">{rhError?.detail?.message || rhError?.message || "Could not load Robinhood holdings."}</p>
+                  {rhError?.detail?.detail && (
+                    <p className="text-xs text-slate-500 font-mono break-all">{JSON.stringify(rhError.detail.detail)}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[500px]">
+                    <thead>
+                      <tr className="border-b border-white/[0.06]">
+                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">Symbol</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">My Qty</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">RH Qty</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">Qty Diff</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/[0.04]">
+                      {diffHoldings.length === 0 ? (
+                        <tr><td colSpan={5}><EmptyState type="empty" message="Nothing to compare yet." /></td></tr>
+                      ) : diffHoldings.map((d) => {
+                        const isMatch   = d.status === "match";
+                        const isMissRH  = d.status === "missing_rh";
+                        const isMissEnt = d.status === "missing_entry";
+                        const isQtyDiff = d.status === "qty_diff";
+
+                        const statusCls = isMatch   ? "bg-green-500/10 text-green-400 border-green-500/20"
+                                        : isMissEnt ? "bg-blue-500/10  text-blue-300  border-blue-500/20"
+                                        : isMissRH  ? "bg-slate-500/10 text-slate-400 border-slate-500/20"
+                                        :             "bg-amber-500/10 text-amber-300 border-amber-500/20";
+
+                        const statusLabel = isMatch   ? "Match"
+                                          : isMissEnt ? "Not in Entries"
+                                          : isMissRH  ? "Not in RH"
+                                          :             "Qty Mismatch";
+
+                        const rowCls = isMatch ? "hover:bg-white/[0.02]" : "hover:bg-white/[0.02] bg-white/[0.01]";
+                        const fmt2 = (n) => Number.isFinite(n) && n !== 0 ? n.toLocaleString(undefined, { maximumFractionDigits: 8 }) : "—";
+
+                        return (
+                          <tr key={d.sym} className={`transition-colors ${rowCls}`}>
+                            <td className="px-4 py-3 font-bold text-slate-100 text-sm">{d.sym}</td>
+                            <td className={`px-4 py-3 text-sm numeric ${isMissEnt ? "text-slate-500" : "text-slate-300"}`}>{isMissEnt ? "—" : fmt2(d.myQty)}</td>
+                            <td className={`px-4 py-3 text-sm numeric ${isMissRH  ? "text-slate-500" : "text-slate-300"}`}>{isMissRH  ? "—" : fmt2(d.rhQty)}</td>
+                            <td className={`px-4 py-3 text-sm font-bold numeric ${isMatch ? "text-slate-600" : d.qtyDiff > 0 ? "text-blue-400" : "text-amber-400"}`}>
+                              {isMatch ? "—" : d.qtyDiff > 0 ? `+${fmt2(d.qtyDiff)}` : fmt2(d.qtyDiff)}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${statusCls}`}>
+                                {statusLabel}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {diffMismatchCount === 0 && diffHoldings.length > 0 && (
+                    <div className="px-5 py-3 border-t border-white/[0.06] text-xs text-green-400 font-semibold">
+                      All {diffHoldings.length} holdings match between My Entries and Robinhood.
+                    </div>
+                  )}
+                  {diffMismatchCount > 0 && (
+                    <div className="px-5 py-3 border-t border-white/[0.06] text-xs text-amber-400">
+                      {diffMismatchCount} of {diffHoldings.length} holding{diffHoldings.length !== 1 ? "s" : ""} have discrepancies.
+                    </div>
+                  )}
+                </div>
+              )
+            )}
           </div>
 
           {/* Transactions */}
@@ -502,8 +713,8 @@ export default function Crypto() {
                           <td className="px-4 py-3 text-sm text-slate-400">{t.date || "—"}</td>
                           <td className="px-4 py-3"><Badge variant={type === "BUY" ? "buy" : type === "SELL" ? "sell" : "summary"}>{type}</Badge></td>
                           <td className="px-4 py-3 text-sm font-semibold text-slate-200">{String(t.symbol || "").toUpperCase()}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{qty.toLocaleString(undefined, { maximumFractionDigits: 8 })}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatSpot(px)}</td>
+                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(px)}</td>
                           <td className="px-4 py-3 text-sm text-slate-400 numeric">{formatMoney(fees)}</td>
                           <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(net)}</td>
                           <td className="px-4 py-3">
@@ -549,7 +760,7 @@ function Btn({ children, onClick, disabled, type = "button" }) {
 function BtnPrimary({ children, onClick, disabled, type = "button" }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
-      className="text-xs font-bold text-slate-100 px-3 py-1.5 rounded-lg border border-blue-500/[0.3] bg-blue-500/[0.15] hover:bg-blue-500/[0.25] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+      className="text-xs font-bold text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
       {children}
     </button>
   );

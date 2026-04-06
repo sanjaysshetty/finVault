@@ -44,6 +44,7 @@ async function readS3Json(key) {
   return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
 }
 
+
 exports.handler = async (event) => {
   const method   = (event.requestContext?.http?.method || event.httpMethod || "GET").toUpperCase();
   const rawPath  = event.rawPath || event.path || "/";
@@ -56,10 +57,14 @@ exports.handler = async (event) => {
     const ctx = await resolveContext(event);
     assertRead(ctx, "wheelScan");
 
+    // Each account has its own isolated scan history under WheelReports/{accountId}/.
+    // Owner and all members of the same account share the same prefix.
+    const prefix = WHEEL_PREFIX + ctx.accountId + "/";
+
     // ── GET /wheel/scan/history ──────────────────────────────
     if (method === "GET" && rawPath.endsWith("/wheel/scan/history")) {
       try {
-        const data = await readS3Json(WHEEL_PREFIX + "index.json");
+        const data = await readS3Json(prefix + "index.json");
         return json(200, data);
       } catch (e) {
         if (e.name === "NoSuchKey" || e.$metadata?.httpStatusCode === 404) {
@@ -72,7 +77,7 @@ exports.handler = async (event) => {
     // ── GET /wheel/scan/latest ───────────────────────────────
     if (method === "GET" && rawPath.endsWith("/wheel/scan/latest")) {
       try {
-        const data = await readS3Json(WHEEL_PREFIX + "latest.json");
+        const data = await readS3Json(prefix + "latest.json");
         return json(200, data);
       } catch (e) {
         if (e.name === "NoSuchKey" || e.$metadata?.httpStatusCode === 404) {
@@ -107,7 +112,7 @@ exports.handler = async (event) => {
       }
 
       try {
-        const data = await readS3Json(WHEEL_PREFIX + scanId + ".json");
+        const data = await readS3Json(prefix + scanId + ".json");
         return json(200, data);
       } catch (e) {
         if (e.name === "NoSuchKey" || e.$metadata?.httpStatusCode === 404) {

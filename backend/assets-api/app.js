@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const https  = require("https");
 
 const { json, badRequest, notFound } = require("finvault-shared/http");
 const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/ddb");
@@ -966,7 +967,7 @@ function validateOptionsTx(body) {
   if (qty === "" || qty <= 0) throw new Error("qty must be a positive number");
 
   const fill = toNumOrBlank(body.fill);
-  if (fill === "" || fill <= 0) throw new Error("fill must be a positive number");
+  if (fill === "" || fill < 0) throw new Error("fill must be >= 0");
 
   const closePrice = toNumOrBlank(body.closePrice ?? body.close$ ?? body.closeDollar);
   if (closePrice !== "" && closePrice < 0) throw new Error("closePrice must be >= 0");
@@ -985,6 +986,13 @@ function validateOptionsTx(body) {
 
   const country = String(body.country || "USA").toUpperCase().trim() || "USA";
 
+  // V2 position-tracking fields (all optional, passthrough)
+  const positionId = String(body.positionId || "").trim();
+  const leg = String(body.leg || "").trim(); // OPEN | CLOSE | ROLL_CLOSE | ROLL_OPEN
+  const linkedPositionId = String(body.linkedPositionId || "").trim();
+  const rocRaw = body.roc !== undefined && body.roc !== null && body.roc !== "" ? Number(body.roc) : "";
+  const roc = rocRaw !== "" && Number.isFinite(rocRaw) ? rocRaw : "";
+
   return {
     type,
     openDate,
@@ -1001,6 +1009,10 @@ function validateOptionsTx(body) {
     rollOver,
     notes,
     country,
+    ...(positionId ? { positionId } : {}),
+    ...(leg ? { leg } : {}),
+    ...(linkedPositionId ? { linkedPositionId } : {}),
+    ...(roc !== "" ? { roc } : {}),
   };
 }
 
@@ -1207,6 +1219,93 @@ async function futuresDelete(event, txId) {
   return json(204, null);
 }
 
+/* =========================================================
+   ROBINHOOD CRYPTO HOLDINGS
+========================================================= */
+
+// Trim to guard against trailing whitespace/newlines from AWS console copy-paste
+const RH_API_KEY         = (process.env.RH_API_KEY         || "").trim();
+const RH_PRIVATE_KEY_B64 = (process.env.RH_PRIVATE_KEY_B64 || "").trim();
+
+const CRYPTO_RH_HOLDINGS = "/assets/crypto/rh-holdings";
+
+function makeRhSignature(apiKey, timestamp, path, method = "GET", body = "") {
+  const message = `${apiKey}${timestamp}${path}${method}${body}`;
+  // Strip any whitespace from base64 string (line breaks from PEM-style copy-paste)
+  const rawKey  = Buffer.from(RH_PRIVATE_KEY_B64.replace(/\s/g, ""), "base64");
+  // Support both 32-byte raw seed and 64-byte nacl keypair (seed = first 32 bytes)
+  const seed    = rawKey.length >= 64 ? rawKey.subarray(0, 32) : rawKey;
+  if (seed.length !== 32) {
+    throw Object.assign(
+      new Error(`Invalid RH private key: expected 32-byte seed, got ${seed.length} bytes (decoded from ${rawKey.length} bytes)`),
+      { statusCode: 500 }
+    );
+  }
+  // Wrap seed in PKCS8 DER envelope required by Node.js crypto module for Ed25519
+  const pkcs8   = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]);
+  const privKey = crypto.createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
+  return crypto.sign(null, Buffer.from(message), privKey).toString("base64");
+}
+
+function rhHttpGet(path) {
+  return new Promise((resolve, reject) => {
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signature = makeRhSignature(RH_API_KEY, timestamp, path, "GET");
+    const req = https.request(
+      {
+        hostname: "trading.robinhood.com",
+        path,
+        method:  "GET",
+        headers: {
+          "x-api-key":   RH_API_KEY,
+          "x-timestamp": timestamp,
+          "x-signature": signature,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => { data += c; });
+        res.on("end", () => {
+          try {
+            const parsed = data ? JSON.parse(data) : {};
+            resolve({ status: res.statusCode, body: parsed });
+          } catch (e) {
+            resolve({ status: res.statusCode, body: { raw: data.slice(0, 500) } });
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+async function cryptoRhHoldings(event) {
+  const ctx = await resolveCtxCached(event);
+  assertRead(ctx, "crypto");
+
+  if (!RH_API_KEY || !RH_PRIVATE_KEY_B64) {
+    return json(503, { message: "Robinhood API credentials not configured" });
+  }
+
+  const apiPath = `/api/v1/crypto/trading/holdings/`;
+  const { status, body } = await rhHttpGet(apiPath);
+  if (status !== 200) {
+    return json(502, { message: `Robinhood API returned ${status}`, detail: body });
+  }
+
+  const results = Array.isArray(body.results) ? body.results : [];
+  const items = results
+    .filter((h) => Number(h.total_quantity || 0) > 1e-9)
+    .map((h) => ({
+      symbol:    `${String(h.asset_code || "").toUpperCase()}-USD`,
+      qty:       Number(h.total_quantity || 0),
+      avgCost:   0,
+    }));
+
+  return json(200, { items });
+}
+
 /* ---------------- main router ---------------- */
 
 module.exports.handler = async (event) => {
@@ -1349,6 +1448,9 @@ if (path.startsWith(`${OTHER_ASSETS_BASE}/`)) {
   if (method === "DELETE") return otherAssetsDelete(event, assetId);
   return badRequest(`Unsupported method ${method} for ${OTHER_ASSETS_BASE}/{assetId}`);
 }
+
+    // Robinhood live holdings
+    if (path === CRYPTO_RH_HOLDINGS && method === "GET") return cryptoRhHoldings(event);
 
     return notFound();
   } catch (e) {

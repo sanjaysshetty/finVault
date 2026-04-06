@@ -12,7 +12,7 @@ export function PageHeader({ title, icon, subtitle, children }) {
     <div className="flex items-center justify-between gap-4">
       <div className="flex items-center gap-2.5 min-w-0">
         {icon && (
-          <span className="text-blue-400 opacity-75 shrink-0">{icon}</span>
+          <span className="text-blue-400 shrink-0">{icon}</span>
         )}
         <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
           <h1

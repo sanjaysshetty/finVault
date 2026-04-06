@@ -1,24 +1,41 @@
 /**
  * Ordered list of all permission-gated page routes.
- * Order determines which page a restricted member lands on by default.
+ *
+ * This is the single source of truth for:
+ *  - Route-to-pageKey mapping (used by SideNav guards)
+ *  - Permission editor in AccountsPage (label + group)
+ *  - firstAccessiblePath for restricted members
+ *
+ * To add a new page: append an entry here with pageKey, path, label, and group.
+ * It will automatically appear in the AccountsPage permission editor with "none" access.
  */
 export const PAGE_ROUTES = [
-  { pageKey: "portfolio",         path: "/assets/portfolio" },
-  { pageKey: "stocks",            path: "/assets/stocks" },
-  { pageKey: "crypto",            path: "/assets/crypto" },
-  { pageKey: "bullion",           path: "/assets/bullion" },
-  { pageKey: "futures",           path: "/assets/futures" },
-  { pageKey: "options",           path: "/assets/options" },
-  { pageKey: "fixedIncome",       path: "/assets/fixedincome" },
-  { pageKey: "otherAssets",       path: "/assets/otherassets" },
-  { pageKey: "capitalGains",      path: "/assets/capital-gains" },
-  { pageKey: "nav",               path: "/nav/dashboard" },
-  { pageKey: "liabilities",       path: "/liabilities/dashboard" },
-  { pageKey: "insurance",         path: "/insurance/dashboard" },
-  { pageKey: "spendingDashboard", path: "/spending/dashboard" },
-  { pageKey: "receiptsLedger",    path: "/spending/receipts-ledger" },
-  { pageKey: "wheelScan",         path: "/research/wheel-scan" },
-  { pageKey: "assetHub",          path: "/research/asset-hub" },
+  // ── Portfolio ──────────────────────────────────────────────
+  { pageKey: "portfolio",         path: "/assets/portfolio",         label: "Portfolio",     group: "Portfolio" },
+  { pageKey: "capitalGains",      path: "/assets/capital-gains",     label: "Capital Gains", group: "Portfolio" },
+  { pageKey: "nav",               path: "/nav/dashboard",            label: "NAV",           group: "Portfolio" },
+
+  // ── Assets ─────────────────────────────────────────────────
+  { pageKey: "stocks",            path: "/assets/stocks",            label: "Stocks",        group: "Assets" },
+  { pageKey: "crypto",            path: "/assets/crypto",            label: "Crypto",        group: "Assets" },
+  { pageKey: "bullion",           path: "/assets/bullion",           label: "Bullion",       group: "Assets" },
+  { pageKey: "futures",           path: "/assets/futures",           label: "Futures",       group: "Assets" },
+  { pageKey: "options",           path: "/assets/options",           label: "Options",       group: "Assets" },
+  { pageKey: "fixedIncome",       path: "/assets/fixedincome",       label: "Fixed Income",  group: "Assets" },
+  { pageKey: "otherAssets",       path: "/assets/otherassets",       label: "Other Assets",  group: "Assets" },
+
+  // ── Protection ─────────────────────────────────────────────
+  { pageKey: "liabilities",       path: "/liabilities/dashboard",    label: "Liabilities",   group: "Protection" },
+  { pageKey: "insurance",         path: "/insurance/dashboard",      label: "Insurance",     group: "Protection" },
+
+  // ── Spending ───────────────────────────────────────────────
+  { pageKey: "spendingDashboard", path: "/spending/dashboard",       label: "Spending",      group: "Spending" },
+  { pageKey: "receiptsLedger",    path: "/spending/receipts-ledger", label: "Receipts",      group: "Spending" },
+
+  // ── Research ───────────────────────────────────────────────
+  { pageKey: "wheelScan",         path: "/research/wheel-scan",      label: "Wheel Scan",    group: "Research" },
+  { pageKey: "assetHub",          path: "/research/asset-hub",       label: "Asset Hub",     group: "Research" },
+  { pageKey: "advisor",           path: "/research/compass",         label: "Compass (AI)",  group: "Research" },
 ];
 
 /** Returns the pageKey for a given pathname, or null if not permission-gated. */

@@ -108,10 +108,10 @@ function SummaryTable({ stocks }) {
       </div>
 
       {/* Table */}
-      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-x-auto">
+      <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-x-auto">
         <table className="w-full min-w-[640px] text-sm">
           <thead>
-            <tr className="border-b border-white/[0.06] bg-white/[0.02]">
+            <tr className="border-b border-white/[0.06]">
               {SORT_COLS.map(col => (
                 <th
                   key={col.key}

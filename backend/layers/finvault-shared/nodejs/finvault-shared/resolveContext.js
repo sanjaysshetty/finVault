@@ -32,6 +32,8 @@ const ACCOUNTS_TABLE = process.env.FIN_ACCOUNTS_TABLE        || "FinAccounts";
 /** Default pages object granted to the account owner. */
 const ALL_PAGES_WRITE = {
   portfolio:         "write",
+  capitalGains:      "write",
+  nav:               "write",
   stocks:            "write",
   crypto:            "write",
   bullion:           "write",
@@ -39,12 +41,13 @@ const ALL_PAGES_WRITE = {
   options:           "write",
   fixedIncome:       "write",
   otherAssets:       "write",
-  nav:               "write",
   liabilities:       "write",
   insurance:         "write",
   spendingDashboard: "write",
   receiptsLedger:    "write",
   wheelScan:         "write",
+  assetHub:          "write",
+  advisor:           "write",
 };
 
 /**

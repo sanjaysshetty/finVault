@@ -93,7 +93,8 @@ export const queryKeys = {
   // Assets
   stocksTx:      () => ["assets", "stocks", "transactions"],
   bullionTx:     () => ["assets", "bullion", "transactions"],
-  cryptoTx:      () => ["assets", "crypto", "transactions"],
+  cryptoTx:        () => ["assets", "crypto", "transactions"],
+  cryptoRhHoldings:() => ["assets", "crypto", "rh-holdings"],
   fixedIncome:   () => ["assets", "fixedincome"],
   otherAssets:   () => ["assets", "otherassets"],
   optionsTx:     () => ["assets", "options", "transactions"],

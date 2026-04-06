@@ -14,12 +14,22 @@ import { api, queryKeys } from "../api/client.js";
  * invalidates all React Query caches so every page reloads under the new
  * account's context (the new X-Account-Id header is read at fetch time).
  */
+const SWITCH_EVENT = "finvault:account-switch";
+
 export function useAccounts() {
   const queryClient = useQueryClient();
 
   const [activeAccountId, setActiveAccountId] = useState(
     () => sessionStorage.getItem("finvault.activeAccountId") || ""
   );
+
+  // Sync activeAccountId across all useAccounts() instances in the same tab.
+  // switchAccount fires a custom event; every instance updates its own state.
+  useEffect(() => {
+    function onSwitch(e) { setActiveAccountId(e.detail); }
+    window.addEventListener(SWITCH_EVENT, onSwitch);
+    return () => window.removeEventListener(SWITCH_EVENT, onSwitch);
+  }, []);
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.accounts(),
@@ -54,6 +64,8 @@ export function useAccounts() {
     (accountId) => {
       sessionStorage.setItem("finvault.activeAccountId", accountId);
       setActiveAccountId(accountId);
+      // Notify all other useAccounts() instances in this tab to sync their state.
+      window.dispatchEvent(new CustomEvent(SWITCH_EVENT, { detail: accountId }));
       // Invalidate everything so all pages reload with the new account context.
       queryClient.invalidateQueries();
     },

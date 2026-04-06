@@ -7,6 +7,7 @@ import Portfolio from "./pages/Portfolio";
 import Stocks from "./pages/Stocks";
 import Bullion from "./pages/Bullion";
 import Options from "./pages/Options";
+import OptionsV2 from "./pages/OptionsV2";
 import OtherAssets from "./pages/OtherAssets";
 import FixedIncome from "./pages/FixedIncome";
 import SpendingDash from "./pages/SpendingDash";
@@ -20,6 +21,7 @@ import AccountsPage from "./pages/AccountsPage";
 import WheelScanPageReports from "./pages/WheelScan/WheelScanPageReports";
 import WheelScanResult from "./pages/WheelScan/WheelScanResult";
 import AssetHub from "./pages/AssetHub";
+import AdvisorChat from "./pages/AdvisorChat";
 import CapitalGains from "./pages/CapitalGains";
 import AuthCallback from "./auth/AuthCallback";
 import RequireAuth from "./auth/RequireAuth";
@@ -65,6 +67,7 @@ export default function App() {
           <Route path="/assets/stocks" element={<Stocks />} />
           <Route path="/assets/bullion" element={<Bullion />} />
           <Route path="/assets/options" element={<Options />} />
+          <Route path="/assets/options-v2" element={<OptionsV2 />} />
           <Route path="/assets/futures" element={<Futures />} />
           <Route path="/assets/fixedincome" element={<FixedIncome />} />
           <Route path="/assets/otherassets" element={<OtherAssets />} />
@@ -88,6 +91,7 @@ export default function App() {
           <Route path="/research/wheel-scan" element={<WheelScanPageReports />} />
           <Route path="/research/wheel-scan/:scanId" element={<WheelScanResult />} />
           <Route path="/research/asset-hub" element={<AssetHub />} />
+          <Route path="/research/compass" element={<AdvisorChat />} />
 
           {/* Accounts */}
           <Route path="/accounts" element={<AccountsPage />} />
