@@ -174,6 +174,12 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 13.5a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5Z" />
     </Icon>
   ),
+  compass: (
+    <Icon>
+      <circle cx="12" cy="12" r="9" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" />
+    </Icon>
+  ),
 };
 
 /* ── Section header (main menu row) ──────────────────────── */
@@ -282,7 +288,8 @@ export default function SideNav({ activeAccount }) {
           {hasAsset("crypto")      && <Item to="/assets/crypto"      label="Crypto"       icon={icons.crypto} />}
           {hasAsset("bullion")     && <Item to="/assets/bullion"     label="Bullion"      icon={icons.bullion} />}
           {hasAsset("futures")     && <Item to="/assets/futures"     label="Futures"      icon={icons.futures} />}
-          {hasAsset("options")     && <Item to="/assets/options"     label="Options"      icon={icons.options} />}
+          {hasAsset("options")     && <Item to="/assets/options"     label="Options (Legacy)"  icon={icons.options} />}
+          {hasAsset("options")     && <Item to="/assets/options-v2"  label="Options Pro"  icon={icons.options} />}
           {hasAsset("fixedIncome") && <Item to="/assets/fixedincome" label="Fixed Income" icon={icons.fixedIncome} />}
           {hasAsset("otherAssets")   && <Item to="/assets/otherassets"    label="Others"        icon={icons.others} />}
           {hasAsset("capitalGains")  && <Item to="/assets/capital-gains"  label="Capital Gains" icon={icons.capitalGains} />}
@@ -338,15 +345,16 @@ export default function SideNav({ activeAccount }) {
         </Section>
       )}
 
-      {canSee(activeAccount, "wheelScan") && (
+      {(canSee(activeAccount, "wheelScan") || canSee(activeAccount, "assetHub") || canSee(activeAccount, "advisor")) && (
         <Section
           title="Research"
           open={openResearch}
           icon={icons.sectionResearch}
           onToggle={() => setOpenResearch((v) => !v)}
         >
-          <Item to="/research/wheel-scan" label="Wheel Scan" icon={icons.wheelScan} />
-          <Item to="/research/asset-hub"  label="Asset Hub"  icon={icons.assetHub} />
+          {canSee(activeAccount, "wheelScan") && <Item to="/research/wheel-scan" label="Wheel Scan"  icon={icons.wheelScan} />}
+          {canSee(activeAccount, "assetHub")  && <Item to="/research/asset-hub"  label="Asset Hub"   icon={icons.assetHub} />}
+          {canSee(activeAccount, "advisor")   && <Item to="/research/compass"    label="Compass"     icon={icons.compass} />}
         </Section>
       )}
 

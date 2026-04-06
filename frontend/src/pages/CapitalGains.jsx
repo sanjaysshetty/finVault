@@ -550,7 +550,7 @@ function AssetRow({ label, note, st, lt, total, stLabel = "Short-Term", ltLabel 
 
 function SummaryCard({ label, value, sub }) {
   return (
-    <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] px-5 py-4 flex flex-col gap-1">
+    <div className="rounded-2xl border border-white/[0.07] bg-[#0F1729] px-5 py-4 flex flex-col gap-1">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`text-xl font-black tracking-tight tabular-nums ${plColorClass(value)}`}
         style={{ fontFamily: "Epilogue, sans-serif" }}>
@@ -563,7 +563,7 @@ function SummaryCard({ label, value, sub }) {
 
 function TaxCard({ value }) {
   return (
-    <div className="rounded-2xl border border-amber-500/[0.2] bg-amber-500/[0.04] px-5 py-4 flex flex-col gap-1">
+    <div className="rounded-2xl border border-amber-500/[0.2] bg-[#0F1729] px-5 py-4 flex flex-col gap-1">
       <div className="text-xs font-semibold uppercase tracking-wide text-amber-600/80">Est. Tax Liability</div>
       <div className="text-xl font-black tracking-tight tabular-nums text-amber-400"
         style={{ fontFamily: "Epilogue, sans-serif" }}>
@@ -667,8 +667,8 @@ export default function CapitalGains() {
           </div>
 
           {/* Asset breakdown with collapsible detail */}
-          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-            <div className="px-4 py-3 border-b border-white/[0.06] bg-white/[0.02] flex items-center justify-between">
+          <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-hidden">
+            <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
                 Realized Gains by Asset Type
               </span>
@@ -741,8 +741,8 @@ export default function CapitalGains() {
 
           {/* Schedule D + Tax estimate */}
           <div className="grid md:grid-cols-2 gap-4">
-            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-              <div className="px-4 py-3 border-b border-white/[0.06] bg-white/[0.02]">
+            <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-hidden">
+              <div className="px-4 py-3 border-b border-white/[0.06]">
                 <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Schedule D — After Netting</span>
               </div>
               <div className="py-1">
@@ -765,8 +765,8 @@ export default function CapitalGains() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] overflow-hidden">
-              <div className="px-4 py-3 border-b border-white/[0.06] bg-white/[0.02] flex items-center justify-between gap-2">
+            <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-hidden">
+              <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2">
                 <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Estimated Tax</span>
                 <div className="flex items-center gap-2">
                   <label className="text-[11px] text-slate-600 whitespace-nowrap">Bracket</label>

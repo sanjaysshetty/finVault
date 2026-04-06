@@ -124,4 +124,10 @@ export const PageIcons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 13.5a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5Z" />
     </Icon>
   ),
+  compass: (
+    <Icon>
+      <circle cx="12" cy="12" r="9" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" />
+    </Icon>
+  ),
 };

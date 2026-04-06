@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
 import { PageHeader } from "../components/ui/PageHeader.jsx";
@@ -146,14 +146,6 @@ function calcOpenCashFlow(row) {
   return 0;
 }
 
-function blankNewRow(country = "USA") {
-  return {
-    ticker: "SPY", type: "SELL", event: "", strikes: "",
-    openDate: todayISO(), expiry: "", qty: "", fill: "",
-    closePrice: "", fee: "", collateral: "", rollOver: "", closeDate: "", notes: "", country,
-  };
-}
-
 function normalizeItem(it) {
   const id = it.txId || it.assetId || it.id;
   const rollOver = it.rollOver ?? it.rollover ?? it.roll_over ?? it.rollOverFlag ?? "";
@@ -163,39 +155,6 @@ function normalizeItem(it) {
   return { ...it, id, collateral, rollOver, closeDate, notes };
 }
 
-function toPayload(d) {
-  const effectiveCollateral = getEffectiveCollateral(d);
-  const payload = {
-    ticker: String(d.ticker || "").toUpperCase().trim(),
-    type: String(d.type || "").trim(),
-    event: String(d.event || "").trim().toLowerCase() === "assigned" ? "Ass" : String(d.event || "").trim(),
-    strikes: String(d.strikes || "").trim(),
-    openDate: String(d.openDate || "").slice(0, 10),
-    expiry: String(d.expiry || "").slice(0, 10),
-    qty: d.qty === "" ? "" : Number(d.qty),
-    fill: d.fill === "" ? "" : Number(d.fill),
-    closePrice: d.closePrice === "" ? "" : Number(d.closePrice),
-    fee: d.fee === "" ? "" : Number(d.fee),
-    collateral: effectiveCollateral,
-    coll: effectiveCollateral,
-    rollOver: String(d.rollOver || "").trim(),
-    rollover: String(d.rollOver || "").trim(),
-    roll_over: String(d.rollOver || "").trim(),
-    closeDate: String(d.closeDate || "").slice(0, 10),
-    notes: String(d.notes || "").trim(),
-    country: String(d.country || "USA").toUpperCase().trim() || "USA",
-  };
-  if (!payload.ticker) throw new Error("Ticker is required");
-  if (!payload.type) throw new Error("Type is required");
-  if (!payload.openDate) throw new Error("Open Date is required");
-  if (payload.qty === "" || !Number.isFinite(payload.qty) || payload.qty <= 0)
-    throw new Error("Qty must be a positive number");
-  if (payload.fill === "" || !Number.isFinite(payload.fill) || payload.fill <= 0)
-    throw new Error("Fill must be a positive number");
-  if (!Number.isFinite(payload.collateral) || payload.collateral <= 0)
-    throw new Error("Collateral must be a positive number (strike × qty × 100 or override)");
-  return payload;
-}
 
 /* ================================================================
    COMPONENT
@@ -206,25 +165,12 @@ export default function Options() {
   const currency = COUNTRY_CURRENCY[country] ?? "USD";
   const formatMoney = (n) => _fmtMoney(n, currency);
 
-  const [busyId, setBusyId] = useState(null);
-
-  // Sync page-level country filter → new transaction default country
-  useEffect(() => { setNewDraft((d) => ({ ...d, country })); }, [country]);
-  const [error, setError] = useState("");
-
   const [expanded, setExpanded] = useState(() => new Set());
-  const [newDraft, setNewDraft] = useState(blankNewRow());
-  const [editId, setEditId] = useState(null);
-  const [editDraft, setEditDraft] = useState(null);
-
   const [fromDate, setFromDate] = useState(isoOneMonthAgoFromToday());
   const [toDate, setToDate] = useState(todayISO());
-
   const [showOpenOnly, setShowOpenOnly] = useState(false);
   const [tickerFilter, setTickerFilter] = useState("");
   const [sortMode, setSortMode] = useState("openDate_desc");
-
-  const queryClient = useQueryClient();
 
   /* ---------- Data query ---------- */
 
@@ -235,7 +181,41 @@ export default function Options() {
 
   const rows = useMemo(() => {
     const items = Array.isArray(rawData?.items) ? rawData.items : Array.isArray(rawData) ? rawData : [];
-    return items.map(normalizeItem);
+    const normalized = items.map(normalizeItem);
+
+    // V2 positions: merge CLOSE/ROLL_CLOSE legs onto their OPEN leg so Options.jsx
+    // single-row logic (closePrice / closeDate) works correctly.
+    const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE"]);
+    const OPEN_LEGS  = new Set(["OPEN", "ROLL_OPEN"]);
+
+    // Build a map: positionId → close leg
+    const closeByPos = {};
+    for (const r of normalized) {
+      const leg = String(r.leg || "").toUpperCase();
+      if (CLOSE_LEGS.has(leg) && r.positionId) {
+        closeByPos[r.positionId] = r;
+      }
+    }
+
+    const result = [];
+    for (const r of normalized) {
+      const leg = String(r.leg || "").toUpperCase();
+      // Skip standalone CLOSE/ROLL_CLOSE rows — their data is merged into the OPEN row
+      if (CLOSE_LEGS.has(leg) && r.positionId) continue;
+      // For OPEN/ROLL_OPEN rows that have a matching close leg, backfill closePrice + closeDate
+      if ((OPEN_LEGS.has(leg) || leg === "") && r.positionId && closeByPos[r.positionId]) {
+        const cl = closeByPos[r.positionId];
+        result.push({
+          ...r,
+          closePrice: cl.fill ?? cl.closePrice ?? 0,
+          closeDate: cl.openDate || cl.closeDate || r.closeDate || "",
+          notes: r.notes || cl.notes || "",
+        });
+      } else {
+        result.push(r);
+      }
+    }
+    return result;
   }, [rawData]);
 
   /* ---------- Live option marks (unrealized P/L) ---------- */
@@ -263,39 +243,6 @@ export default function Options() {
       .catch(err => console.warn("Option marks fetch failed:", err));
   }, [rows]);
 
-  /* ---------- Mutations ---------- */
-
-  const addMut = useMutation({
-    mutationFn: (payload) => api.post("/assets/options/transactions", payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.optionsTx() });
-      setNewDraft(blankNewRow());
-    },
-    onError: (e) => setError(e?.message || "Add failed"),
-    onSettled: () => setBusyId(null),
-  });
-
-  const patchMut = useMutation({
-    mutationFn: ({ id, payload }) =>
-      api.patch(`/assets/options/transactions/${encodeURIComponent(id)}`, payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.optionsTx() });
-      cancelEdit();
-    },
-    onError: (e) => setError(e?.message || "Save failed"),
-    onSettled: () => setBusyId(null),
-  });
-
-  const deleteMut = useMutation({
-    mutationFn: (id) => api.delete(`/assets/options/transactions/${encodeURIComponent(id)}`),
-    onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.optionsTx() });
-      if (editId === id) cancelEdit();
-      setExpanded((prev) => { const next = new Set(prev); next.delete(id); return next; });
-    },
-    onError: (e) => setError(e?.message || "Delete failed"),
-    onSettled: () => setBusyId(null),
-  });
 
   /* ---------- Date-picker CSS injection ---------- */
 
@@ -405,57 +352,6 @@ export default function Options() {
     });
   }
 
-  function startEdit(row) {
-    setError("");
-    setEditId(row.id);
-    setEditDraft({
-      ticker: row.ticker ?? "", type: row.type ?? "", event: row.event ?? "",
-      strikes: row.strikes ?? "", openDate: row.openDate ?? "", expiry: row.expiry ?? "",
-      qty: row.qty ?? "", fill: row.fill ?? "", closePrice: row.closePrice ?? "",
-      fee: row.fee ?? "", collateral: row.collateral ?? "", rollOver: row.rollOver ?? "",
-      closeDate: row.closeDate ?? "", notes: row.notes ?? "",
-      country: String(row.country || "USA").toUpperCase(),
-    });
-    setExpanded((prev) => new Set(prev).add(row.id));
-  }
-
-  function cancelEdit() { setEditId(null); setEditDraft(null); }
-
-  function saveEdit(id) {
-    setError("");
-    let payload;
-    try {
-      payload = toPayload(editDraft);
-    } catch (e) {
-      setError(e?.message || "Validation failed");
-      return;
-    }
-    setBusyId(id);
-    patchMut.mutate({ id, payload });
-  }
-
-  function addRow() {
-    setError("");
-    let payload;
-    try {
-      payload = toPayload(newDraft);
-    } catch (e) {
-      setError(e?.message || "Validation failed");
-      return;
-    }
-    setBusyId("__new__");
-    addMut.mutate(payload);
-  }
-
-  function deleteRow(id) {
-    if (!window.confirm("Delete this options transaction?")) return;
-    setError("");
-    setBusyId(id);
-    deleteMut.mutate(id);
-  }
-
-  const anyBusy = loading || busyId !== null;
-
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -468,14 +364,6 @@ export default function Options() {
           <option value="USA">USA</option>
           <option value="INDIA">India</option>
         </select>
-        <button
-          type="button"
-          onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.optionsTx() })}
-          className={btnSmCls}
-          disabled={anyBusy}
-        >
-          Refresh
-        </button>
       </PageHeader>
 
       {/* Summary filter bar */}
@@ -484,24 +372,23 @@ export default function Options() {
           <div>
             <div className="text-xs font-bold text-slate-500 mb-1.5">From</div>
             <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)}
-              className={`${inputCls} !w-44`} disabled={anyBusy} />
+              className={`${inputCls} !w-44`} />
           </div>
           <div>
             <div className="text-xs font-bold text-slate-500 mb-1.5">To</div>
             <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)}
-              className={`${inputCls} !w-44`} disabled={anyBusy} />
+              className={`${inputCls} !w-44`} />
           </div>
           <div>
             <div className="text-xs font-bold text-slate-500 mb-1.5">Ticker</div>
             <input type="text" value={tickerFilter} onChange={(e) => setTickerFilter(e.target.value)}
-              placeholder="(all)" className={`${inputCls} !w-36 uppercase`} disabled={anyBusy} />
+              placeholder="(all)" className={`${inputCls} !w-36 uppercase`} />
           </div>
           <div className="ml-auto">
             <button
               type="button"
               onClick={() => { setFromDate(isoOneMonthAgoFromToday()); setToDate(todayISO()); }}
               className={btnSmCls}
-              disabled={anyBusy}
             >
               Reset Dates
             </button>
@@ -537,13 +424,6 @@ export default function Options() {
         />
       </div>
 
-      {error && (
-        <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
-          <div className="text-xs font-bold text-slate-100">Error</div>
-          <div className="mt-1 text-xs text-slate-300">{error}</div>
-        </div>
-      )}
-
       {/* Main table panel */}
       <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
         <div className="flex items-center justify-between gap-3 mb-3">
@@ -552,7 +432,6 @@ export default function Options() {
               type="checkbox"
               checked={showOpenOnly}
               onChange={(e) => setShowOpenOnly(e.target.checked)}
-              disabled={anyBusy}
               className="w-4 h-4"
             />
             Show Open Only
@@ -566,7 +445,7 @@ export default function Options() {
             <thead>
               <tr>
                 <Th style={{ width: 40 }} />
-                <Th style={{ width: 66, position: "sticky", left: 0, zIndex: 6, background: "#0F1729", boxShadow: "inset -1px 0 0 rgba(148,163,184,0.16)" }}>
+                <Th style={{ width: 66, position: "sticky", left: 0, zIndex: 6, background: "var(--fv-card)", boxShadow: "inset -1px 0 0 rgba(148,163,184,0.16)" }}>
                   Ticker
                 </Th>
                 <Th style={{ width: 70 }}>Type</Th>
@@ -595,36 +474,23 @@ export default function Options() {
                 <Th style={{ width: 59 }}>Close</Th>
                 <Th style={{ width: 95 }}>P/L</Th>
                 <Th style={{ width: 81 }}>UN.P/L</Th>
-                <Th align="right" style={{ width: 114 }}>Actions</Th>
               </tr>
             </thead>
 
             <tbody>
-              <Tier1Row
-                expanded={expanded.has("__new__")}
-                toggle={() => toggleExpanded("__new__")}
-                row={newDraft}
-                setRow={setNewDraft}
-                busy={busyId !== null}
-                onPrimary={addRow}
-                primaryLabel={busyId === "__new__" ? "Adding…" : "Add"}
-                formatMoney={formatMoney}
-              />
-
               {loading ? (
                 <tr className="border-t border-white/[0.06]">
-                  <Td colSpan={14} className="text-slate-500">Loading…</Td>
+                  <Td colSpan={13} className="text-slate-500">Loading…</Td>
                 </tr>
               ) : listRows.length === 0 ? (
                 <tr className="border-t border-white/[0.06]">
-                  <Td colSpan={14} className="text-slate-500">No transactions match the current filters.</Td>
+                  <Td colSpan={13} className="text-slate-500">No transactions match the current filters.</Td>
                 </tr>
               ) : (
                 listRows.map((r) => {
-                  const isEditing = editId === r.id;
                   const isExpanded = expanded.has(r.id);
                   const rowBg = r._isOpen ? "rgba(251, 191, 36, 0.10)" : "transparent";
-                  const stickyBg = r._isOpen ? "rgba(251, 191, 36, 0.10)" : "#0F1729";
+                  const stickyBg = r._isOpen ? "rgba(251, 191, 36, 0.10)" : "var(--fv-card)";
                   return (
                     <FragmentRow
                       key={r.id}
@@ -633,14 +499,6 @@ export default function Options() {
                       stickyBg={stickyBg}
                       isExpanded={isExpanded}
                       onToggle={() => toggleExpanded(r.id)}
-                      isEditing={isEditing}
-                      editDraft={editDraft}
-                      setEditDraft={setEditDraft}
-                      onEdit={() => startEdit(r)}
-                      onSave={() => saveEdit(r.id)}
-                      onCancel={cancelEdit}
-                      onDelete={() => deleteRow(r.id)}
-                      busyId={busyId}
                       formatMoney={formatMoney}
                       marks={marks}
                     />
@@ -657,88 +515,11 @@ export default function Options() {
 
 /* ── Row components ─────────────────────────────────────────── */
 
-function Tier1Row({ expanded, toggle, row, setRow, busy, onPrimary, primaryLabel, formatMoney }) {
-  const pl = calcPL(row);
-  const unpl = calcUnrealizedPL(row, null);
-  const panelBg = "#0F1729";
-
-  return (
-    <>
-      <tr className="border-t border-white/[0.06]">
-        <Td>
-          <button type="button" onClick={toggle} className={chevCls} title={expanded ? "Collapse" : "Expand"}>
-            {expanded ? "▾" : "▸"}
-          </button>
-        </Td>
-        <Td style={{ position: "sticky", left: 0, zIndex: 5, background: panelBg, boxShadow: "inset -1px 0 0 rgba(148,163,184,0.12)" }}>
-          <input value={row.ticker ?? ""} onChange={(e) => setRow((d) => ({ ...d, ticker: e.target.value.toUpperCase() }))}
-            className={`${IC} w-16 font-black`} />
-        </Td>
-        <Td>
-          <input value={row.type ?? ""} onChange={(e) => setRow((d) => ({ ...d, type: e.target.value.toUpperCase() }))}
-            className={`${IC} w-[70px] font-black`} />
-        </Td>
-        <Td style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
-          <input value={row.event ?? ""} onChange={(e) => setRow((d) => ({ ...d, event: e.target.value }))}
-            className={`${IC} w-full`} />
-        </Td>
-        <Td style={{ whiteSpace: "normal", wordBreak: "break-word" }}>
-          <input value={row.strikes ?? ""} onChange={(e) => setRow((d) => ({ ...d, strikes: e.target.value }))}
-            className={`${IC} w-full`} />
-        </Td>
-        <Td>
-          <input type="date" value={row.openDate ?? ""} onChange={(e) => setRow((d) => ({ ...d, openDate: e.target.value }))}
-            className={`${IC} w-full`} />
-        </Td>
-        <Td>
-          <input type="date" value={row.closeDate ?? ""} onChange={(e) => setRow((d) => ({ ...d, closeDate: e.target.value }))}
-            className={`${IC} w-full`} />
-        </Td>
-        <Td>
-          <input type="date" value={row.expiry ?? ""} onChange={(e) => setRow((d) => ({ ...d, expiry: e.target.value }))}
-            className={`${IC} w-full`} />
-        </Td>
-        <Td>
-          <input value={row.qty ?? ""} onChange={(e) => setRow((d) => ({ ...d, qty: e.target.value }))}
-            className={`${IC} w-16`} inputMode="decimal" />
-        </Td>
-        <Td>
-          <input value={row.fill ?? ""} onChange={(e) => setRow((d) => ({ ...d, fill: e.target.value }))}
-            className={`${IC} w-[70px]`} inputMode="decimal" />
-        </Td>
-        <Td>
-          <input value={row.closePrice ?? ""} onChange={(e) => setRow((d) => ({ ...d, closePrice: e.target.value }))}
-            className={`${IC} w-[70px]`} inputMode="decimal" />
-        </Td>
-        <Td>
-          <span className="font-black text-xs" style={{ color: pl === null ? "#64748B" : plColor(pl) }}>
-            {pl === null ? "OPEN" : formatMoney(pl)}
-          </span>
-        </Td>
-        <Td>
-          <span className="font-black text-xs" style={{ color: unpl === null ? "#64748B" : plColor(unpl) }}>
-            {unpl === null ? "-" : formatMoney(unpl)}
-          </span>
-        </Td>
-        <Td align="right">
-          <button type="button" onClick={onPrimary} className={btnPrimSmCls} disabled={busy}>
-            {primaryLabel}
-          </button>
-        </Td>
-      </tr>
-      {expanded ? <Tier2DetailsRow row={row} setRow={setRow} /> : null}
-    </>
-  );
-}
-
-function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, editDraft, setEditDraft, onEdit, onSave, onCancel, onDelete, busyId, formatMoney, marks }) {
+function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, formatMoney, marks }) {
   const c = row._calc || {};
-  const isBusy = busyId !== null;
-  const displayed = isEditing ? editDraft : row;
-  const setDisplayed = isEditing ? setEditDraft : null;
-  const pl = isEditing ? calcPL(displayed) : c.pl;
-  const markPrice = (marks || {})[markKey(isEditing ? displayed : row)];
-  const unpl = calcUnrealizedPL(isEditing ? displayed : row, markPrice);
+  const pl = c.pl;
+  const markPrice = (marks || {})[markKey(row)];
+  const unpl = calcUnrealizedPL(row, markPrice);
 
   return (
     <>
@@ -754,176 +535,64 @@ function FragmentRow({ row, rowBg, stickyBg, isExpanded, onToggle, isEditing, ed
             {isExpanded ? "▾" : "▸"}
           </button>
         </Td>
-
         <Td style={{ position: "sticky", left: 0, zIndex: 5, background: stickyBg, boxShadow: "inset -1px 0 0 rgba(148,163,184,0.12)" }}>
-          {isEditing ? (
-            <input value={displayed.ticker ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, ticker: e.target.value.toUpperCase() }))}
-              className={`${IC} w-16 font-black`} />
-          ) : (
-            <span className="font-black text-slate-100 text-sm">{row.ticker}</span>
-          )}
+          <span className="font-black text-sm" style={{ color: row._isOpen ? undefined : "var(--fv-text)" }}>{row.ticker}</span>
         </Td>
-
         <Td>
-          {isEditing ? (
-            <input value={displayed.type ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, type: e.target.value.toUpperCase() }))}
-              className={`${IC} w-[70px] font-black`} />
-          ) : <Badge variant={String(row.type || "").toUpperCase() === "BUY" ? "buy" : String(row.type || "").toUpperCase() === "SELL" ? "sell" : "summary"}>{row.type}</Badge>}
+          <Badge variant={String(row.type || "").toUpperCase() === "BUY" ? "buy" : String(row.type || "").toUpperCase() === "SELL" ? "sell" : "summary"}>{row.type}</Badge>
         </Td>
-
         <Td style={{ whiteSpace: "nowrap" }}>
-          {isEditing ? (
-            <input value={displayed.event ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, event: e.target.value }))}
-              className={`${IC} w-full`} />
-          ) : (String(row.event || "").toLowerCase() === "assigned" ? "Ass" : row.event)}
+          {(() => { const e = String(row.event || ""); return e.charAt(0).toUpperCase() + e.slice(1).toLowerCase(); })()}
         </Td>
-
-        <Td style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.25 }}>
-          {isEditing ? (
-            <input value={displayed.strikes ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, strikes: e.target.value }))}
-              className={`${IC} w-full`} />
-          ) : row.strikes}
-        </Td>
-
-        <Td>
-          {isEditing ? (
-            <input type="date" value={displayed.openDate ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, openDate: e.target.value }))}
-              className={`${IC} w-full`} />
-          ) : (row.openDate || "-")}
-        </Td>
-
-        <Td>
-          {isEditing ? (
-            <input type="date" value={displayed.closeDate ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, closeDate: e.target.value }))}
-              className={`${IC} w-full`} />
-          ) : (row.closeDate || "-")}
-        </Td>
-
-        <Td>
-          {isEditing ? (
-            <input type="date" value={displayed.expiry ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, expiry: e.target.value }))}
-              className={`${IC} w-full`} />
-          ) : (row.expiry || "-")}
-        </Td>
-
-        <Td>
-          {isEditing ? (
-            <input value={displayed.qty ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, qty: e.target.value }))}
-              className={`${IC} w-16`} inputMode="decimal" />
-          ) : row.qty}
-        </Td>
-
-        <Td>
-          {isEditing ? (
-            <input value={displayed.fill ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, fill: e.target.value }))}
-              className={`${IC} w-[70px]`} inputMode="decimal" />
-          ) : (row.fill === "" ? "" : formatMoney(row.fill))}
-        </Td>
-
-        <Td>
-          {isEditing ? (
-            <input value={displayed.closePrice ?? ""} onChange={(e) => setDisplayed((d) => ({ ...d, closePrice: e.target.value }))}
-              className={`${IC} w-[70px]`} inputMode="decimal" />
-          ) : (row.closePrice === "" ? "" : formatMoney(row.closePrice))}
-        </Td>
-
+        <Td style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.25 }}>{row.strikes}</Td>
+        <Td>{row.openDate || "-"}</Td>
+        <Td>{row.closeDate || "-"}</Td>
+        <Td>{row.expiry || "-"}</Td>
+        <Td>{row.qty}</Td>
+        <Td>{row.fill === "" ? "" : formatMoney(row.fill)}</Td>
+        <Td>{row.closePrice === "" ? "" : formatMoney(row.closePrice)}</Td>
         <Td>
           <span className="font-black text-xs" style={{ color: pl === null ? "#64748B" : plColor(pl) }}>
             {pl === null ? "OPEN" : formatMoney(pl)}
           </span>
         </Td>
-
         <Td>
           <span className="font-black text-xs" style={{ color: unpl === null ? "#64748B" : plColor(unpl) }}>
             {unpl === null ? "-" : formatMoney(unpl)}
           </span>
         </Td>
-
-        <Td align="right">
-          {isEditing ? (
-            <div className="flex gap-1.5 justify-end flex-nowrap">
-              <button type="button" onClick={onSave} className={btnPrimSmCls} disabled={isBusy}>
-                {busyId === row.id ? "Saving…" : "Save"}
-              </button>
-              <button type="button" onClick={onCancel} className={btnSmSmCls} disabled={isBusy}>Cancel</button>
-            </div>
-          ) : (
-            <div className="flex gap-1.5 justify-end flex-nowrap">
-              <button type="button" onClick={onEdit} className={btnSmSmCls} disabled={isBusy}>Edit</button>
-              <button type="button" onClick={onDelete} className={btnDanSmCls} disabled={isBusy}>
-                {busyId === row.id ? "Deleting…" : "Delete"}
-              </button>
-            </div>
-          )}
-        </Td>
       </tr>
 
-      {isExpanded ? (
-        <Tier2DetailsRow row={isEditing ? editDraft : row} setRow={isEditing ? setEditDraft : null} />
-      ) : null}
+      {isExpanded ? <Tier2DetailsRow row={row} /> : null}
     </>
   );
 }
 
-function Tier2DetailsRow({ row, setRow }) {
-  const isEditable = typeof setRow === "function";
+function Tier2DetailsRow({ row }) {
   const pl = calcPL(row);
   const days = row.closeDate ? daysBetweenISO(row.openDate, row.closeDate) : null;
   const effectiveCollateral = getEffectiveCollateral(row);
   const roc = pl !== null && effectiveCollateral > 0 ? pl / effectiveCollateral : null;
   const anl = roc !== null && days ? (roc / days) * 365 : null;
   const defaultCollateral = calcDefaultCollateral(row);
+  const collateralDisplay = (row.collateral !== "" && row.collateral !== null && row.collateral !== undefined && String(row.collateral).trim() !== "")
+    ? row.collateral : defaultCollateral;
 
   return (
     <tr className="border-t border-white/[0.06]">
-      <Td colSpan={14} className="pt-2.5">
+      <Td colSpan={13} className="pt-2.5">
         <div className="rounded-xl border border-white/[0.06] bg-[#080D1A]/20 p-3">
           <div className="grid gap-3" style={{ gridTemplateColumns: "minmax(160px,1fr) minmax(220px,1.6fr) minmax(160px,1fr)" }}>
-            <DetailField
-              label={`Collateral (default: ${defaultCollateral || "—"})`}
-              value={
-                row.collateral !== "" && row.collateral !== null && row.collateral !== undefined && String(row.collateral).trim() !== ""
-                  ? row.collateral
-                  : defaultCollateral
-              }
-              onChange={isEditable ? (v) => setRow((d) => ({ ...d, collateral: v })) : null}
-              inputMode="decimal"
-              placeholder="Auto from strike×qty×100"
-            />
-            <DetailField
-              label="Roll Over"
-              value={row.rollOver ?? ""}
-              onChange={isEditable ? (v) => setRow((d) => ({ ...d, rollOver: v })) : null}
-              placeholder="Optional"
-            />
+            <DetailReadOnly label={`Collateral (default: ${defaultCollateral || "—"})`} value={collateralDisplay || "—"} />
+            <DetailReadOnly label="Roll Over" value={row.rollOver || "—"} />
             <DetailReadOnly
               label="Annual ROC"
               value={anl === null ? "—" : formatPct01(anl)}
               valueColor={anl === null ? "#64748B" : plColor(anl)}
             />
-            <div>
-              <div className="text-xs font-bold text-slate-500 mb-1.5">Country</div>
-              {isEditable ? (
-                <select
-                  value={row.country || "USA"}
-                  onChange={(e) => setRow((d) => ({ ...d, country: e.target.value }))}
-                  className={`${IC} w-full`}
-                >
-                  <option value="USA">USA</option>
-                  <option value="INDIA">India</option>
-                </select>
-              ) : (
-                <span className="text-xs text-slate-300">{row.country || "USA"}</span>
-              )}
-            </div>
+            <DetailReadOnly label="Country" value={row.country || "USA"} />
             <div style={{ gridColumn: "1 / -1" }}>
-              <DetailField
-                label="Notes"
-                value={row.notes ?? ""}
-                onChange={isEditable ? (v) => setRow((d) => ({ ...d, notes: v })) : null}
-                placeholder="Optional"
-                multiline
-              />
+              <DetailReadOnly label="Notes" value={row.notes || "—"} />
             </div>
           </div>
           <div className="mt-2.5 text-xs text-slate-500">
@@ -937,37 +606,6 @@ function Tier2DetailsRow({ row, setRow }) {
 
 /* ── UI helpers ─────────────────────────────────────────────── */
 
-function DetailField({ label, value, onChange, type = "text", placeholder, inputMode, multiline = false }) {
-  const editable = typeof onChange === "function";
-  return (
-    <div>
-      <div className="text-xs font-bold text-slate-500 mb-1.5">{label}</div>
-      {editable ? (
-        multiline ? (
-          <textarea
-            value={value ?? ""}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            className={`${IC} min-h-[92px] resize-vertical w-full`}
-          />
-        ) : (
-          <input
-            type={type}
-            value={value ?? ""}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            inputMode={inputMode}
-            className={`${IC} w-full`}
-          />
-        )
-      ) : (
-        <div className="w-full px-2.5 py-2.5 rounded-lg border border-white/[0.08] bg-[#080D1A]/20 text-sm text-slate-200 whitespace-pre-wrap">
-          {String(value || "—")}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function DetailReadOnly({ label, value, valueColor }) {
   return (
@@ -1027,11 +665,6 @@ function Td({ children, colSpan, align, className, style }) {
 
 /* ── Constants ───────────────────────────────────────────────── */
 
-const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
-// Compact input for use inside table cells
-const IC = "px-2 py-1.5 bg-[#080D1A] border border-white/[0.08] rounded-lg text-slate-200 text-xs outline-none focus:border-blue-500/[0.4] transition-colors";
-const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors";
 const chevCls = "w-7 h-7 rounded-lg border border-white/[0.08] bg-white/[0.04] text-slate-300 font-black cursor-pointer hover:bg-white/[0.08] text-xs inline-flex items-center justify-center";
-const btnPrimSmCls = "text-xs font-bold text-slate-100 px-2.5 py-1.5 rounded-lg border border-blue-500/[0.3] bg-blue-500/[0.15] hover:bg-blue-500/[0.25] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
-const btnSmSmCls = "text-xs font-bold text-slate-400 px-2.5 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
-const btnDanSmCls = "text-xs font-bold text-red-400 px-2.5 py-1.5 rounded-lg border border-red-500/[0.3] bg-red-500/[0.08] hover:bg-red-500/[0.15] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
+const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer whitespace-nowrap";

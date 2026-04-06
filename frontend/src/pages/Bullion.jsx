@@ -467,7 +467,7 @@ function Btn({ children, onClick, disabled, type = "button" }) {
 function BtnPrimary({ children, onClick, disabled, type = "button" }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
-      className="text-xs font-bold text-slate-100 px-3 py-1.5 rounded-lg border border-blue-500/[0.3] bg-blue-500/[0.15] hover:bg-blue-500/[0.25] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+      className="text-xs font-bold text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
       {children}
     </button>
   );

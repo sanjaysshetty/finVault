@@ -32,6 +32,7 @@ const icons = {
   receipts:    <Icon><path strokeLinecap="round" strokeLinejoin="round" d="M7 4h10v16l-2-1.3L13 20l-2-1.3L9 20l-2-1.3L5 20V6a2 2 0 0 1 2-2z" /><path strokeLinecap="round" strokeLinejoin="round" d="M9 9h6M9 12h6" /></Icon>,
   wheelScan:   <Icon><circle cx="12" cy="12" r="7" /><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M12 8v8" /><path strokeLinecap="round" strokeLinejoin="round" d="M9 9l6 6M15 9l-6 6" /></Icon>,
   assetHub:    <Icon><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75H4.5A.75.75 0 0 0 3.75 4.5v5.25c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 3.75h-5.25a.75.75 0 0 0-.75.75v5.25c0 .414.336.75.75.75H19.5a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 13.5H4.5a.75.75 0 0 0-.75.75V19.5c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75v-5.25a.75.75 0 0 0-.75-.75Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M17.25 13.5a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5Z" /></Icon>,
+  compass:      <Icon><circle cx="12" cy="12" r="9" /><path strokeLinecap="round" strokeLinejoin="round" d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" /></Icon>,
   capitalGains: <Icon><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18" /><path strokeLinecap="round" strokeLinejoin="round" d="M5 6h14" /><path strokeLinecap="round" strokeLinejoin="round" d="M5 6l-2 5h4l-2-5z" /><path strokeLinecap="round" strokeLinejoin="round" d="M19 6l-2 5h4l-2-5z" /></Icon>,
   accounts:    <Icon><circle cx="12" cy="8.2" r="3.2" /><path strokeLinecap="round" strokeLinejoin="round" d="M5 19c1.6-3 4-4.5 7-4.5s5.4 1.5 7 4.5" /></Icon>,
 };
@@ -139,7 +140,7 @@ export default function MobileDrawer({ open, onClose, activeAccount }) {
       {/* Slide-in panel */}
       <div
         className={[
-          "relative flex flex-col",
+          "relative flex flex-col fv-mobile-drawer",
           "w-72 h-full",
           "bg-[#080D1A] border-r border-white/[0.07]",
           "transition-transform duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)]",
@@ -187,7 +188,8 @@ export default function MobileDrawer({ open, onClose, activeAccount }) {
               {has("crypto")      && <Item to="/assets/crypto"      label="Crypto"       icon={icons.crypto}      onClose={onClose} />}
               {has("bullion")     && <Item to="/assets/bullion"     label="Bullion"      icon={icons.bullion}     onClose={onClose} />}
               {has("fixedIncome") && <Item to="/assets/fixedincome" label="Fixed Income" icon={icons.fixedIncome} onClose={onClose} />}
-              {has("options")     && <Item to="/assets/options"     label="Options"      icon={icons.options}     onClose={onClose} />}
+              {has("options")     && <Item to="/assets/options"     label="Options (Legacy)"  icon={icons.options}     onClose={onClose} />}
+              {has("options")     && <Item to="/assets/options-v2"  label="Options Pro"  icon={icons.options}     onClose={onClose} />}
               {has("otherAssets") && <Item to="/assets/otherassets" label="Others"       icon={icons.others}      onClose={onClose} />}
               {has("futures")      && <Item to="/assets/futures"       label="Futures"       icon={icons.futures}      onClose={onClose} />}
               {has("capitalGains") && <Item to="/assets/capital-gains" label="Capital Gains" icon={icons.capitalGains}  onClose={onClose} />}
@@ -243,15 +245,16 @@ export default function MobileDrawer({ open, onClose, activeAccount }) {
             </Section>
           )}
 
-          {has("wheelScan") && (
+          {(has("wheelScan") || has("assetHub") || has("advisor")) && (
             <Section
               title="Research"
               icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-3.5 h-3.5"><circle cx="11" cy="11" r="7" /><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 16.5l3.5 3.5" /></svg>}
               open={openResearch}
               onToggle={() => setOpenResearch((v) => !v)}
             >
-              <Item to="/research/wheel-scan" label="Wheel Scan" icon={icons.wheelScan} onClose={onClose} />
-              <Item to="/research/asset-hub"  label="Asset Hub"  icon={icons.assetHub}  onClose={onClose} />
+              {has("wheelScan") && <Item to="/research/wheel-scan" label="Wheel Scan" icon={icons.wheelScan} onClose={onClose} />}
+              {has("assetHub")  && <Item to="/research/asset-hub"  label="Asset Hub"  icon={icons.assetHub}  onClose={onClose} />}
+              {has("advisor")   && <Item to="/research/compass"    label="Compass"    icon={icons.compass}   onClose={onClose} />}
             </Section>
           )}
         </nav>

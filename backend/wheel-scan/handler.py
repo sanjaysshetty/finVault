@@ -32,9 +32,10 @@ from tools import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-ANALYTICS_BUCKET = os.environ.get("ANALYTICS_BUCKET", "")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = "claude-sonnet-4-6"
+ANALYTICS_BUCKET      = os.environ.get("ANALYTICS_BUCKET", "")
+ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
+WHEEL_SCAN_ACCOUNT_ID = os.environ.get("WHEEL_SCAN_ACCOUNT_ID", "")  # userId/accountId for scheduled runs
+MODEL        = "claude-sonnet-4-6"
 WHEEL_PREFIX = "WheelReports/"
 
 s3 = boto3.client("s3")
@@ -295,9 +296,9 @@ def write_to_s3(key, data):
     logger.info(f"Wrote s3://{ANALYTICS_BUCKET}/{key}")
 
 
-def update_index(scan_id, report):
-    """Update WheelReports/index.json with the new scan entry."""
-    index_key = WHEEL_PREFIX + "index.json"
+def update_index(scan_id, report, prefix):
+    """Update {prefix}index.json with the new scan entry."""
+    index_key = prefix + "index.json"
     try:
         obj = s3.get_object(Bucket=ANALYTICS_BUCKET, Key=index_key)
         index = json.loads(obj["Body"].read())
@@ -330,7 +331,15 @@ def handler(event, context):
     started_at = datetime.datetime.utcnow().isoformat() + "Z"
     scan_id    = datetime.date.today().isoformat()
 
-    logger.info(f"Wheel scan started. scan_id={scan_id}")
+    # Resolve account: manual API trigger passes accountId in event payload;
+    # scheduled EventBridge runs fall back to WHEEL_SCAN_ACCOUNT_ID env var.
+    account_id = (event or {}).get("accountId", "") or WHEEL_SCAN_ACCOUNT_ID
+    if not account_id:
+        logger.error("No accountId in event and WHEEL_SCAN_ACCOUNT_ID not configured — cannot determine output path")
+        return {"statusCode": 500, "body": "WHEEL_SCAN_ACCOUNT_ID not configured"}
+    prefix = WHEEL_PREFIX + account_id + "/"
+
+    logger.info(f"Wheel scan started. scan_id={scan_id} prefix={prefix}")
 
     # 1. Universe
     tickers = get_full_universe()
@@ -374,12 +383,12 @@ def handler(event, context):
     # 7. Build and write report
     report = build_report(analysis_set, fund_scores, macro_data, thesis_data, scan_id, started_at)
 
-    daily_key  = WHEEL_PREFIX + f"{scan_id}.json"
-    latest_key = WHEEL_PREFIX + "latest.json"
+    daily_key  = prefix + f"{scan_id}.json"
+    latest_key = prefix + "latest.json"
 
     write_to_s3(daily_key,  report)
     write_to_s3(latest_key, report)
-    update_index(scan_id, report)
+    update_index(scan_id, report, prefix)
 
     logger.info(
         f"Scan complete. PROCEED={report['proceed_count']} "

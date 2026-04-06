@@ -27,25 +27,75 @@
   --color-fv-muted: #64748B;   /* slate-500 */
 }
 
-/* ── CSS custom properties (legacy compat + Spending.jsx) ─── */
+/* ── CSS custom properties ─────────────────────────────────── */
+/* Dark theme tokens (default) */
 :root {
   color-scheme: dark;
 
+  /* Legacy vars used by Spending.jsx sofi-* classes */
   --bg:          #0A0F1E;
   --card:        #0F1729;
   --cardBorder:  rgba(59, 130, 246, 0.15);
-
   --text:        #E2E8F0;
   --muted:       rgba(100, 116, 139, 0.85);
-
   --accent:      #3B82F6;
   --accentDeep:  #1D4ED8;
-
   --shadow:      0 10px 25px rgba(0, 0, 0, 0.4);
   --shadow2:     0 6px 18px rgba(0, 0, 0, 0.3);
-
   --radius:   18px;
   --radiusLg: 22px;
+
+  /* finVault theme tokens */
+  --fv-bg:          #0A0F1E;
+  --fv-sidebar:     #080D1A;
+  --fv-card:        #0F1729;
+  --fv-input:       #080D1A;
+  --fv-card-border: rgba(59,130,246,0.15);
+  --fv-border:      rgba(255,255,255,0.06);
+  --fv-text:        #E2E8F0;
+  --fv-muted:       #64748B;
+  --fv-dim:         #475569;
+  --fv-active-bg:   rgba(59,130,246,0.12);
+  --fv-active-text: #93C5FD;
+  --fv-active-icon: #60A5FA;
+  --fv-hover:       rgba(255,255,255,0.05);
+  --fv-gain:        #4ADE80;
+  --fv-loss:        #F87171;
+  --fv-gradient:    radial-gradient(ellipse 1200px 800px at 20% 0%, rgba(99,102,241,0.05) 0%, transparent 55%), #0A0F1E;
+}
+
+/* Light theme tokens */
+html.light {
+  color-scheme: light;
+
+  /* Override legacy vars */
+  --bg:         #ebebf5;
+  --card:       #ffffff;
+  --cardBorder: rgba(99,102,241,0.10);
+  --text:       #1a1a2e;
+  --muted:      rgba(74,74,107,0.85);
+  --accent:     #4f46e5;
+  --accentDeep: #3730a3;
+  --shadow:     0px 4px 24px rgba(99,102,241,0.10);
+  --shadow2:    0px 2px 12px rgba(99,102,241,0.08);
+
+  /* finVault theme tokens */
+  --fv-bg:          #ebebf5;
+  --fv-sidebar:     #f2f2fa;
+  --fv-card:        #ffffff;
+  --fv-input:       #f2f2fa;
+  --fv-card-border: rgba(99,102,241,0.10);
+  --fv-border:      rgba(199,199,230,0.6);
+  --fv-text:        #1a1a2e;
+  --fv-muted:       #4a4a6b;
+  --fv-dim:         #7878a0;
+  --fv-active-bg:   #d4edcc;
+  --fv-active-text: #1e5c13;
+  --fv-active-icon: #3a7d2c;
+  --fv-hover:       rgba(58,125,44,0.05);
+  --fv-gain:        #059669;
+  --fv-loss:        #dc2626;
+  --fv-gradient:    #ebebf5;
 }
 
 /* ── Base reset ─────────────────────────────────────────────── */
@@ -252,3 +302,247 @@ input[type="date"] {
   box-shadow: var(--shadow2); font-size: 13px; color: var(--text);
 }
 .sofi-alert-error { border-color: rgba(248,113,113,.35); color: #fca5a5; }
+
+/* ============================================================
+   Light theme — override Tailwind arbitrary-value color classes
+   All pages and components switch automatically without code changes.
+   ============================================================ */
+
+/* ── Backgrounds ─────────────────────────────────────────── */
+html.light .bg-\[\#0A0F1E\]  { background-color: #ebebf5 !important; }
+html.light .bg-\[\#0F1729\]  { background-color: #ffffff !important; }
+html.light .bg-\[\#080D1A\]  { background-color: #f2f2fa !important; }
+html.light .bg-\[\#131E35\]  { background-color: #e8e8f4 !important; }
+
+/* Glassmorphic sidebar + top bar */
+html.light aside,
+html.light .fv-topbar,
+html.light .fv-mobile-header {
+  background: rgba(242,242,250,0.90) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+html.light .fv-mobile-drawer {
+  background: rgba(242,242,250,0.98) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* ── Borders ─────────────────────────────────────────────── */
+html.light .border-\[rgba\(59\,130\,246\,0\.12\)\] { border-color: rgba(99,102,241,0.12) !important; }
+html.light .border-\[rgba\(59\,130\,246\,0\.15\)\] { border-color: rgba(99,102,241,0.12) !important; }
+html.light .border-white\/\[0\.04\]  { border-color: rgba(199,199,230,0.4) !important; }
+html.light .border-white\/\[0\.06\]  { border-color: rgba(199,199,230,0.5) !important; }
+html.light .border-white\/\[0\.07\]  { border-color: rgba(199,199,230,0.5) !important; }
+html.light .border-white\/\[0\.08\]  { border-color: rgba(199,199,230,0.55) !important; }
+html.light .border-white\/\[0\.1\]   { border-color: rgba(199,199,230,0.6) !important; }
+html.light .border-white\/\[0\.14\]  { border-color: rgba(199,199,230,0.7) !important; }
+
+/* Dividers */
+html.light .divide-white\/\[0\.04\] > * + * { border-color: rgba(199,199,230,0.4) !important; }
+
+/* ── Text ────────────────────────────────────────────────── */
+html.light .text-white       { color: #1a1a2e !important; }
+html.light .text-slate-50    { color: #1a1a2e !important; }
+html.light .text-slate-100   { color: #1a1a2e !important; }
+html.light .text-slate-200   { color: #1a1a2e !important; }
+html.light .text-slate-300   { color: #4a4a6b !important; }
+html.light .text-slate-400   { color: #4a4a6b !important; }
+html.light .text-slate-500   { color: #7878a0 !important; }
+html.light .text-slate-600   { color: #9898b8 !important; }
+html.light .text-slate-700   { color: #b8b8d0 !important; }
+
+html.light .hover\:text-white:hover        { color: #1e5c13 !important; }
+html.light .hover\:text-slate-200:hover    { color: #1a1a2e !important; }
+html.light .hover\:text-slate-300:hover    { color: #1a1a2e !important; }
+html.light .hover\:text-blue-400:hover     { color: #3a7d2c !important; }
+
+/* ── Accent / interactive ────────────────────────────────── */
+html.light .text-blue-300    { color: #1e5c13 !important; }
+html.light .text-blue-400    { color: #3a7d2c !important; }
+html.light .text-blue-500    { color: #3a7d2c !important; }
+html.light .text-cyan-400    { color: #0284c7 !important; }
+
+html.light .bg-blue-500\/\[0\.05\]   { background-color: rgba(79,70,229,0.05) !important; }
+html.light .bg-blue-500\/\[0\.07\]   { background-color: rgba(79,70,229,0.07) !important; }
+html.light .bg-blue-500\/\[0\.08\]   { background-color: rgba(79,70,229,0.08) !important; }
+html.light .bg-blue-500\/\[0\.1\]    { background-color: rgba(79,70,229,0.09) !important; }
+html.light .bg-blue-500\/10          { background-color: rgba(79,70,229,0.09) !important; }
+html.light .bg-blue-500\/\[0\.12\]   { background-color: #d4edcc !important; }
+html.light .bg-blue-500\/\[0\.20\]   { background-color: #d4edcc !important; }
+html.light .bg-blue-500\/20          { background-color: #d4edcc !important; }
+html.light .bg-blue-500\/15          { background-color: #d4edcc !important; }
+
+/* ── Solid primary button — dollar bill green ────────────────
+   #3a7d2c = dark dollar-bill green  (contrast vs white: ~6.2:1 ✓ WCAG AA)
+   #4a9038 = hover state (slightly lighter)
+   text-white is globally remapped to dark in light mode, so we
+   must re-assert #fff for any element that ALSO carries bg-blue-600.
+   ──────────────────────────────────────────────────────────── */
+html.light .bg-blue-600              { background-color: #3a7d2c !important; }
+html.light .hover\:bg-blue-500:hover { background-color: #4a9038 !important; }
+/* Keep button labels white — beats the global .text-white override via specificity */
+html.light .bg-blue-600,
+html.light .bg-blue-600 *   { color: #ffffff !important; }
+html.light .bg-purple-600,
+html.light .bg-purple-600 * { color: #ffffff !important; }
+html.light .bg-purple-500,
+html.light .bg-purple-500 * { color: #ffffff !important; }
+html.light .hover\:bg-purple-500:hover { background-color: #9333ea !important; }
+
+/* Any other solid-colored action buttons that need white text */
+html.light .bg-emerald-600,
+html.light .bg-emerald-600 * { color: #ffffff !important; }
+html.light .bg-red-600,
+html.light .bg-red-600 *     { color: #ffffff !important; }
+html.light .bg-orange-600,
+html.light .bg-orange-600 *  { color: #ffffff !important; }
+html.light .bg-blue-600\/40          { background-color: rgba(58,125,44,0.40) !important; }
+html.light .bg-blue-600\/50          { background-color: rgba(58,125,44,0.50) !important; }
+html.light .bg-blue-600\/20          { background-color: rgba(58,125,44,0.10) !important; }
+html.light .hover\:bg-blue-600\/30:hover { background-color: rgba(58,125,44,0.15) !important; }
+
+html.light .border-l-blue-500             { border-left-color: #3a7d2c !important; }
+html.light .border-blue-500\/30           { border-color: rgba(58,125,44,0.35) !important; }
+html.light .border-blue-500\/\[0\.3\]     { border-color: rgba(58,125,44,0.35) !important; }
+html.light .border-blue-500\/40           { border-color: rgba(58,125,44,0.45) !important; }
+html.light .border-blue-500\/\[0\.4\]     { border-color: rgba(58,125,44,0.45) !important; }
+html.light .focus\:border-blue-500\/\[0\.4\]:focus { border-color: rgba(58,125,44,0.5) !important; }
+html.light .focus\:border-blue-500\/40:focus       { border-color: rgba(58,125,44,0.5) !important; }
+
+html.light .bg-cyan-400\/15     { background-color: rgba(2,132,199,0.10) !important; }
+html.light .border-cyan-400\/30 { border-color: rgba(2,132,199,0.30) !important; }
+
+html.light .text-purple-400          { color: #7e22ce !important; }
+html.light .bg-purple-500\/10        { background-color: rgba(126,34,206,0.10) !important; }
+html.light .border-purple-500\/20    { border-color: rgba(126,34,206,0.20) !important; }
+
+/* ── Status / leg pills (Options Pro + elsewhere) ─────────── */
+/* These use opaque pastel fills so pills pop cleanly on the
+   light lavender page background instead of washed-out tints. */
+
+/* OPEN — mint green */
+html.light .bg-green-500\/15       { background-color: #dcfce7 !important; }
+html.light .border-green-500\/20   { border-color: #86efac !important; }
+
+/* EXPIRED — soft peach */
+html.light .bg-orange-500\/15      { background-color: #fff0e6 !important; }
+html.light .border-orange-500\/20  { border-color: #fdba74 !important; }
+html.light .text-orange-400        { color: #c2410c !important; }
+
+/* ROLLED — sky blue */
+html.light .bg-cyan-500\/15        { background-color: #e0f2fe !important; }
+html.light .border-cyan-500\/20    { border-color: #7dd3fc !important; }
+/* text-cyan-400 already set in accent block above */
+
+/* CLOSED — neutral slate */
+html.light .bg-slate-700\/50       { background-color: #f1f5f9 !important; }
+html.light .border-white\/10       { border-color: #94a3b8 !important; }
+
+/* Leg type mini-pills */
+html.light .bg-slate-600\/40       { background-color: #f1f5f9 !important; }
+html.light .bg-blue-500\/15        { background-color: #eff6ff !important; }
+html.light .bg-amber-500\/15       { background-color: #fef3c7 !important; }
+
+/* ── Gain / Loss ─────────────────────────────────────────── */
+html.light .text-green-400         { color: #059669 !important; }
+html.light .text-emerald-400       { color: #059669 !important; }
+html.light .text-emerald-500       { color: #047857 !important; }
+html.light .text-red-400           { color: #dc2626 !important; }
+html.light .text-red-300           { color: #dc2626 !important; }
+html.light .bg-green-400\/15       { background-color: rgba(5,150,105,0.10) !important; }
+html.light .bg-red-400\/15         { background-color: rgba(220,38,38,0.08) !important; }
+html.light .border-green-400\/30   { border-color: rgba(5,150,105,0.30) !important; }
+html.light .border-red-400\/30     { border-color: rgba(220,38,38,0.25) !important; }
+
+/* Emerald tinted backgrounds (WheelScan ProceedCard, etc.) */
+html.light .bg-emerald-500\/\[0\.04\]  { background-color: rgba(5,150,105,0.06) !important; }
+html.light .bg-emerald-500\/\[0\.07\]  { background-color: rgba(5,150,105,0.08) !important; }
+html.light .bg-emerald-500\/\[0\.12\]  { background-color: rgba(5,150,105,0.10) !important; }
+html.light .bg-emerald-500\/\[0\.15\]  { background-color: rgba(5,150,105,0.12) !important; }
+html.light .bg-emerald-500\/20         { background-color: rgba(5,150,105,0.14) !important; }
+html.light .border-emerald-500\/\[0\.15\] { border-color: rgba(5,150,105,0.25) !important; }
+html.light .border-emerald-500\/\[0\.2\]  { border-color: rgba(5,150,105,0.28) !important; }
+html.light .border-emerald-500\/\[0\.25\] { border-color: rgba(5,150,105,0.30) !important; }
+html.light .border-emerald-500\/\[0\.3\]  { border-color: rgba(5,150,105,0.35) !important; }
+
+/* Error states */
+html.light .bg-red-500\/10         { background-color: rgba(220,38,38,0.07) !important; }
+html.light .border-red-500\/25     { border-color: rgba(220,38,38,0.25) !important; }
+
+/* ── Amber / Warning ─────────────────────────────────────── */
+html.light .text-amber-300         { color: #b45309 !important; }
+html.light .text-amber-400         { color: #b45309 !important; }
+html.light .text-amber-500\/80     { color: rgba(180,83,9,0.80) !important; }
+html.light .text-amber-600         { color: #b45309 !important; }
+html.light .bg-amber-500\/\[0\.03\]  { background-color: rgba(180,83,9,0.04) !important; }
+html.light .bg-amber-500\/\[0\.04\]  { background-color: rgba(180,83,9,0.05) !important; }
+html.light .bg-amber-500\/\[0\.08\]  { background-color: rgba(180,83,9,0.07) !important; }
+html.light .bg-amber-500\/10         { background-color: rgba(180,83,9,0.07) !important; }
+html.light .bg-amber-500\/20         { background-color: rgba(180,83,9,0.12) !important; }
+html.light .border-amber-500\/\[0\.15\] { border-color: rgba(180,83,9,0.20) !important; }
+html.light .border-amber-500\/20       { border-color: rgba(180,83,9,0.20) !important; }
+html.light .border-amber-500\/30       { border-color: rgba(180,83,9,0.30) !important; }
+
+/* ── Hover backgrounds ───────────────────────────────────── */
+html.light .hover\:bg-white\/\[0\.02\]:hover { background-color: rgba(99,102,241,0.03) !important; }
+html.light .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(99,102,241,0.04) !important; }
+html.light .hover\:bg-white\/\[0\.05\]:hover { background-color: rgba(99,102,241,0.05) !important; }
+html.light .hover\:bg-white\/\[0\.07\]:hover { background-color: rgba(99,102,241,0.06) !important; }
+html.light .hover\:border-white\/\[0\.14\]:hover { border-color: rgba(199,199,230,0.7) !important; }
+
+/* ── Misc utility backgrounds ────────────────────────────── */
+html.light .bg-white\/\[0\.01\]    { background-color: rgba(99,102,241,0.01) !important; }
+html.light .bg-white\/\[0\.02\]    { background-color: rgba(99,102,241,0.02) !important; }
+html.light .bg-white\/\[0\.03\]    { background-color: rgba(99,102,241,0.03) !important; }
+html.light .bg-white\/\[0\.04\]    { background-color: rgba(99,102,241,0.04) !important; }
+html.light .bg-white\/\[0\.05\]    { background-color: rgba(99,102,241,0.05) !important; }
+html.light .bg-white\/\[0\.06\]    { background-color: rgba(99,102,241,0.05) !important; }
+html.light .bg-black\/70           { background-color: rgba(0,0,0,0.40) !important; }
+
+/* ── Options Pro table alternating rows (light) ─────────── */
+html.light .fv-options-tbody tr:nth-child(odd)  { background-color: #ffffff; }
+html.light .fv-options-tbody tr:nth-child(even) { background-color: #f3f3fa; }
+html.light .fv-options-tbody tr:hover           { background-color: #eaeaf6 !important; }
+
+/* ── Scrollbar (light) ───────────────────────────────────── */
+html.light ::-webkit-scrollbar-track { background: #ebebf5; }
+html.light ::-webkit-scrollbar-thumb { background: #c8c8e8; }
+html.light ::-webkit-scrollbar-thumb:hover { background: #3a7d2c; }
+
+/* ── Date inputs ─────────────────────────────────────────── */
+html.light input[type="date"] { color-scheme: light; }
+
+/* ── PricesBar MiniCard ──────────────────────────────────── */
+.fv-mini-card {
+  min-width: 126px; height: 44px; border-radius: 12px; padding: 7px 10px;
+  background: rgba(2, 6, 23, 0.35); border: 1px solid rgba(255,255,255,0.10);
+  display: flex; flex-direction: column; justify-content: center;
+  backdrop-filter: blur(6px); flex: 0 0 auto;
+}
+.fv-mini-card-label {
+  font-size: 10px; color: rgba(255,255,255,0.65); font-weight: 800; line-height: 1;
+}
+.fv-mini-card-value {
+  margin-top: 3px; font-size: 13px; font-weight: 900; line-height: 1.05;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fv-mini-card-btn {
+  height: 44px; padding: 0 10px; border-radius: 12px; flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(2, 6, 23, 0.35);
+  color: #ffffff; font-weight: 900; cursor: pointer;
+  backdrop-filter: blur(6px); white-space: nowrap;
+}
+
+html.light .fv-mini-card {
+  background: rgba(255,255,255,0.80) !important;
+  border-color: rgba(99,102,241,0.12) !important;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.10);
+}
+html.light .fv-mini-card-label { color: #7878a0 !important; }
+html.light .fv-mini-card-btn {
+  background: rgba(255,255,255,0.80) !important;
+  border-color: rgba(99,102,241,0.15) !important;
+  color: #1a1a2e !important;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.10);
+}

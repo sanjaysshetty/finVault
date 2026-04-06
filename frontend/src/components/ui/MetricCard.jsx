@@ -20,7 +20,7 @@ export function MetricCard({ label, value, pct = null, valueClass = "text-slate-
       className={[
         "rounded-2xl p-4 flex flex-col gap-1 min-w-0 overflow-hidden",
         "bg-[#0F1729] border border-[rgba(59,130,246,0.15)]",
-        accent ? "border-l-2 border-l-blue-500" : "",
+        accent ? "border-l-[3px] border-l-blue-500" : "",
         className,
       ].join(" ")}
     >

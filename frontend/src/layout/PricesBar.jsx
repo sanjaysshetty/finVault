@@ -38,10 +38,10 @@ function fmtPct(price, prevClose) {
 function priceColor(price, prevClose) {
   const p  = Number(price);
   const pc = Number(prevClose);
-  if (!Number.isFinite(p) || !Number.isFinite(pc)) return "#E5E7EB";
-  if (p > pc) return "#22C55E";
-  if (p < pc) return "#EF4444";
-  return "#E5E7EB";
+  if (!Number.isFinite(p) || !Number.isFinite(pc)) return "var(--fv-text)";
+  if (p > pc) return "var(--fv-gain)";
+  if (p < pc) return "var(--fv-loss)";
+  return "var(--fv-text)";
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -176,17 +176,9 @@ function computePortfolioValue({ fiItems, bullionTx, stockTx, cryptoTx, otherIte
    ────────────────────────────────────────────────────────────── */
 function MiniCard({ label, value, accent, title }) {
   return (
-    <div
-      style={{
-        minWidth: 126, height: 44, borderRadius: 12, padding: "7px 10px",
-        background: "rgba(2, 6, 23, 0.35)", border: "1px solid rgba(255,255,255,0.10)",
-        display: "flex", flexDirection: "column", justifyContent: "center",
-        backdropFilter: "blur(6px)", flex: "0 0 auto",
-      }}
-      title={title || value}
-    >
-      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.65)", fontWeight: 800, lineHeight: 1 }}>{label}</div>
-      <div style={{ marginTop: 3, fontSize: 13, fontWeight: 900, color: accent, lineHeight: 1.05, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+    <div className="fv-mini-card" title={title || value}>
+      <div className="fv-mini-card-label">{label}</div>
+      <div className="fv-mini-card-value" style={{ color: accent }}>
         {value}
       </div>
     </div>
@@ -278,7 +270,7 @@ export default function PricesBar() {
       <MiniCard
         label="Portfolio"
         value={!fiRes && !stockRes ? "…" : fmtUSD(portfolioValue)}
-        accent="#FFFFFF"
+        accent="var(--fv-text)"
         title="Total holding value (Fixed Income + Stocks + Crypto + Bullion + Other Assets; excluding Property)"
       />
       <MiniCard label="S&P 500" value={spxValue}    accent={priceColor(spx?.price,    spx?.prevClose)} />
@@ -288,11 +280,7 @@ export default function PricesBar() {
       <MiniCard label="BTC" value={loading ? "…" : btcMid != null ? `${fmtUSD(btcMid)}${fmtPct(btcMid, btcRow?.prevClose)}` : "—"} accent={priceColor(btcMid, btcRow?.prevClose)} />
       <MiniCard label="ETH" value={loading ? "…" : ethMid != null ? `${fmtUSD(ethMid)}${fmtPct(ethMid, ethRow?.prevClose)}` : "—"} accent={priceColor(ethMid, ethRow?.prevClose)} />
 
-      <button
-        onClick={handleRefresh}
-        style={{ height: 44, padding: "0 10px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(2, 6, 23, 0.35)", color: "#FFFFFF", fontWeight: 900, cursor: "pointer", backdropFilter: "blur(6px)", flex: "0 0 auto", whiteSpace: "nowrap" }}
-        title="Refresh"
-      >
+      <button onClick={handleRefresh} className="fv-mini-card-btn" title="Refresh">
         Refresh
       </button>
     </div>
