@@ -40,8 +40,21 @@ samconfig.toml
 node_modules/
 **/node_modules/
 
-# Secrets
+# Scripts folder (local use only)
+backend/scripts/
+
+# Secrets and sensitive data
 backend/keys.json
+backend/options_keys.json
+backend/scripts/keys.json
+backend/scripts/keys.ndjson
+backend/scripts/options_keys.json
+backend/scripts/batches_aa
+backend/scripts/*.xlsx
+backend/scripts/*.csv
+backend/receipt-extractor/*.jpg
+backend/receipt-extractor/*.jpeg
+backend/receipt-extractor/*.png
 
 # Local-only files
 local/
