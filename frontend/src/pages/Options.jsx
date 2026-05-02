@@ -667,4 +667,4 @@ function Td({ children, colSpan, align, className, style }) {
 
 const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors";
 const chevCls = "w-7 h-7 rounded-lg border border-white/[0.08] bg-white/[0.04] text-slate-300 font-black cursor-pointer hover:bg-white/[0.08] text-xs inline-flex items-center justify-center";
-const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer whitespace-nowrap";
+const btnSmCls = "text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer whitespace-nowrap fv-btn-secondary";

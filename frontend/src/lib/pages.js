@@ -20,7 +20,7 @@ export const PAGE_ROUTES = [
   { pageKey: "crypto",            path: "/assets/crypto",            label: "Crypto",        group: "Assets" },
   { pageKey: "bullion",           path: "/assets/bullion",           label: "Bullion",       group: "Assets" },
   { pageKey: "futures",           path: "/assets/futures",           label: "Futures",       group: "Assets" },
-  { pageKey: "options",           path: "/assets/options-v2",        label: "Options",       group: "Assets" },
+  { pageKey: "options",           path: "/assets/options-v2",        label: "Options Pro",   group: "Assets" },
   { pageKey: "fixedIncome",       path: "/assets/fixedincome",       label: "Fixed Income",  group: "Assets" },
   { pageKey: "otherAssets",       path: "/assets/otherassets",       label: "Other Assets",  group: "Assets" },
 
@@ -35,7 +35,7 @@ export const PAGE_ROUTES = [
   // ── Research ───────────────────────────────────────────────
   { pageKey: "wheelScan",         path: "/research/wheel-scan",      label: "Wheel Scan",    group: "Research" },
   { pageKey: "assetHub",          path: "/research/asset-hub",       label: "Asset Hub",     group: "Research" },
-  { pageKey: "advisor",           path: "/research/compass",         label: "Compass (AI)",  group: "Research" },
+  { pageKey: "advisor",           path: "/research/compass",         label: "Compass AI",    group: "Research" },
 
   // ── Trading ────────────────────────────────────────────────
   // paperTrading is intentionally separate from any future liveTrading entry.

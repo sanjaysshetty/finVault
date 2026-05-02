@@ -671,7 +671,7 @@ export default function AdvisorChat() {
     <div className="flex flex-col gap-5 h-full">
 
       {/* ── Header ───────────────────────────────────────────── */}
-      <PageHeader title="Compass" icon={PageIcons.compass}>
+      <PageHeader title="Compass AI" icon={PageIcons.compass}>
         {/* Trade framework badge */}
         <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 text-[11px] font-semibold">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3 h-3">

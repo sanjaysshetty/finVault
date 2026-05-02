@@ -8,23 +8,24 @@
 
 /* ── Custom Tailwind theme tokens ─────────────────────────── */
 @theme {
+  --font-manrope: "Manrope", system-ui, sans-serif;
   --font-space-grotesk: "Space Grotesk", system-ui, sans-serif;
   --font-epilogue: "Epilogue", system-ui, sans-serif;
 
-  /* finVault dark navy palette */
-  --color-navy:     #0A0F1E;
-  --color-surface:  #0F1729;
-  --color-surface2: #131E35;
-  --color-border:   rgba(59, 130, 246, 0.15);
+  /* finVault palette — matched to finVaultUI-2.0 */
+  --color-navy:     #0A0F1A;
+  --color-surface:  #111827;
+  --color-surface2: #1A2535;
+  --color-border:   rgba(61, 214, 140, 0.15);
 
-  --color-accent:    #3B82F6;   /* blue-500   — primary CTA */
-  --color-highlight: #22D3EE;   /* cyan-400   — positive / selected */
-  --color-warning:   #F59E0B;   /* amber-400  — pending / futures */
-  --color-gain:      #4ADE80;   /* green-400  — positive P/L */
-  --color-loss:      #F87171;   /* red-400    — negative P/L */
+  --color-accent:    #3DD68C;   /* green — primary CTA */
+  --color-highlight: #22D3EE;   /* cyan-400 */
+  --color-warning:   #FBBF24;   /* amber-400 */
+  --color-gain:      #3DD68C;   /* green gain */
+  --color-loss:      #F87171;   /* red loss */
 
-  --color-fv-text:  #E2E8F0;   /* slate-200 */
-  --color-fv-muted: #64748B;   /* slate-500 */
+  --color-fv-text:  #E8F0F8;
+  --color-fv-muted: #5A7090;
 }
 
 /* ── CSS custom properties ─────────────────────────────────── */
@@ -33,69 +34,91 @@
   color-scheme: dark;
 
   /* Legacy vars used by Spending.jsx sofi-* classes */
-  --bg:          #0A0F1E;
-  --card:        #0F1729;
-  --cardBorder:  rgba(59, 130, 246, 0.15);
-  --text:        #E2E8F0;
-  --muted:       rgba(100, 116, 139, 0.85);
-  --accent:      #3B82F6;
-  --accentDeep:  #1D4ED8;
+  --bg:          #0A0F1A;
+  --card:        #111827;
+  --cardBorder:  rgba(255,255,255,0.06);
+  --text:        #E8F0F8;
+  --muted:       rgba(90,112,144,0.85);
+  --accent:      #3DD68C;
+  --accentDeep:  #1a9e65;
   --shadow:      0 10px 25px rgba(0, 0, 0, 0.4);
   --shadow2:     0 6px 18px rgba(0, 0, 0, 0.3);
   --radius:   18px;
   --radiusLg: 22px;
 
-  /* finVault theme tokens */
-  --fv-bg:          #0A0F1E;
-  --fv-sidebar:     #080D1A;
-  --fv-card:        #0F1729;
-  --fv-input:       #080D1A;
-  --fv-card-border: rgba(59,130,246,0.15);
+  /* finVault theme tokens — matched to finVaultUI-2.0 */
+  --fv-bg:          #0A0F1A;
+  --fv-sidebar:     #070C14;
+  --fv-card:        #111827;
+  --fv-input:       #070C14;
+  --fv-card-border: rgba(255,255,255,0.06);
   --fv-border:      rgba(255,255,255,0.06);
-  --fv-text:        #E2E8F0;
-  --fv-muted:       #64748B;
-  --fv-dim:         #475569;
-  --fv-active-bg:   rgba(59,130,246,0.12);
-  --fv-active-text: #93C5FD;
-  --fv-active-icon: #60A5FA;
+  --fv-divider:     rgba(255,255,255,0.05);
+  --fv-text:        #E8F0F8;
+  --fv-text-secondary: #B0C0D8;
+  --fv-muted:       #5A7090;
+  --fv-dim:         #3A4A60;
+  --fv-active-bg:   rgba(26,158,101,0.14);
+  --fv-active-text: #3DD68C;
+  --fv-active-icon: #3DD68C;
+  --fv-nav-active-bg: var(--fv-active-bg);
+  --fv-nav-active-text: var(--fv-active-text);
   --fv-hover:       rgba(255,255,255,0.05);
-  --fv-gain:        #4ADE80;
+  --fv-chip-bg:     rgba(255,255,255,0.05);
+  --fv-gain:        #3DD68C;
   --fv-loss:        #F87171;
-  --fv-gradient:    radial-gradient(ellipse 1200px 800px at 20% 0%, rgba(99,102,241,0.05) 0%, transparent 55%), #0A0F1E;
+  --fv-gradient:    radial-gradient(ellipse 1200px 800px at 20% 0%, rgba(61,214,140,0.03) 0%, transparent 55%), #0A0F1A;
 }
 
-/* Light theme tokens */
+/* Light theme tokens — matched to finVaultUI-2.0 */
 html.light {
   color-scheme: light;
 
   /* Override legacy vars */
-  --bg:         #ebebf5;
-  --card:       #ffffff;
-  --cardBorder: rgba(99,102,241,0.10);
-  --text:       #1a1a2e;
-  --muted:      rgba(74,74,107,0.85);
-  --accent:     #4f46e5;
-  --accentDeep: #3730a3;
-  --shadow:     0px 4px 24px rgba(99,102,241,0.10);
-  --shadow2:    0px 2px 12px rgba(99,102,241,0.08);
+  --bg:         #F4F6F3;
+  --card:       #FFFFFF;
+  --cardBorder: rgba(1,45,29,0.08);
+  --text:       #191C1C;
+  --muted:      rgba(90,112,96,0.85);
+  --accent:     #0e6c4a;
+  --accentDeep: #012d1d;
+  --shadow:     0px 4px 24px rgba(1,45,29,0.08);
+  --shadow2:    0px 2px 12px rgba(1,45,29,0.06);
 
   /* finVault theme tokens */
-  --fv-bg:          #ebebf5;
-  --fv-sidebar:     #f2f2fa;
-  --fv-card:        #ffffff;
-  --fv-input:       #f2f2fa;
-  --fv-card-border: rgba(99,102,241,0.10);
-  --fv-border:      rgba(199,199,230,0.6);
-  --fv-text:        #1a1a2e;
-  --fv-muted:       #4a4a6b;
-  --fv-dim:         #7878a0;
-  --fv-active-bg:   #d4edcc;
-  --fv-active-text: #1e5c13;
-  --fv-active-icon: #3a7d2c;
-  --fv-hover:       rgba(58,125,44,0.05);
+  --fv-bg:          #F4F6F3;
+  --fv-sidebar:     #EEF0ED;
+  --fv-card:        #FFFFFF;
+  --fv-input:       #EEF0ED;
+  --fv-card-border: rgba(1,45,29,0.08);
+  --fv-border:      rgba(1,45,29,0.08);
+  --fv-divider:     rgba(1,45,29,0.07);
+  --fv-text:        #191C1C;
+  --fv-text-secondary: #414844;
+  --fv-muted:       #5A7060;
+  --fv-dim:         #8A9890;
+  --fv-active-bg:   #c1ecd4;
+  --fv-active-text: #012d1d;
+  --fv-active-icon: #0e6c4a;
+  --fv-nav-active-bg: var(--fv-active-bg);
+  --fv-nav-active-text: var(--fv-active-text);
+  --fv-hover:       rgba(1,45,29,0.03);
+  --fv-chip-bg:     #EEF0ED;
   --fv-gain:        #059669;
-  --fv-loss:        #dc2626;
-  --fv-gradient:    #ebebf5;
+  --fv-loss:        #DC2626;
+  --fv-gradient:    #F4F6F3;
+}
+
+/* ── Sidebar nav item hover (no !important — active inline styles win) ── */
+.sidebar-item:hover {
+  background: var(--fv-chip-bg);
+  color: var(--fv-text-secondary);
+}
+
+/* ── Old blue card borders → neutral (pages not yet updated) ── */
+.border-\[rgba\(59\,130\,246\,0\.12\)\],
+.border-\[rgba\(59\,130\,246\,0\.15\)\] {
+  border-color: var(--fv-border) !important;
 }
 
 /* ── Base reset ─────────────────────────────────────────────── */
@@ -112,17 +135,17 @@ body {
   background: var(--bg);
   color: var(--text);
   overflow-x: hidden;
-  font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: "Manrope", "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 #root { max-width: none; }
 
 /* ── Scrollbar (dark theme) ──────────────────────────────── */
-::-webkit-scrollbar       { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0A0F1E; }
-::-webkit-scrollbar-thumb { background: #1E3A5F; border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #3B82F6; }
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--fv-bg); }
+::-webkit-scrollbar-thumb { background: rgba(26,158,101,0.27); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #1a9e65; }
 
 /* ============================================================
    Legacy .sofi-* classes — used by Spending.jsx
@@ -309,53 +332,58 @@ input[type="date"] {
    ============================================================ */
 
 /* ── Backgrounds ─────────────────────────────────────────── */
-html.light .bg-\[\#0A0F1E\]  { background-color: #ebebf5 !important; }
+/* Old dark colors → new colors (kept for page components not yet updated) */
+html.light .bg-\[\#0A0F1E\]  { background-color: #F4F6F3 !important; }
+html.light .bg-\[\#0A0F1A\]  { background-color: #F4F6F3 !important; }
 html.light .bg-\[\#0F1729\]  { background-color: #ffffff !important; }
-html.light .bg-\[\#080D1A\]  { background-color: #f2f2fa !important; }
-html.light .bg-\[\#131E35\]  { background-color: #e8e8f4 !important; }
+html.light .bg-\[\#111827\]  { background-color: #ffffff !important; }
+html.light .bg-\[\#080D1A\]  { background-color: #EEF0ED !important; }
+html.light .bg-\[\#070C14\]  { background-color: #EEF0ED !important; }
+html.light .bg-\[\#131E35\]  { background-color: #F3F4F3 !important; }
+html.light .bg-\[\#1A2535\]  { background-color: #F3F4F3 !important; }
 
 /* Glassmorphic sidebar + top bar */
 html.light aside,
 html.light .fv-topbar,
 html.light .fv-mobile-header {
-  background: rgba(242,242,250,0.90) !important;
+  background: rgba(238,240,237,0.92) !important;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
 html.light .fv-mobile-drawer {
-  background: rgba(242,242,250,0.98) !important;
+  background: rgba(238,240,237,0.98) !important;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
 
 /* ── Borders ─────────────────────────────────────────────── */
-html.light .border-\[rgba\(59\,130\,246\,0\.12\)\] { border-color: rgba(99,102,241,0.12) !important; }
-html.light .border-\[rgba\(59\,130\,246\,0\.15\)\] { border-color: rgba(99,102,241,0.12) !important; }
-html.light .border-white\/\[0\.04\]  { border-color: rgba(199,199,230,0.4) !important; }
-html.light .border-white\/\[0\.06\]  { border-color: rgba(199,199,230,0.5) !important; }
-html.light .border-white\/\[0\.07\]  { border-color: rgba(199,199,230,0.5) !important; }
-html.light .border-white\/\[0\.08\]  { border-color: rgba(199,199,230,0.55) !important; }
-html.light .border-white\/\[0\.1\]   { border-color: rgba(199,199,230,0.6) !important; }
-html.light .border-white\/\[0\.14\]  { border-color: rgba(199,199,230,0.7) !important; }
+html.light .border-\[rgba\(59\,130\,246\,0\.12\)\] { border-color: rgba(1,45,29,0.10) !important; }
+html.light .border-\[rgba\(59\,130\,246\,0\.15\)\] { border-color: rgba(1,45,29,0.10) !important; }
+html.light .border-white\/\[0\.04\]  { border-color: rgba(1,45,29,0.05) !important; }
+html.light .border-white\/\[0\.06\]  { border-color: rgba(1,45,29,0.07) !important; }
+html.light .border-white\/\[0\.07\]  { border-color: rgba(1,45,29,0.07) !important; }
+html.light .border-white\/\[0\.08\]  { border-color: rgba(1,45,29,0.08) !important; }
+html.light .border-white\/\[0\.1\]   { border-color: rgba(1,45,29,0.09) !important; }
+html.light .border-white\/\[0\.14\]  { border-color: rgba(1,45,29,0.12) !important; }
 
 /* Dividers */
-html.light .divide-white\/\[0\.04\] > * + * { border-color: rgba(199,199,230,0.4) !important; }
+html.light .divide-white\/\[0\.04\] > * + * { border-color: rgba(1,45,29,0.05) !important; }
 
 /* ── Text ────────────────────────────────────────────────── */
-html.light .text-white       { color: #1a1a2e !important; }
-html.light .text-slate-50    { color: #1a1a2e !important; }
-html.light .text-slate-100   { color: #1a1a2e !important; }
-html.light .text-slate-200   { color: #1a1a2e !important; }
-html.light .text-slate-300   { color: #4a4a6b !important; }
-html.light .text-slate-400   { color: #4a4a6b !important; }
-html.light .text-slate-500   { color: #7878a0 !important; }
-html.light .text-slate-600   { color: #9898b8 !important; }
-html.light .text-slate-700   { color: #b8b8d0 !important; }
+html.light .text-white       { color: #191C1C !important; }
+html.light .text-slate-50    { color: #191C1C !important; }
+html.light .text-slate-100   { color: #191C1C !important; }
+html.light .text-slate-200   { color: #191C1C !important; }
+html.light .text-slate-300   { color: #414844 !important; }
+html.light .text-slate-400   { color: #8A9890 !important; }
+html.light .text-slate-500   { color: #8A9890 !important; }
+html.light .text-slate-600   { color: #8A9890 !important; }
+html.light .text-slate-700   { color: #aab8b0 !important; }
 
-html.light .hover\:text-white:hover        { color: #1e5c13 !important; }
-html.light .hover\:text-slate-200:hover    { color: #1a1a2e !important; }
-html.light .hover\:text-slate-300:hover    { color: #1a1a2e !important; }
-html.light .hover\:text-blue-400:hover     { color: #3a7d2c !important; }
+html.light .hover\:text-white:hover        { color: #0e6c4a !important; }
+html.light .hover\:text-slate-200:hover    { color: #191C1C !important; }
+html.light .hover\:text-slate-300:hover    { color: #414844 !important; }
+html.light .hover\:text-blue-400:hover     { color: #0e6c4a !important; }
 
 /* ── Accent / interactive ────────────────────────────────── */
 html.light .text-blue-300    { color: #1e5c13 !important; }
@@ -485,19 +513,19 @@ html.light .border-amber-500\/20       { border-color: rgba(180,83,9,0.20) !impo
 html.light .border-amber-500\/30       { border-color: rgba(180,83,9,0.30) !important; }
 
 /* ── Hover backgrounds ───────────────────────────────────── */
-html.light .hover\:bg-white\/\[0\.02\]:hover { background-color: rgba(99,102,241,0.03) !important; }
-html.light .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(99,102,241,0.04) !important; }
-html.light .hover\:bg-white\/\[0\.05\]:hover { background-color: rgba(99,102,241,0.05) !important; }
-html.light .hover\:bg-white\/\[0\.07\]:hover { background-color: rgba(99,102,241,0.06) !important; }
-html.light .hover\:border-white\/\[0\.14\]:hover { border-color: rgba(199,199,230,0.7) !important; }
+html.light .hover\:bg-white\/\[0\.02\]:hover { background-color: rgba(1,45,29,0.03) !important; }
+html.light .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(1,45,29,0.04) !important; }
+html.light .hover\:bg-white\/\[0\.05\]:hover { background-color: rgba(1,45,29,0.05) !important; }
+html.light .hover\:bg-white\/\[0\.07\]:hover { background-color: rgba(1,45,29,0.06) !important; }
+html.light .hover\:border-white\/\[0\.14\]:hover { border-color: rgba(1,45,29,0.15) !important; }
 
 /* ── Misc utility backgrounds ────────────────────────────── */
-html.light .bg-white\/\[0\.01\]    { background-color: rgba(99,102,241,0.01) !important; }
-html.light .bg-white\/\[0\.02\]    { background-color: rgba(99,102,241,0.02) !important; }
-html.light .bg-white\/\[0\.03\]    { background-color: rgba(99,102,241,0.03) !important; }
-html.light .bg-white\/\[0\.04\]    { background-color: rgba(99,102,241,0.04) !important; }
-html.light .bg-white\/\[0\.05\]    { background-color: rgba(99,102,241,0.05) !important; }
-html.light .bg-white\/\[0\.06\]    { background-color: rgba(99,102,241,0.05) !important; }
+html.light .bg-white\/\[0\.01\]    { background-color: rgba(1,45,29,0.01) !important; }
+html.light .bg-white\/\[0\.02\]    { background-color: rgba(1,45,29,0.02) !important; }
+html.light .bg-white\/\[0\.03\]    { background-color: rgba(1,45,29,0.03) !important; }
+html.light .bg-white\/\[0\.04\]    { background-color: rgba(1,45,29,0.03) !important; }
+html.light .bg-white\/\[0\.05\]    { background-color: rgba(1,45,29,0.04) !important; }
+html.light .bg-white\/\[0\.06\]    { background-color: rgba(1,45,29,0.04) !important; }
 html.light .bg-black\/70           { background-color: rgba(0,0,0,0.40) !important; }
 
 /* ── Options Pro table alternating rows (light) ─────────── */
@@ -506,12 +534,73 @@ html.light .fv-options-tbody tr:nth-child(even) { background-color: #f3f3fa; }
 html.light .fv-options-tbody tr:hover           { background-color: #eaeaf6 !important; }
 
 /* ── Scrollbar (light) ───────────────────────────────────── */
-html.light ::-webkit-scrollbar-track { background: #ebebf5; }
-html.light ::-webkit-scrollbar-thumb { background: #c8c8e8; }
-html.light ::-webkit-scrollbar-thumb:hover { background: #3a7d2c; }
+html.light ::-webkit-scrollbar-track { background: #EEF0ED; }
+html.light ::-webkit-scrollbar-thumb { background: rgba(14,108,74,0.27); }
+html.light ::-webkit-scrollbar-thumb:hover { background: #0e6c4a; }
 
 /* ── Date inputs ─────────────────────────────────────────── */
 html.light input[type="date"] { color-scheme: light; }
+
+/* ── Spending.jsx inline inputs (light theme) ──────────────
+   inlineInput is a JS object so can't be overridden by class;
+   we target the element + class combination instead.         */
+html.light input.spend-date {
+  background: #ffffff !important;
+  color: #191C1C !important;
+  border: 1px solid rgba(1,45,29,0.15) !important;
+}
+html.light input.spend-date::-webkit-calendar-picker-indicator {
+  opacity: 1 !important;
+  filter: invert(0.3) sepia(1) saturate(3) hue-rotate(90deg);
+  cursor: pointer;
+}
+html.light input.spend-text {
+  background: #ffffff !important;
+  color: #191C1C !important;
+  border-color: rgba(1,45,29,0.15) !important;
+}
+html.light .date-btn {
+  border-color: rgba(1,45,29,0.15) !important;
+  background: rgba(1,45,29,0.04) !important;
+}
+html.light .date-btn svg { stroke: #0e6c4a !important; }
+
+/* ── Shared action button classes (theme-aware) ─────────── */
+
+/* Solid primary: Save / Add / Submit */
+.fv-btn-solid {
+  background: #1a9e65;
+  color: #ffffff !important;
+}
+.fv-btn-solid:hover:not(:disabled) { background: #22c47d; }
+.fv-btn-solid:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Secondary: Edit / Refresh / Reset / Cancel */
+.fv-btn-secondary {
+  border: 1px solid rgba(26,158,101,0.35);
+  background: rgba(26,158,101,0.09);
+  color: #3DD68C;
+}
+.fv-btn-secondary:hover:not(:disabled) {
+  background: rgba(26,158,101,0.18);
+  border-color: rgba(26,158,101,0.55);
+  color: #56e6a2;
+}
+.fv-btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+html.light .fv-btn-solid { background: #0e6c4a; }
+html.light .fv-btn-solid:hover:not(:disabled) { background: #1a7d59; }
+
+html.light .fv-btn-secondary {
+  border-color: rgba(14,108,74,0.30);
+  background: rgba(14,108,74,0.07);
+  color: #0e6c4a;
+}
+html.light .fv-btn-secondary:hover:not(:disabled) {
+  background: rgba(14,108,74,0.14);
+  border-color: rgba(14,108,74,0.50);
+  color: #0a5038;
+}
 
 /* ── PricesBar MiniCard ──────────────────────────────────── */
 .fv-mini-card {
@@ -545,4 +634,87 @@ html.light .fv-mini-card-btn {
   border-color: rgba(99,102,241,0.15) !important;
   color: #1a1a2e !important;
   box-shadow: 0 2px 8px rgba(99,102,241,0.10);
+}
+
+/* ── Print styles ─────────────────────────────────────────── */
+@media print {
+  @page { size: A4 portrait; margin: 8mm 8mm; }
+
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+  /* White background everywhere — eliminates trailing shading */
+  html, body { background: #ffffff !important; margin: 0 !important; padding: 0 !important; }
+
+  /* Hide everything except the NAV print area */
+  body * { visibility: hidden !important; }
+  #nav-print-area, #nav-print-area * { visibility: visible !important; }
+  #nav-print-area {
+    position: absolute; top: 0; left: 0; width: 100%;
+    padding: 12px 16px 0;
+    background: #ffffff;
+    /* Scale to fill pages while keeping 2-page layout */
+    zoom: 0.92;
+    /* Light-mode CSS variable overrides */
+    --fv-card: #ffffff;
+    --fv-border: rgba(0, 0, 0, 0.12);
+    --fv-text: #111111;
+    --fv-text-secondary: #444444;
+    --fv-dim: #666666;
+    --fv-gain: #16a34a;
+    --fv-loss: #dc2626;
+    color: #111111;
+  }
+
+  /* Always show both country sections */
+  #nav-print-area .nav-print-section { display: block !important; }
+
+  /* Hide filter + print button */
+  #nav-print-area .nav-no-print { display: none !important; }
+
+  /* Show print-only report header */
+  #nav-print-area .nav-print-only { display: flex !important; }
+
+  /* Force 2-column layout for asset/liability panels */
+  #nav-print-area .nav-country-grid {
+    display: grid !important;
+    grid-template-columns: 3fr 2fr !important;
+    gap: 10px !important;
+  }
+
+  /* Metric cards reduced 40% for print */
+  #nav-print-area .nav-metrics-grid {
+    gap: 6px !important;
+    margin-bottom: 10px !important;
+  }
+  #nav-print-area .nav-metric-card {
+    min-height: 66px !important;
+    padding: 8px 12px !important;
+  }
+  #nav-print-area .nav-metric-card .text-3xl {
+    font-size: 1.1rem !important;
+    margin-bottom: 1px !important;
+  }
+  #nav-print-area .nav-metric-card .text-xs {
+    font-size: 0.58rem !important;
+  }
+  #nav-print-area .nav-metric-card .mb-2 {
+    margin-bottom: 3px !important;
+  }
+
+  /* India starts on a fresh page 2 */
+  #nav-print-area .nav-india-section { break-before: page; }
+
+  /* No extra gap after India — insurance follows immediately */
+  #nav-print-area .nav-india-section { padding-bottom: 0 !important; margin-bottom: 0 !important; }
+  #nav-print-area .nav-india-section .mt-6 { margin-top: 10px !important; }
+
+  /* Insurance section: show in print, flow after India on page 2 */
+  #nav-print-area .nav-insurance-print {
+    display: block !important;
+    margin-top: 14px;
+  }
+
+  /* Dark outer borders on all cards and tables (print only) */
+  #nav-print-area .rounded-2xl { border: 1.5px solid #555 !important; }
+  #nav-print-area .nav-ins-block { border: 1.5px solid #555 !important; }
 }

@@ -275,8 +275,6 @@ export default function OtherAssets() {
           </div>
         )}
 
-        <div className="border-t border-white/[0.06]" />
-
         {loading ? (
           <EmptyState type="loading" />
         ) : filteredSortedRows.length === 0 ? (
@@ -295,7 +293,7 @@ export default function OtherAssets() {
               </thead>
               <tbody>
                 {filteredSortedRows.map((r) => (
-                  <tr key={r.id} className="border-t border-white/[0.06]">
+                  <tr key={r.id} className="border-b border-white/[0.06]">
                     <Td><span className="font-black text-slate-100">{r.category}</span></Td>
                     <Td><span className="font-black text-slate-100">{r.description}</span></Td>
                     <Td><span className="font-black text-slate-100">{String(r.country || "").toUpperCase() === "INDIA" ? "India" : "USA"}</span></Td>
@@ -310,7 +308,7 @@ export default function OtherAssets() {
                 ))}
               </tbody>
               <tfoot>
-                <tr className="border-t border-white/[0.06]">
+                <tr className="border-b border-white/[0.06]">
                   <Td colSpan={3}><span className="font-black text-slate-100">Total</span></Td>
                   <Td><span className="font-black text-slate-100">{formatMoney(totalValue)}</span></Td>
                   <Td />
@@ -371,6 +369,6 @@ function Td({ children, align, colSpan }) {
 }
 
 const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
-const btnPrimCls = "text-xs font-bold text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
-const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const btnPrimCls = "text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-solid";
+const btnSmCls = "text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-secondary";
 const btnDanCls = "text-xs font-bold text-red-400 px-3 py-1.5 rounded-lg border border-red-500/[0.3] bg-red-500/[0.08] hover:bg-red-500/[0.15] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";

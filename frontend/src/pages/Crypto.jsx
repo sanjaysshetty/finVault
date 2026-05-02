@@ -507,7 +507,7 @@ export default function Crypto() {
           {/* Holdings */}
           <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
             {/* Card header */}
-            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
+            <div className="px-5 py-4 flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <div className="flex items-center gap-1">
                   {[
@@ -550,24 +550,24 @@ export default function Crypto() {
                   <thead>
                     <tr className="border-b border-white/[0.06]">
                       {["Symbol", "Quantity", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                        <th key={h} className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">{h}</th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/[0.04]">
+                  <tbody className="">
                     {metrics.holdings.length === 0 ? (
                       <tr><td colSpan={7}><EmptyState type="empty" message="No holdings yet. Add a BUY transaction." /></td></tr>
                     ) : metrics.holdings.map((h) => (
-                      <tr key={h.symbol} className="hover:bg-white/[0.02] transition-colors">
-                        <td className="px-4 py-3">
+                      <tr key={h.symbol} className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
+                        <td className="px-3 py-3">
                           <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
                           {(!h.spot || h.spot === 0) && <p className="text-[11px] text-amber-600 mt-0.5">Spot missing</p>}
                         </td>
-                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
-                        <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
+                        <td className="px-3 py-3 text-sm text-slate-300 numeric">{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                        <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
+                        <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
                         <td className={`px-4 py-3 text-sm font-bold numeric ${h.dayGL != null ? plClass(h.dayGL) : "text-slate-600"}`}>{h.dayGL != null ? formatMoney(h.dayGL) : "—"}</td>
-                        <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
+                        <td className="px-3 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
                         <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
                       </tr>
                     ))}
@@ -593,24 +593,24 @@ export default function Crypto() {
                     <thead>
                       <tr className="border-b border-white/[0.06]">
                         {["Symbol", "Quantity", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
-                          <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                          <th key={h} className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">{h}</th>
                         ))}
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-white/[0.04]">
+                    <tbody className="">
                       {rhHoldings.length === 0 ? (
                         <tr><td colSpan={7}><EmptyState type="empty" message="No crypto holdings found in Robinhood account." /></td></tr>
                       ) : rhHoldings.map((h) => (
-                        <tr key={h.sym} className="hover:bg-white/[0.02] transition-colors">
-                          <td className="px-4 py-3">
+                        <tr key={h.sym} className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
+                          <td className="px-3 py-3">
                             <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
                             {(!h.spot || h.spot === 0) && <p className="text-[11px] text-amber-600 mt-0.5">Spot missing</p>}
                           </td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
+                          <td className="px-3 py-3 text-sm text-slate-300 numeric">{safeNum(h.qty, 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
+                          <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
                           <td className={`px-4 py-3 text-sm font-bold numeric ${h.dayGL != null ? plClass(h.dayGL) : "text-slate-600"}`}>{h.dayGL != null ? formatMoney(h.dayGL) : "—"}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
+                          <td className="px-3 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
                           <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
                         </tr>
                       ))}
@@ -646,14 +646,14 @@ export default function Crypto() {
                   <table className="w-full min-w-[500px]">
                     <thead>
                       <tr className="border-b border-white/[0.06]">
-                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">Symbol</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">My Qty</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">RH Qty</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">Qty Diff</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">Status</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">Symbol</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">My Qty</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">RH Qty</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">Qty Diff</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">Status</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-white/[0.04]">
+                    <tbody className="">
                       {diffHoldings.length === 0 ? (
                         <tr><td colSpan={5}><EmptyState type="empty" message="Nothing to compare yet." /></td></tr>
                       ) : diffHoldings.map((d) => {
@@ -677,13 +677,13 @@ export default function Crypto() {
 
                         return (
                           <tr key={d.sym} className={`transition-colors ${rowCls}`}>
-                            <td className="px-4 py-3 font-bold text-slate-100 text-sm">{d.sym}</td>
+                            <td className="px-3 py-3 font-bold text-slate-100 text-sm">{d.sym}</td>
                             <td className={`px-4 py-3 text-sm numeric ${isMissEnt ? "text-slate-500" : "text-slate-300"}`}>{isMissEnt ? "—" : fmt2(d.myQty)}</td>
                             <td className={`px-4 py-3 text-sm numeric ${isMissRH  ? "text-slate-500" : "text-slate-300"}`}>{isMissRH  ? "—" : fmt2(d.rhQty)}</td>
                             <td className={`px-4 py-3 text-sm font-bold numeric ${isMatch ? "text-slate-600" : d.qtyDiff > 0 ? "text-blue-400" : "text-amber-400"}`}>
                               {isMatch ? "—" : d.qtyDiff > 0 ? `+${fmt2(d.qtyDiff)}` : fmt2(d.qtyDiff)}
                             </td>
-                            <td className="px-4 py-3">
+                            <td className="px-3 py-3">
                               <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-bold border ${statusCls}`}>
                                 {statusLabel}
                               </span>
@@ -710,7 +710,7 @@ export default function Crypto() {
 
           {/* Transactions */}
           <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
+            <div className="px-5 py-4 flex items-center justify-between gap-3 flex-wrap">
               <p className="text-sm font-bold text-slate-200">Transactions</p>
               <div className="flex gap-2 items-center flex-nowrap">
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search type / symbol / notes…" className={`${inputCls} w-52`} />
@@ -732,25 +732,25 @@ export default function Crypto() {
                   <thead>
                     <tr className="border-b border-white/[0.06]">
                       {["Date", "Type", "Symbol", "Quantity", "Unit Price", "Fees", "Net", ""].map((h, i) => (
-                        <th key={i} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                        <th key={i} className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">{h}</th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/[0.04]">
+                  <tbody className="">
                     {filteredSortedTx.map((t) => {
                       const type = String(t.type || "BUY").toUpperCase();
                       const qty = safeNum(t.quantity, 0), px = safeNum(t.unitPrice, 0), fees = safeNum(t.fees, 0);
                       const net = type === "SELL" ? qty * px - fees : qty * px + fees;
                       return (
-                        <tr key={t.id} className="hover:bg-white/[0.02] transition-colors">
-                          <td className="px-4 py-3 text-sm text-slate-400">{t.date || "—"}</td>
-                          <td className="px-4 py-3"><Badge variant={type === "BUY" ? "buy" : type === "SELL" ? "sell" : "summary"}>{type}</Badge></td>
-                          <td className="px-4 py-3 text-sm font-semibold text-slate-200">{String(t.symbol || "").toUpperCase()}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(px)}</td>
-                          <td className="px-4 py-3 text-sm text-slate-400 numeric">{formatMoney(fees)}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(net)}</td>
-                          <td className="px-4 py-3">
+                        <tr key={t.id} className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
+                          <td className="px-3 py-3 text-sm text-slate-400">{t.date || "—"}</td>
+                          <td className="px-3 py-3"><Badge variant={type === "BUY" ? "buy" : type === "SELL" ? "sell" : "summary"}>{type}</Badge></td>
+                          <td className="px-3 py-3 text-sm font-semibold text-slate-200">{String(t.symbol || "").toUpperCase()}</td>
+                          <td className="px-3 py-3 text-sm text-slate-300 numeric">{qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(px)}</td>
+                          <td className="px-3 py-3 text-sm text-slate-400 numeric">{formatMoney(fees)}</td>
+                          <td className="px-3 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(net)}</td>
+                          <td className="px-3 py-3">
                             <div className="flex gap-2 justify-end">
                               {canWrite && <button type="button" onClick={() => startEdit(t)} disabled={saving} className={btnSmCls}>Edit</button>}
                               {canWrite && <button type="button" onClick={() => onDelete(t)} disabled={saving} className={btnDangerSmCls}>Delete</button>}
@@ -784,7 +784,7 @@ function FLabel({ label, children }) {
 function Btn({ children, onClick, disabled, type = "button" }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
-      className="px-3 py-2 text-sm font-bold rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.07] hover:text-slate-200 transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap">
+      className="px-3 py-2 text-sm font-bold rounded-xl transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap fv-btn-secondary">
       {children}
     </button>
   );
@@ -793,12 +793,12 @@ function Btn({ children, onClick, disabled, type = "button" }) {
 function BtnPrimary({ children, onClick, disabled, type = "button" }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
-      className="text-xs font-bold text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+      className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-solid">
       {children}
     </button>
   );
 }
 
 const inputCls = "w-full px-3 py-2 rounded-xl bg-[#080D1A] border border-white/[0.1] text-slate-200 text-sm placeholder:text-slate-700 focus:outline-none focus:border-blue-500/40 disabled:opacity-50";
-const btnSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.07] hover:text-slate-200 transition-all disabled:opacity-50 cursor-pointer";
+const btnSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer fv-btn-secondary";
 const btnDangerSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all disabled:opacity-50 cursor-pointer";

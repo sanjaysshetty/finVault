@@ -202,7 +202,7 @@ function ConfirmModal({ ticker, assetType, isForceRefresh, onConfirm, onCancel }
           <button
             type="button"
             onClick={onConfirm}
-            className="flex-1 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 transition-all cursor-pointer"
+            className="flex-1 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all cursor-pointer fv-btn-solid"
           >
             Analyze →
           </button>
@@ -336,7 +336,7 @@ export default function AssetHub() {
                 ${!at.enabled
                   ? "text-slate-600 bg-white/[0.03] cursor-not-allowed"
                   : assetType === at.key
-                    ? "bg-blue-600 text-white"
+                    ? "fv-btn-solid rounded-lg"
                     : "bg-white/[0.05] text-slate-400 hover:bg-white/[0.08] cursor-pointer"}`}
             >
               {at.label}
@@ -361,8 +361,8 @@ export default function AssetHub() {
             disabled={loading}
             className={`px-5 py-3 rounded-xl text-sm font-semibold transition-all shrink-0
               ${loading
-                ? "bg-blue-600/40 text-blue-400 cursor-not-allowed"
-                : "bg-blue-600 hover:bg-blue-500 text-white cursor-pointer"}`}
+                ? "opacity-40 fv-btn-solid rounded-xl cursor-not-allowed"
+                : "fv-btn-solid rounded-xl cursor-pointer"}`}
           >
             {loading ? "Analyzing…" : "Analyze →"}
           </button>

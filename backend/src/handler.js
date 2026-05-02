@@ -325,6 +325,7 @@ exports.handler = async (event) => {
 
   let sp500 = null;
   let nasdaq = null;
+  let forex = null;
 
   let crypto = null;
   let stocks = undefined;
@@ -361,6 +362,14 @@ exports.handler = async (event) => {
     errors.nasdaq = String(e?.message || e);
   }
 
+  // Forex — USD/INR rate (INR=X on Yahoo: price = INR per 1 USD)
+  try {
+    const inrRate = await fetchYahooIndex("INR=X");
+    forex = { "INR=X": inrRate };
+  } catch (e) {
+    errors.forex = String(e?.message || e);
+  }
+
   /* ---- Crypto (Yahoo Finance — returns { symbol, price, prevClose, timestamp }) ---- */
   try {
     const defaultCrypto = ["BTC-USD", "ETH-USD"];
@@ -395,6 +404,7 @@ exports.handler = async (event) => {
     currency,
     sp500,
     nasdaq,
+    forex,
     gold,
     silver,
     copper,

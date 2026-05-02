@@ -1,28 +1,21 @@
-/**
- * PageHeader — page title + optional icon, subtitle, and action buttons.
- *
- * Props:
- *   title    {string}     page title
- *   icon     {ReactNode?} SVG icon displayed to the left of the title
- *   subtitle {ReactNode?} small text shown below the title (e.g. "As of …")
- *   children {ReactNode?} action buttons / controls placed on the right
- */
 export function PageHeader({ title, icon, subtitle, children }) {
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="flex items-center gap-2.5 min-w-0">
         {icon && (
-          <span className="text-blue-400 shrink-0">{icon}</span>
+          <span className="shrink-0" style={{ color: "var(--fv-nav-active-text, #3DD68C)" }}>
+            {icon}
+          </span>
         )}
         <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
           <h1
-            className="text-lg font-black text-slate-100 tracking-tight shrink-0"
-            style={{ fontFamily: "Epilogue, sans-serif" }}
+            className="text-xl font-black tracking-tight shrink-0"
+            style={{ color: "var(--fv-text)", fontFamily: "'Epilogue', sans-serif", letterSpacing: "-0.3px" }}
           >
             {title}
           </h1>
           {subtitle && (
-            <span className="text-xs text-slate-500">{subtitle}</span>
+            <span className="text-xs" style={{ color: "var(--fv-dim)" }}>{subtitle}</span>
           )}
         </div>
       </div>

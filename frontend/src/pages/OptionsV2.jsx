@@ -262,8 +262,8 @@ function blankRollDraft(pos) {
 ───────────────────────────────────────────────────────────── */
 const inputCls  = "bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2 text-slate-200 text-sm w-full outline-none focus:border-blue-500/40 transition-colors";
 const labelCls  = "text-xs font-bold text-slate-500 mb-1.5 block";
-const btnPrimary   = "flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer";
-const btnSecondary = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10 text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] text-xs font-medium transition-all disabled:opacity-50 cursor-pointer";
+const btnPrimary   = "flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl font-semibold text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer fv-btn-solid";
+const btnSecondary = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50 cursor-pointer fv-btn-secondary";
 const btnDanger    = "flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 text-xs font-medium transition-all disabled:opacity-50 cursor-pointer";
 
 const STATUS_CLS = {
@@ -380,7 +380,7 @@ function PositionRow({ pos, metrics, formatMoney, canWrite, onClose, onRoll, onD
   const tdRight = `${tdBase} text-right`;
 
   return (
-    <tr className={`border-t border-white/[0.05] hover:bg-white/[0.02] transition-colors ${!isOpen ? "opacity-80" : ""}`}>
+    <tr className={`border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors ${!isOpen ? "opacity-80" : ""}`}>
 
       {/* Ticker */}
       <td className={`${tdBase} font-bold text-white text-base`} style={{ fontFamily: "Epilogue, sans-serif" }}>
