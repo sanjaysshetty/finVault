@@ -119,4 +119,9 @@ export const queryKeys = {
   wheelHistory: ()         => ["wheel", "history"],
   wheelLatest:  ()         => ["wheel", "latest"],
   wheelScan:    (scanId)   => ["wheel", "scan", scanId],
+
+  // Paper Trading — intentionally namespaced "paperTrade" (not "trade")
+  // so a future liveTrade namespace stays clearly separate.
+  paperTradeStaged: ()         => ["paperTrade", "staged"],
+  paperTradeOrders: ()         => ["paperTrade", "orders"],
 };

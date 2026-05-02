@@ -16,9 +16,6 @@ function formatDate(isoDate) {
   }
 }
 
-function parseDateInput(val) {
-  return val ? new Date(val + "T00:00:00Z") : null;
-}
 
 function ConfirmScanModal({ onConfirm, onCancel }) {
   return (
@@ -81,8 +78,10 @@ function Badge({ label, color }) {
 export default function WheelScanPageReports() {
   const navigate     = useNavigate();
   const queryClient  = useQueryClient();
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo,   setDateTo]   = useState("");
+  const today = new Date().toISOString().slice(0, 10);
+  const oneMonthAgo = (() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 10); })();
+  const [dateFrom, setDateFrom] = useState(oneMonthAgo);
+  const [dateTo,   setDateTo]   = useState(today);
   const [confirmScan, setConfirmScan] = useState(false);
 
   const { data, isLoading, isError } = useQuery({
@@ -100,15 +99,13 @@ export default function WheelScanPageReports() {
 
   const allScans = data?.scans || [];
 
-  const filtered = allScans.filter((s) => {
-    const d = new Date(s.scan_date + "T12:00:00Z");
-    if (dateFrom && d < parseDateInput(dateFrom)) return false;
-    if (dateTo   && d > parseDateInput(dateTo))   return false;
+  // Filter using scan_id (YYYY-MM-DD) which is the filename without .json
+  const scans = allScans.filter((s) => {
+    const id = s.scan_id || "";
+    if (dateFrom && id < dateFrom) return false;
+    if (dateTo   && id > dateTo)   return false;
     return true;
   });
-
-  // Default: show latest 7 if no date filter applied
-  const scans = (dateFrom || dateTo) ? filtered : filtered.slice(0, 7);
 
   return (
     <div className="flex flex-col gap-6 p-6 max-w-5xl mx-auto">
@@ -148,7 +145,7 @@ export default function WheelScanPageReports() {
         {(dateFrom || dateTo) && (
           <button
             type="button"
-            onClick={() => { setDateFrom(""); setDateTo(""); }}
+            onClick={() => { setDateFrom(oneMonthAgo); setDateTo(today); }}
             className="text-xs text-slate-400 hover:text-slate-200 px-2 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors cursor-pointer"
           >
             Clear
@@ -267,11 +264,7 @@ export default function WheelScanPageReports() {
         ))}
       </div>
 
-      {!dateFrom && !dateTo && allScans.length > 7 && (
-        <p className="text-xs text-slate-500 text-center">
-          Showing latest 7 scans. Use date filters to view older scans.
-        </p>
-      )}
+
     </div>
   );
 }

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
+import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
 import { PageHeader } from "../components/ui/PageHeader.jsx";
 import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { FormModal } from "../components/ui/FormModal.jsx";
 import { useCanWrite } from "../hooks/useCanWrite.js";
 
 const COUNTRY_OPTIONS = ["USA", "India"];
@@ -40,6 +42,7 @@ export default function Insurance() {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [error, setError] = useState("");
   const [country, setCountry] = useState("USA");
   const currency = COUNTRY_CURRENCY[country] ?? "USD";
@@ -157,10 +160,17 @@ export default function Insurance() {
     };
     saveMut.mutate({ id: editingId, payload });
   }
-  function onDelete(id) {
+  function onDelete(row) {
     setError("");
-    if (!window.confirm("Delete this insurance record?")) return;
-    deleteMut.mutate(id);
+    setDeleteTarget(row);
+  }
+  function closeDeleteModal() {
+    setDeleteTarget(null);
+  }
+  function confirmDelete() {
+    if (!deleteTarget?.id) return;
+    setError("");
+    deleteMut.mutate(deleteTarget.id, { onSuccess: () => closeDeleteModal() });
   }
   function onToggleSort(key) {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -188,23 +198,14 @@ export default function Insurance() {
       </div>
 
       {canWrite && showForm && (
-        <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4 mb-4">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <span className="text-sm font-black text-slate-100">
-              {editingId ? "Edit Insurance" : "Add Insurance"}
-            </span>
-            <div className="flex gap-2">
-              {editingId && <Btn onClick={() => resetForm({ hide: true })} disabled={saving}>Cancel</Btn>}
-              <Btn onClick={() => resetForm({ hide: true })} disabled={saving}>Close</Btn>
-            </div>
-          </div>
+        <FormModal title={editingId ? "Edit Insurance" : "Add Insurance"} onClose={() => resetForm({ hide: true })} wide>
           {error && (
-            <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2 mb-3">
+            <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2">
               <span className="text-xs font-black text-slate-100">Error</span>
               <p className="text-xs text-slate-300 mt-1">{error}</p>
             </div>
           )}
-          <form onSubmit={onSubmit} className="grid gap-3">
+          <form onSubmit={onSubmit} className="grid gap-3 pt-1">
             <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr 2fr 1fr" }}>
               <FLabel label="Country">
                 <select value={form.country} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value }))} className={inputCls} disabled={saving}>
@@ -245,7 +246,32 @@ export default function Insurance() {
               </BtnPrimary>
             </div>
           </form>
-        </div>
+        </FormModal>
+      )}
+
+      {canWrite && deleteTarget && (
+        <DeleteConfirmModal
+          title={`Delete — ${deleteTarget.provider || "Insurance Record"}`}
+          message="This will permanently delete this insurance record. This cannot be undone."
+          confirmLabel="Delete Record"
+          deleting={saving}
+          error={error}
+          onConfirm={confirmDelete}
+          onClose={closeDeleteModal}
+        >
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Type</span>
+            <span className="font-medium">{deleteTarget.insuranceType || "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Country</span>
+            <span>{deleteTarget.country || "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Covered Amount</span>
+            <span>{formatMoney(deleteTarget.coveredAmount)}</span>
+          </div>
+        </DeleteConfirmModal>
       )}
 
       <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
@@ -305,7 +331,7 @@ export default function Insurance() {
                     <Td align="right">
                       <div className="flex gap-2 justify-end pr-2">
                         {canWrite && <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>}
-                        {canWrite && <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>}
+                        {canWrite && <BtnDanger onClick={() => onDelete(r)} disabled={saving}>Delete</BtnDanger>}
                       </div>
                     </Td>
                   </tr>

@@ -89,7 +89,7 @@ function isLegacyClosed(r) {
 
 function positionStatus(legs) {
   const OPEN_LEGS = new Set(["OPEN", "ROLL_OPEN"]);
-  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE"]);
+  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
 
   const openLeg = legs.find(l => OPEN_LEGS.has(l.leg));
   const closeLeg = legs.find(l => CLOSE_LEGS.has(l.leg));
@@ -107,6 +107,7 @@ function positionStatus(legs) {
 
   if (closeLeg) {
     if (closeLeg.leg === "ROLL_CLOSE") return "ROLLED";
+    if (closeLeg.leg === "ASSIGN")     return "ASSIGNED";
     // fill > 0 means bought/sold back at a price → CLOSED; fill = 0 → expired worthless
     return safeNum(closeLeg.fill, 0) > 0 ? "CLOSED" : "EXPIRED";
   }
@@ -120,7 +121,7 @@ function positionStatus(legs) {
 
 function calcPositionMetrics(legs, marks) {
   const OPEN_LEGS = new Set(["OPEN", "ROLL_OPEN"]);
-  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE"]);
+  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
 
   const openLeg = legs.find(l => OPEN_LEGS.has(l.leg)) || legs[0];
   const closeLeg = legs.find(l => CLOSE_LEGS.has(l.leg));
@@ -237,18 +238,22 @@ function blankCloseDraft(pos) {
 
 function blankRollDraft(pos) {
   const o = pos?.openLeg;
+  const qty = safeNum(o?.qty, 0);
   return {
     // Step 1
     closeFill: "", closeFee: "", closeDate: todayISO(),
+    rollQty: qty, // how many contracts to roll (≤ openQty)
     // Step 2
-    newStrikes: "", newExpiry: "", newFill: "", newFee: "", newQty: safeNum(o?.qty, ""),
+    newStrikes: "", newExpiry: "", newFill: "", newFee: "", newQty: qty || "",
     // Carry forward
     ticker: o?.ticker || "", event: o?.event || "",
     strikes: o?.strikes || "", expiry: o?.expiry || "",
     openFill: safeNum(o?.fill, 0), openFee: safeNum(o?.fee, 0),
-    openQty: safeNum(o?.qty, 0), openType: String(o?.type || "SELL").toUpperCase(),
+    openQty: qty, openType: String(o?.type || "SELL").toUpperCase(),
     collateral: safeNum(o?.collateral || o?.coll || calcAutoCollateral(o?.strikes, o?.qty), 0),
     positionId: pos?.positionId || "", country: o?.country || "USA",
+    openId: o?.id || "",
+    openDate: o?.openDate || "", openExpiry: o?.expiry || "",
   };
 }
 
@@ -262,10 +267,11 @@ const btnSecondary = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border bo
 const btnDanger    = "flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-500/20 text-red-400 hover:bg-red-500/10 text-xs font-medium transition-all disabled:opacity-50 cursor-pointer";
 
 const STATUS_CLS = {
-  OPEN:    "bg-green-500/15 text-green-400 border border-green-500/20",
-  CLOSED:  "bg-slate-700/50 text-slate-400 border border-white/10",
-  EXPIRED: "bg-orange-500/15 text-orange-400 border border-orange-500/20",
-  ROLLED:  "bg-cyan-500/15 text-cyan-400 border border-cyan-500/20",
+  OPEN:     "bg-green-500/15 text-green-400 border border-green-500/20",
+  CLOSED:   "bg-slate-700/50 text-slate-400 border border-white/10",
+  EXPIRED:  "bg-orange-500/15 text-orange-400 border border-orange-500/20",
+  ROLLED:   "bg-cyan-500/15 text-cyan-400 border border-cyan-500/20",
+  ASSIGNED: "bg-purple-500/15 text-purple-400 border border-purple-500/20",
 };
 
 const LEG_CLS = {
@@ -348,7 +354,7 @@ function PositionRow({ pos, metrics, formatMoney, canWrite, onClose, onRoll, onD
   const optType  = String(openLeg?.event || "").toUpperCase();
   const dte      = daysUntil(openLeg?.expiry);
 
-  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE"]);
+  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
   const closeLeg   = legs.find(l => CLOSE_LEGS.has(l.leg));
   const legacyClosed = legs.length === 1 && isLegacyClosed(legs[0]);
 
@@ -494,7 +500,7 @@ export default function OptionsV2() {
   const [busy, setBusy]             = useState(false);
 
   // Filters
-  const [fromDate, setFromDate]         = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 3); return d.toISOString().slice(0, 10); });
+  const [fromDate, setFromDate]         = useState(() => `${new Date().getFullYear()}-01-01`);
   const [toDate, setToDate]             = useState(todayISO);
   const [tickerFilter, setTickerFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -562,14 +568,20 @@ export default function OptionsV2() {
     let out = positionsWithMetrics;
     if (tf) out = out.filter(p => String(p.openLeg?.ticker || "").includes(tf));
     if (statusFilter === "open")   out = out.filter(p => p.status === "OPEN" || p.status === "EXPIRED");
-    if (statusFilter === "closed") out = out.filter(p => ["CLOSED", "ROLLED", "EXPIRED"].includes(p.status));
+    if (statusFilter === "closed") out = out.filter(p => ["CLOSED", "ROLLED", "EXPIRED", "ASSIGNED"].includes(p.status));
+    // Date range: keep row if openDate OR closeDate falls within [fromDate, toDate]
+    out = out.filter(p => {
+      const od = p.metrics.openDate  || "";
+      const cd = p.metrics.closeDate || "";
+      return inRange(od, fromDate, toDate) || inRange(cd, fromDate, toDate);
+    });
     // Open first, then newest
     return [...out].sort((a, b) => {
       const ao = a.status === "OPEN" ? 0 : 1, bo = b.status === "OPEN" ? 0 : 1;
       if (ao !== bo) return ao - bo;
       return String(b.openLeg?.openDate || "").localeCompare(String(a.openLeg?.openDate || ""));
     });
-  }, [positionsWithMetrics, tickerFilter, statusFilter]);
+  }, [positionsWithMetrics, tickerFilter, statusFilter, fromDate, toDate]);
 
   /* ── Summary cards (date-range filtered) ─────────────────── */
   // Mirrors Options.jsx exactly:
@@ -625,6 +637,12 @@ export default function OptionsV2() {
     onError: (e) => setError(e?.message || "Delete failed"),
   });
 
+  const patchMut = useMutation({
+    mutationFn: ({ id, ...patch }) => api.patch(`/assets/options/transactions/${encodeURIComponent(id)}`, patch),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.optionsTx() }),
+    onError: (e) => { setError(e?.message || "Update failed"); setBusy(false); },
+  });
+
   const stockAddMut = useMutation({
     mutationFn: (payload) => api.post("/assets/stocks/transactions", payload),
     onError: (e) => setError(`Options closed but stock transaction failed: ${e?.message || "unknown error"}`),
@@ -678,37 +696,69 @@ export default function OptionsV2() {
     if (!d.closeDate)                                               return setError("Close date is required");
     if (!Number.isFinite(Number(d.fill)) || Number(d.fill) < 0)    return setError("Close price required (≥ 0)");
 
-    const closeFill = Number(d.fill);
-    const closeQty  = safeNum(d.qty || d.openQty, 0);
-    const closeFee  = d.fee !== "" && Number.isFinite(Number(d.fee)) ? Number(d.fee) : 0;
-    const openFee   = safeNum(d.openFee, 0);
-    const openFill  = safeNum(d.openFill, 0);
-    const coll      = safeNum(d.collateral, 0);
+    const closeFill  = Number(d.fill);
+    const closeQty   = safeNum(d.qty || d.openQty, 0);
+    const closeFee   = d.fee !== "" && Number.isFinite(Number(d.fee)) ? Number(d.fee) : 0;
+    const openFee    = safeNum(d.openFee, 0);
+    const openFill   = safeNum(d.openFill, 0);
+    const coll       = safeNum(d.collateral, 0);
+    const remaining  = d.openQty - closeQty;
+    const isPartial  = remaining > 0;
+
+    if (closeQty <= 0 || closeQty > d.openQty) return setError(`Contracts to close must be between 1 and ${d.openQty}`);
+
+    const propRatio   = d.openQty > 0 ? closeQty / d.openQty : 1;
+    const propOpenFee = round2(openFee * propRatio);
+    const propColl    = round2(coll * propRatio);
 
     let pl;
-    if (d.openType === "SELL") pl = (openFill - closeFill) * closeQty * 100 - openFee - closeFee;
-    else pl = (closeFill - openFill) * closeQty * 100 - openFee - closeFee;
-    const roc = coll > 0 ? round2((pl / coll) * 100) : 0;
+    if (d.openType === "SELL") pl = (openFill - closeFill) * closeQty * 100 - propOpenFee - closeFee;
+    else pl = (closeFill - openFill) * closeQty * 100 - propOpenFee - closeFee;
+    const roc = propColl > 0 ? round2((pl / propColl) * 100) : 0;
 
     const closeType = d.openType === "SELL" ? "BUY" : "SELL";
-    const fee = closeFee === 0 ? "" : closeFee;
 
     const payload = {
       ticker: d.ticker, type: closeType, event: d.event,
       strikes: d.strikes, expiry: d.expiry,
-      openDate: d.closeDate, // CLOSE leg stores close date in openDate for GSI sort
-      qty: closeQty, fill: closeFill, fee,
-      collateral: coll, coll,
-      rollOver: "", closeDate: "", closePrice: "",
-      notes: `Closed at ${closeFill}`,
+      openDate: d.closeDate,
+      qty: closeQty, fill: closeFill, fee: closeFee === 0 ? "" : closeFee,
+      collateral: propColl, coll: propColl,
+      rollOver: "", closeDate: d.closeDate, closePrice: closeFill,
+      notes: `Closed at ${closeFill}${isPartial ? ` (${closeQty}/${d.openQty} contracts)` : ""}`,
       country: d.country,
       positionId: d.positionId, leg: "CLOSE", roc,
     };
 
     setBusy(true);
+
     addMut.mutate(payload, {
-      onSuccess: () => closeModal(),
-      onSettled: () => setBusy(false),
+      onSuccess: () => {
+        if (!isPartial) { closeModal(); return; }
+        const remPropFee  = round2(openFee - propOpenFee);
+        const remPropColl = round2(coll - propColl);
+        patchMut.mutate({ id: d.openId, qty: closeQty, fee: propOpenFee || "", collateral: propColl }, {
+          onSuccess: () => {
+            const remainPosId = genPosId();
+            addMut.mutate({
+              ticker: d.ticker, type: d.openType, event: d.event,
+              strikes: d.strikes, expiry: d.expiry,
+              openDate: d.openDate, qty: remaining, fill: openFill,
+              fee: remPropFee === 0 ? "" : remPropFee,
+              collateral: remPropColl, coll: remPropColl,
+              rollOver: "", closeDate: "", closePrice: "",
+              notes: `Partial close — ${remaining} contract${remaining !== 1 ? "s" : ""} held`,
+              country: d.country,
+              positionId: remainPosId, linkedPositionId: d.positionId, leg: "OPEN",
+            }, {
+              onSuccess: () => closeModal(),
+              onSettled: () => setBusy(false),
+            });
+          },
+          onError: (e) => { setError(e?.message || "Failed to update original leg"); setBusy(false); },
+        });
+      },
+      onError: (e) => { setError(e?.message || "Close failed"); setBusy(false); },
     });
   }
 
@@ -751,10 +801,10 @@ export default function OptionsV2() {
       openDate: d.closeDate,
       qty, fill: closeFill, fee: "",
       collateral: coll, coll,
-      rollOver: "", closeDate: "", closePrice: "",
+      rollOver: "", closeDate: d.closeDate, closePrice: closeFill,
       notes: actionLabel,
       country: d.country,
-      positionId: d.positionId, leg: "CLOSE", roc,
+      positionId: d.positionId, leg: "ASSIGN", roc,
     };
 
     const stockPayload = {
@@ -785,31 +835,40 @@ export default function OptionsV2() {
     const d = rollDraft;
 
     if (rollStep === 1) {
-      if (!d.closeDate)                                               return setError("Close date required");
-      if (!Number.isFinite(Number(d.closeFill)) || Number(d.closeFill) < 0) return setError("Buy-to-close price required");
+      if (!d.closeDate)                                                       return setError("Close date required");
+      if (!Number.isFinite(Number(d.closeFill)) || Number(d.closeFill) < 0)  return setError("Buy-to-close price required");
+      const rq = safeNum(d.rollQty, 0);
+      if (rq <= 0 || rq > d.openQty)  return setError(`Contracts to roll must be between 1 and ${d.openQty}`);
       setRollStep(2);
       return;
     }
 
     // Step 2
-    if (!d.newStrikes.trim())                                         return setError("New strike required");
-    if (!d.newExpiry)                                                 return setError("New expiry required");
-    if (!Number.isFinite(Number(d.newFill)) || Number(d.newFill) <= 0) return setError("New fill required");
+    if (!d.newStrikes.trim())                                                  return setError("New strike required");
+    if (!d.newExpiry)                                                          return setError("New expiry required");
+    if (!Number.isFinite(Number(d.newFill)) || Number(d.newFill) <= 0)        return setError("New fill required");
 
-    const closeFill = Number(d.closeFill);
-    const openFill  = safeNum(d.openFill, 0);
-    const closeQty  = safeNum(d.openQty, 0);
-    const newQty    = d.newQty !== "" && Number.isFinite(Number(d.newQty)) ? Number(d.newQty) : closeQty;
-    const closeFee  = d.closeFee !== "" && Number.isFinite(Number(d.closeFee)) ? Number(d.closeFee) : 0;
-    const newFee    = d.newFee !== "" && Number.isFinite(Number(d.newFee)) ? Number(d.newFee) : 0;
-    const openFee   = safeNum(d.openFee, 0);
-    const coll      = safeNum(d.collateral, 0);
-    const newColl   = calcAutoCollateral(d.newStrikes, newQty);
+    const closeFill  = Number(d.closeFill);
+    const openFill   = safeNum(d.openFill, 0);
+    const rollQty    = safeNum(d.rollQty, d.openQty);
+    const remaining  = d.openQty - rollQty;
+    const isPartial  = remaining > 0;
+    const newQty     = rollQty;
+    const closeFee   = d.closeFee !== "" && Number.isFinite(Number(d.closeFee)) ? Number(d.closeFee) : 0;
+    const newFee     = d.newFee !== "" && Number.isFinite(Number(d.newFee)) ? Number(d.newFee) : 0;
+    const openFee    = safeNum(d.openFee, 0);
+    const coll       = safeNum(d.collateral, 0);
+    const newColl    = calcAutoCollateral(d.newStrikes, newQty);
+
+    // Proportional fees / collateral for the rolled slice
+    const propRatio    = d.openQty > 0 ? rollQty / d.openQty : 1;
+    const propOpenFee  = round2(openFee * propRatio);
+    const propColl     = round2(coll * propRatio);
 
     let pl;
-    if (d.openType === "SELL") pl = (openFill - closeFill) * closeQty * 100 - openFee - closeFee;
-    else pl = (closeFill - openFill) * closeQty * 100 - openFee - closeFee;
-    const roc = coll > 0 ? round2((pl / coll) * 100) : 0;
+    if (d.openType === "SELL") pl = (openFill - closeFill) * rollQty * 100 - propOpenFee - closeFee;
+    else pl = (closeFill - openFill) * rollQty * 100 - propOpenFee - closeFee;
+    const roc = propColl > 0 ? round2((pl / propColl) * 100) : 0;
 
     const closeType = d.openType === "SELL" ? "BUY" : "SELL";
     const newPosId  = genPosId();
@@ -817,11 +876,11 @@ export default function OptionsV2() {
     const rollCloseLeg = {
       ticker: d.ticker, type: closeType, event: d.event,
       strikes: d.strikes, expiry: d.expiry,
-      openDate: d.closeDate, qty: closeQty, fill: closeFill,
+      openDate: d.closeDate, qty: rollQty, fill: closeFill,
       fee: closeFee === 0 ? "" : closeFee,
-      collateral: coll, coll,
-      rollOver: "", closeDate: "", closePrice: "",
-      notes: `Rolled → ${d.newStrikes} exp ${d.newExpiry}`,
+      collateral: propColl, coll: propColl,
+      rollOver: "", closeDate: d.closeDate, closePrice: closeFill,
+      notes: `Rolled → ${d.newStrikes} exp ${d.newExpiry}${isPartial ? ` (${rollQty}/${d.openQty} contracts)` : ""}`,
       country: d.country,
       positionId: d.positionId, leg: "ROLL_CLOSE", roc,
     };
@@ -839,13 +898,43 @@ export default function OptionsV2() {
     };
 
     setBusy(true);
+
+    // Sequential: rollClose → rollOpen → [if partial: patch original + create remaining open]
+    function doRollOpen() {
+      addMut.mutate(rollOpenLeg, {
+        onSuccess: () => {
+          if (!isPartial) { closeModal(); return; }
+          // Patch original OPEN leg to the rolled qty/fee/collateral
+          const remPropFee  = round2(openFee - propOpenFee);
+          const remPropColl = round2(coll - propColl);
+          patchMut.mutate({ id: d.openId, qty: rollQty, fee: propOpenFee || "", collateral: propColl }, {
+            onSuccess: () => {
+              // New OPEN leg for the remaining contracts
+              const remainPosId = genPosId();
+              addMut.mutate({
+                ticker: d.ticker, type: d.openType, event: d.event,
+                strikes: d.strikes, expiry: d.openExpiry,
+                openDate: d.openDate, qty: remaining, fill: openFill,
+                fee: remPropFee === 0 ? "" : remPropFee,
+                collateral: remPropColl, coll: remPropColl,
+                rollOver: "", closeDate: "", closePrice: "",
+                notes: `Partial roll — ${remaining} contract${remaining !== 1 ? "s" : ""} held`,
+                country: d.country,
+                positionId: remainPosId, linkedPositionId: d.positionId, leg: "OPEN",
+              }, {
+                onSuccess: () => closeModal(),
+                onSettled: () => setBusy(false),
+              });
+            },
+            onError: (e) => { setError(e?.message || "Failed to update original leg"); setBusy(false); },
+          });
+        },
+        onError: (e) => { setError(e?.message || "Roll failed"); setBusy(false); },
+      });
+    }
+
     addMut.mutate(rollCloseLeg, {
-      onSuccess: () => {
-        addMut.mutate(rollOpenLeg, {
-          onSuccess: () => closeModal(),
-          onSettled: () => setBusy(false),
-        });
-      },
+      onSuccess: doRollOpen,
       onError: (e) => { setError(e?.message || "Roll failed"); setBusy(false); },
     });
   }
@@ -873,18 +962,21 @@ export default function OptionsV2() {
     if (!closeDraft) return null;
     const fill = Number(closeDraft.fill);
     if (!Number.isFinite(fill)) return null;
-    const qty       = safeNum(closeDraft.qty || closeDraft.openQty, 0);
-    const closeFee  = safeNum(closeDraft.fee, 0);
-    const openFee   = safeNum(closeDraft.openFee, 0);
-    const openFill  = safeNum(closeDraft.openFill, 0);
-    const coll      = safeNum(closeDraft.collateral, 0);
+    const closeQty   = safeNum(closeDraft.qty || closeDraft.openQty, 0);
+    const closeFee   = safeNum(closeDraft.fee, 0);
+    const openFee    = safeNum(closeDraft.openFee, 0);
+    const openFill   = safeNum(closeDraft.openFill, 0);
+    const coll       = safeNum(closeDraft.collateral, 0);
+    const propRatio  = closeDraft.openQty > 0 ? closeQty / closeDraft.openQty : 1;
+    const propOpenFee = round2(openFee * propRatio);
+    const propColl    = round2(coll * propRatio);
     let pl;
-    if (closeDraft.openType === "SELL") pl = (openFill - fill) * qty * 100 - openFee - closeFee;
-    else pl = (fill - openFill) * qty * 100 - openFee - closeFee;
-    const roc    = coll > 0 ? round2((pl / coll) * 100) : null;
+    if (closeDraft.openType === "SELL") pl = (openFill - fill) * closeQty * 100 - propOpenFee - closeFee;
+    else pl = (fill - openFill) * closeQty * 100 - propOpenFee - closeFee;
+    const roc    = propColl > 0 ? round2((pl / propColl) * 100) : null;
     const days   = daysBetween(closeDraft.openDate, closeDraft.closeDate);
     const annRoc = roc !== null && days && days > 0 ? round2((roc / 100 / days) * 365 * 100) : null;
-    return { pl, roc, annRoc, collateral: coll };
+    return { pl, roc, annRoc, collateral: propColl };
   }, [closeDraft]);
 
   const rollCreditPreview = useMemo(() => {
@@ -892,7 +984,7 @@ export default function OptionsV2() {
     const closeFill = Number(rollDraft.closeFill);
     const newFill   = Number(rollDraft.newFill);
     if (!Number.isFinite(closeFill) || !Number.isFinite(newFill)) return null;
-    const qty = safeNum(rollDraft.openQty, 0);
+    const qty = safeNum(rollDraft.rollQty || rollDraft.openQty, 0);
     // Net = new premium - close cost (for sell: sell-to-open - buy-to-close)
     const net = rollDraft.openType === "SELL"
       ? (Number(rollDraft.newFill) - closeFill) * qty * 100
@@ -1004,12 +1096,17 @@ export default function OptionsV2() {
                 onChange={e => setCloseDraft(d => ({ ...d, closeDate: e.target.value }))}
                 className={inputCls} />
             </Field>
-            <Field label="Qty (contracts)">
+            <Field label={`Contracts to close (max ${closeDraft.openQty})`}>
               <input type="number" value={closeDraft.qty}
-                onChange={e => setCloseDraft(d => ({ ...d, qty: e.target.value }))}
-                className={inputCls} min="1" />
+                onChange={e => setCloseDraft(d => ({ ...d, qty: Math.min(Math.max(1, Number(e.target.value) || 1), d.openQty) }))}
+                className={inputCls} min="1" max={closeDraft.openQty} step={1} />
             </Field>
           </div>
+          {safeNum(closeDraft.qty, closeDraft.openQty) > 0 && safeNum(closeDraft.qty, closeDraft.openQty) < closeDraft.openQty && (
+            <div className="p-2.5 rounded-xl bg-cyan-500/[0.07] border border-cyan-500/20 text-xs text-cyan-400">
+              Closing {closeDraft.qty} contract{closeDraft.qty !== 1 ? "s" : ""} · {closeDraft.openQty - closeDraft.qty} contract{closeDraft.openQty - closeDraft.qty !== 1 ? "s" : ""} will remain open as a new position · fees &amp; collateral split proportionally
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Close Price (BTC / STC per share)">
               <input type="number" value={closeDraft.fill}
@@ -1106,16 +1203,30 @@ export default function OptionsV2() {
                     className={inputCls} placeholder="0.50" step="0.01" autoFocus />
                 </Field>
               </div>
-              <Field label="Close Fee ($)">
-                <input type="number" value={rollDraft.closeFee}
-                  onChange={e => setRollDraft(d => ({ ...d, closeFee: e.target.value }))}
-                  className={inputCls} placeholder="0.00" step="0.01" />
-              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={`Contracts to roll (max ${rollDraft.openQty})`}>
+                  <input type="number" min={1} max={rollDraft.openQty} step={1}
+                    value={rollDraft.rollQty}
+                    onChange={e => setRollDraft(d => ({ ...d, rollQty: Math.min(Math.max(1, Number(e.target.value) || 1), d.openQty) }))}
+                    className={inputCls} />
+                </Field>
+                <Field label="Close Fee ($)">
+                  <input type="number" value={rollDraft.closeFee}
+                    onChange={e => setRollDraft(d => ({ ...d, closeFee: e.target.value }))}
+                    className={inputCls} placeholder="0.00" step="0.01" />
+                </Field>
+              </div>
+              {rollDraft.rollQty > 0 && rollDraft.rollQty < rollDraft.openQty && (
+                <div className="p-2.5 rounded-xl bg-cyan-500/[0.07] border border-cyan-500/20 text-xs text-cyan-400">
+                  Rolling {rollDraft.rollQty} contract{rollDraft.rollQty !== 1 ? "s" : ""} · {rollDraft.openQty - rollDraft.rollQty} contract{rollDraft.openQty - rollDraft.rollQty !== 1 ? "s" : ""} will remain open as a new position · fees &amp; collateral split proportionally
+                </div>
+              )}
             </>
           ) : (
             <>
               <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] text-xs text-slate-400">
                 <strong className="text-slate-300">Sell to open new leg</strong>
+                <span className="ml-2 text-slate-500">({rollDraft.rollQty} contract{rollDraft.rollQty !== 1 ? "s" : ""})</span>
                 {rollCreditPreview && (
                   <span className={`ml-2 font-semibold ${rollCreditPreview.net >= 0 ? "text-green-400" : "text-red-400"}`}>
                     &nbsp;Net {rollCreditPreview.net >= 0 ? "Credit" : "Debit"}: {fmtMoneyFull(Math.abs(rollCreditPreview.net), currency)}
@@ -1141,9 +1252,9 @@ export default function OptionsV2() {
                     className={inputCls} placeholder="1.80" step="0.01" />
                 </Field>
                 <Field label="Qty (contracts)">
-                  <input type="number" value={rollDraft.newQty}
-                    onChange={e => setRollDraft(d => ({ ...d, newQty: e.target.value }))}
-                    className={inputCls} />
+                  <input type="number" value={rollDraft.rollQty}
+                    readOnly disabled
+                    className={`${inputCls} opacity-40 cursor-not-allowed`} />
                 </Field>
               </div>
               <Field label="Open Fee ($)">
@@ -1288,7 +1399,7 @@ export default function OptionsV2() {
       </div>
 
       {/* ══ POSITIONS ════════════════════════════════════════════ */}
-      <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-x-auto">
+      <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-x-auto overflow-y-auto max-h-[68vh]">
         {isLoading ? (
           <EmptyState state="loading" message="Loading positions…" />
         ) : filteredPositions.length === 0 ? (
@@ -1296,7 +1407,7 @@ export default function OptionsV2() {
         ) : (
           <table className="w-full">
             <thead>
-              <tr className="border-b border-white/[0.06]">
+              <tr className="border-b border-white/[0.06] sticky top-0 z-10 bg-[#0F1729]">
                 {[
                   { label: "Ticker",     align: "left",  w: "w-[80px]"  },
                   { label: "Strike",     align: "left",  w: "w-[70px]"  },

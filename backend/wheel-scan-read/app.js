@@ -11,7 +11,7 @@
  *   POST /wheel/scan/trigger         → async-invoke WheelScanFunction
  */
 
-const { S3Client, GetObjectCommand }          = require("@aws-sdk/client-s3");
+const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const { LambdaClient, InvokeCommand }         = require("@aws-sdk/client-lambda");
 const { resolveContext, assertRead }          = require("finvault-shared/resolveContext");
 
@@ -63,15 +63,67 @@ exports.handler = async (event) => {
 
     // ── GET /wheel/scan/history ──────────────────────────────
     if (method === "GET" && rawPath.endsWith("/wheel/scan/history")) {
-      try {
-        const data = await readS3Json(prefix + "index.json");
-        return json(200, data);
-      } catch (e) {
-        if (e.name === "NoSuchKey" || e.$metadata?.httpStatusCode === 404) {
-          return json(200, { scans: [] });
+      // Cutoff: only include scans within the last month
+      const oneMonthAgo = new Date();
+      oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+      const cutoff = oneMonthAgo.toISOString().slice(0, 10);
+
+      // 1. List all YYYY-MM-DD.json files actually present in S3 within the cutoff
+      const DATE_RE = /^(\d{4}-\d{2}-\d{2})\.json$/;
+      const listedIds = new Set();
+      let continuationToken;
+      do {
+        const listCmd = new ListObjectsV2Command({
+          Bucket: ANALYTICS_BUCKET,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        });
+        const listRes = await s3.send(listCmd);
+        for (const obj of (listRes.Contents || [])) {
+          const filename = obj.Key.slice(prefix.length);
+          const m = DATE_RE.exec(filename);
+          if (m && m[1] >= cutoff) listedIds.add(m[1]);
         }
-        throw e;
+        continuationToken = listRes.IsTruncated ? listRes.NextContinuationToken : undefined;
+      } while (continuationToken);
+
+      // 2. Load index.json for pre-computed summary metadata
+      let indexedScans = [];
+      try {
+        const indexData = await readS3Json(prefix + "index.json");
+        indexedScans = (indexData.scans || []).filter(s => s.scan_id >= cutoff);
+      } catch (e) {
+        if (e.name !== "NoSuchKey" && e.$metadata?.httpStatusCode !== 404) throw e;
       }
+      const indexedById = Object.fromEntries(indexedScans.map(s => [s.scan_id, s]));
+
+      // 3. For any S3 file not in index, read it to extract summary fields
+      const missingIds = [...listedIds].filter(id => !indexedById[id]);
+      const backfilled = await Promise.all(missingIds.map(async (id) => {
+        try {
+          const report = await readS3Json(prefix + id + ".json");
+          return {
+            scan_id:       report.scan_id       || id,
+            scan_date:     report.scan_date      || id,
+            completed_at:  report.completed_at   || null,
+            universe_size: report.universe_size  ?? null,
+            proceed_count: report.proceed_count  ?? null,
+            watch_count:   report.watch_count    ?? null,
+            skip_count:    report.skip_count     ?? null,
+            duration_s:    report.duration_s     ?? null,
+          };
+        } catch {
+          return null;
+        }
+      }));
+
+      // 4. Merge, deduplicate, sort newest-first
+      const merged = [
+        ...indexedScans,
+        ...backfilled.filter(Boolean).filter(s => !indexedById[s.scan_id]),
+      ].sort((a, b) => b.scan_id.localeCompare(a.scan_id));
+
+      return json(200, { scans: merged });
     }
 
     // ── GET /wheel/scan/latest ───────────────────────────────

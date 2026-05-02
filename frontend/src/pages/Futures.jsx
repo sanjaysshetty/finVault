@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
+import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
 import { PageHeader } from "../components/ui/PageHeader.jsx";
 import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { FormModal } from "../components/ui/FormModal.jsx";
 import { useCanWrite } from "../hooks/useCanWrite.js";
 import { Badge } from "../components/ui/Badge.jsx";
 
@@ -226,6 +228,7 @@ export default function Futures() {
   const [error, setError] = useState("");
 
   const [showForm, setShowForm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [formMode, setFormMode] = useState("add");
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(BLANK_FORM);
@@ -327,7 +330,6 @@ export default function Futures() {
 
   function openAddForm() {
     setError(""); setEditingId(null); setFormMode("add"); setForm({ ...BLANK_FORM, country }); setShowForm(true);
-    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
 
   function openEditForm(t) {
@@ -340,7 +342,6 @@ export default function Futures() {
       country: String(t.country || "USA").toUpperCase(),
     });
     setShowForm(true);
-    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
 
   function openCloseForm(pos) {
@@ -352,7 +353,6 @@ export default function Futures() {
       notes: `Close ${pos.direction} ${pos.ticker}`, country,
     });
     setShowForm(true);
-    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   }
 
   function closeForm() {
@@ -394,10 +394,19 @@ export default function Futures() {
     saveMut.mutate({ id: editingId, payload });
   }
 
-  function onDelete(id) {
-    if (!window.confirm("Delete this futures transaction?")) return;
+  function onDelete(tx) {
     setError("");
-    deleteMut.mutate(id);
+    setDeleteTarget(tx);
+  }
+
+  function closeDeleteModal() {
+    setDeleteTarget(null);
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget?.id) return;
+    setError("");
+    deleteMut.mutate(deleteTarget.id, { onSuccess: () => closeDeleteModal() });
   }
 
   const formTitle =
@@ -462,10 +471,10 @@ export default function Futures() {
             No open positions. All contracts have been matched via FIFO.
           </div>
         ) : (
-          <div className="overflow-x-auto mt-2">
+          <div className="overflow-x-auto overflow-y-auto max-h-[68vh] mt-2">
             <table className="w-full border-collapse">
               <thead>
-                <tr>
+                <tr className="sticky top-0 z-10 bg-[#0F1729]">
                   <Th>Ticker</Th>
                   <Th>Direction</Th>
                   <Th>Open Qty</Th>
@@ -503,23 +512,16 @@ export default function Futures() {
 
       {/* Add / Edit / Close form */}
       {canWrite && showForm && (
-        <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-black text-slate-100" style={{ fontFamily: "Epilogue, sans-serif" }}>
-              {formTitle}
-            </h2>
-            <Btn type="button" onClick={closeForm} disabled={saving}>Cancel</Btn>
-          </div>
-
+        <FormModal title={formTitle} onClose={closeForm} wide>
           {formMode === "close" && (
-            <div className="mt-3 rounded-xl border border-amber-500/[0.3] bg-amber-500/[0.08] px-3 py-2 text-xs text-slate-400">
+            <div className="rounded-xl border border-amber-500/[0.3] bg-amber-500/[0.08] px-3 py-2 text-xs text-slate-400">
               Closing via FIFO: this transaction will offset the oldest open lot(s) first.
               Enter the closing price and adjust qty for a partial close.
             </div>
           )}
 
           {error && (
-            <div className="mt-3 rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
+            <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
               <div className="text-xs font-bold text-slate-100">Error</div>
               <div className="mt-1 text-xs text-slate-300">{error}</div>
             </div>
@@ -531,7 +533,7 @@ export default function Futures() {
             ))}
           </datalist>
 
-          <form onSubmit={onSubmit} className="mt-4 grid gap-3">
+          <form onSubmit={onSubmit} className="grid gap-3 pt-1">
             {/* Row 1 */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <FLabel label="Type">
@@ -655,7 +657,32 @@ export default function Futures() {
               </div>
             </div>
           </form>
-        </div>
+        </FormModal>
+      )}
+
+      {canWrite && deleteTarget && (
+        <DeleteConfirmModal
+          title={`Delete — ${deleteTarget.ticker || "Futures Transaction"}`}
+          message="This will permanently delete this futures transaction. This cannot be undone."
+          confirmLabel="Delete Transaction"
+          deleting={saving}
+          error={error}
+          onConfirm={confirmDelete}
+          onClose={closeDeleteModal}
+        >
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Type</span>
+            <span className="font-medium">{deleteTarget.type || "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Trade Date</span>
+            <span>{deleteTarget.tradeDate || "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Qty</span>
+            <span>{deleteTarget.qty ?? "—"}</span>
+          </div>
+        </DeleteConfirmModal>
       )}
 
       {/* Transaction history */}
@@ -729,10 +756,10 @@ export default function Futures() {
         ) : filteredTx.length === 0 ? (
           <EmptyState type="empty" message="No transactions yet. Add a buy or sell above." />
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto overflow-y-auto max-h-[68vh]">
             <table className="w-full border-collapse">
               <thead>
-                <tr>
+                <tr className="sticky top-0 z-10 bg-[#0F1729]">
                   <Th>Date</Th>
                   <Th>Type</Th>
                   <Th>Ticker</Th>
@@ -777,7 +804,7 @@ export default function Futures() {
                       <Td align="right">
                         <div className="flex gap-1.5 justify-end">
                           {canWrite && <Btn onClick={() => openEditForm(t)} disabled={saving}>Edit</Btn>}
-                          {canWrite && <BtnDanger onClick={() => onDelete(t.id)} disabled={saving}>Delete</BtnDanger>}
+                          {canWrite && <BtnDanger onClick={() => onDelete(t)} disabled={saving}>Delete</BtnDanger>}
                         </div>
                         {t.notes && (
                           <div className="mt-1 text-xs text-slate-500 text-right">{t.notes}</div>

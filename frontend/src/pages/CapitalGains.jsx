@@ -154,7 +154,70 @@ function calcOptions(txs, year) {
   let st = 0, lt = 0;
   const details = [];
 
-  for (const t of txs) {
+  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
+  const OPEN_LEGS  = new Set(["OPEN",  "ROLL_OPEN"]);
+
+  // V2 leg-based positions (positionId + leg present)
+  const v2Txs     = txs.filter(t => t.positionId && t.leg);
+  // Legacy single-row positions (closeDate + closePrice on same record)
+  const legacyTxs = txs.filter(t => !(t.positionId && t.leg));
+
+  // ── V2: group by positionId, match OPEN + CLOSE legs ──
+  const byPos = {};
+  for (const t of v2Txs) {
+    if (!byPos[t.positionId]) byPos[t.positionId] = { opens: [], closes: [] };
+    if (CLOSE_LEGS.has(t.leg))      byPos[t.positionId].closes.push(t);
+    else if (OPEN_LEGS.has(t.leg))  byPos[t.positionId].opens.push(t);
+  }
+
+  for (const pos of Object.values(byPos)) {
+    if (!pos.closes.length || !pos.opens.length) continue;
+    const openLeg  = pos.opens[0];
+    const closeLeg = pos.closes[0];
+
+    // CLOSE leg stores its actual close date in openDate (see OptionsV2 handleClosePosition)
+    const closeDate = String(closeLeg.openDate || "").trim();
+    if (!closeDate || closeDate < yS || closeDate > yE) continue;
+
+    const openDate = String(openLeg.openDate || "").trim();
+    const typeU    = String(openLeg.type || "").toUpperCase();
+    const qty      = safeNum(openLeg.qty, 0);
+    if (qty <= 0) continue;
+
+    const openFill  = safeNum(openLeg.fill, 0);
+    const closeFill = safeNum(closeLeg.fill, 0);
+    const openFee   = safeNum(openLeg.fee, 0);
+    const closeFee  = safeNum(closeLeg.fee, 0);
+    const totalFee  = openFee + closeFee;
+
+    let pl;
+    if      (typeU === "SELL") pl = (openFill - closeFill) * qty * 100 - totalFee;
+    else if (typeU === "BUY")  pl = (closeFill - openFill) * qty * 100 - totalFee;
+    else if (typeU === "ASS")  pl = (closeFill - openFill) * qty * 100 - totalFee;
+    else continue;
+
+    const days = openDate ? daysBetween(openDate, closeDate) : 0;
+    const term = days > 365 ? "LT" : "ST";
+    term === "LT" ? (lt += pl) : (st += pl);
+    details.push({
+      ticker: String(openLeg.ticker || "").toUpperCase(),
+      type: typeU,
+      strike: openLeg.strikes || "—",
+      event: String(openLeg.event || "").toLowerCase(),
+      openDate,
+      closeDate,
+      days: Math.floor(days),
+      fill: openFill,
+      closePrice: closeFill,
+      qty,
+      fee: round2(totalFee),
+      pl: round2(pl),
+      term,
+    });
+  }
+
+  // ── Legacy: single-row with closeDate + closePrice ──
+  for (const t of legacyTxs) {
     const closeDate = String(t.closeDate || "").trim();
     if (!closeDate || closeDate < yS || closeDate > yE) continue;
     const typeU = String(t.type || "").toUpperCase();
@@ -176,7 +239,6 @@ function calcOptions(txs, year) {
     const days = openDate ? daysBetween(openDate, closeDate) : 0;
     const term = days > 365 ? "LT" : "ST";
     term === "LT" ? (lt += pl) : (st += pl);
-
     details.push({
       ticker: String(t.ticker || "").toUpperCase(),
       type: typeU,
@@ -193,6 +255,7 @@ function calcOptions(txs, year) {
       term,
     });
   }
+
   return { st: round2(st), lt: round2(lt), details };
 }
 

@@ -48,6 +48,7 @@ const ALL_PAGES_WRITE = {
   wheelScan:         "write",
   assetHub:          "write",
   advisor:           "write",
+  paperTrading:      "write",   // paper trading desk — separate from future liveTrading
 };
 
 /**
