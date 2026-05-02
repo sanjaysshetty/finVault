@@ -462,8 +462,6 @@ export default function Futures() {
           </BtnPrimary>}
         </div>
 
-        <div className="border-t border-white/[0.06]" />
-
         {loading ? (
           <EmptyState type="loading" message="Loading positions…" />
         ) : metrics.openPositions.length === 0 ? (
@@ -486,7 +484,7 @@ export default function Futures() {
               </thead>
               <tbody>
                 {metrics.openPositions.map((pos) => (
-                  <tr key={`${pos.ticker}-${pos.direction}`} className="border-t border-white/[0.06]">
+                  <tr key={`${pos.ticker}-${pos.direction}`} className="border-b border-white/[0.06]">
                     <Td><span className="font-black text-slate-100">{pos.ticker}</span></Td>
                     <Td>
                       <span className="font-black" style={{ color: pos.direction === "LONG" ? "#4ADE80" : "#F87171" }}>
@@ -749,8 +747,6 @@ export default function Futures() {
           </div>
         </div>
 
-        <div className="border-t border-white/[0.06]" />
-
         {loading ? (
           <EmptyState type="loading" message="Loading transactions…" />
         ) : filteredTx.length === 0 ? (
@@ -782,7 +778,7 @@ export default function Futures() {
                   const notional = qty * price * pv;
                   const type = String(t.type || "").toUpperCase();
                   return (
-                    <tr key={t.id} className="border-t border-white/[0.06] hover:bg-white/[0.015] transition-colors">
+                    <tr key={t.id} className="border-b border-white/[0.06] hover:bg-white/[0.015] transition-colors">
                       <Td>{t.tradeDate || "—"}</Td>
                       <Td>
                         <Badge variant={type === "BUY" ? "buy" : type === "SELL" ? "sell" : "summary"}>{type}</Badge>
@@ -868,6 +864,6 @@ function BtnDanger({ children, ...p }) {
 }
 
 const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
-const btnPrimCls = "text-xs font-bold text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
-const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const btnPrimCls = "text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-solid";
+const btnSmCls = "text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-secondary";
 const btnDanCls = "text-xs font-bold text-red-400 px-3 py-1.5 rounded-lg border border-red-500/[0.3] bg-red-500/[0.08] hover:bg-red-500/[0.15] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";

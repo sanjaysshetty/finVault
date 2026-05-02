@@ -38,7 +38,7 @@ export default function Shell() {
   }
 
   return (
-    <div className="h-screen w-full flex flex-col overflow-hidden bg-[#0A0F1E]">
+    <div className="h-screen w-full flex flex-col overflow-hidden bg-[#0A0F1A]">
       {/* Desktop top bar */}
       <TopBar
         navCollapsed={navCollapsed}

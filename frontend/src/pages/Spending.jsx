@@ -310,8 +310,8 @@ export default function Spending() {
       <style>{`
         input.spend-date {
           width: 100%; box-sizing: border-box;
-          background: #080D1A !important; color: #F9FAFB !important;
-          border: 1px solid rgba(255,255,255,0.08) !important;
+          background: var(--fv-input, #070C14) !important; color: var(--fv-text, #E8F0F8) !important;
+          border: 1px solid var(--fv-border, rgba(255,255,255,0.08)) !important;
           border-radius: 10px; padding: 8px 44px 8px 10px; outline: none;
         }
         input.spend-date::-webkit-calendar-picker-indicator { opacity: 0 !important; cursor: pointer; }
@@ -495,8 +495,8 @@ export default function Spending() {
 /* ---------- style helpers ---------- */
 
 const inlineInput = {
-  width: "100%", background: "#080D1A", border: "1px solid rgba(255,255,255,0.08)",
-  color: "#F9FAFB", padding: "8px 10px", borderRadius: 10, outline: "none",
+  width: "100%", background: "var(--fv-input, #070C14)", border: "1px solid var(--fv-border, rgba(255,255,255,0.08))",
+  color: "var(--fv-text, #E8F0F8)", padding: "8px 10px", borderRadius: 10, outline: "none",
   minWidth: 0, boxSizing: "border-box",
 };
 
@@ -512,8 +512,8 @@ function saveBtnCls(disabled) {
   return [
     "mr-2 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-colors",
     disabled
-      ? "border-white/[0.05] bg-[#080D1A] text-slate-600 cursor-not-allowed"
-      : "border-white/[0.08] bg-white/[0.04] text-slate-200 hover:bg-white/[0.08] cursor-pointer",
+      ? "border-white/[0.05] bg-white/[0.03] text-slate-600 cursor-not-allowed"
+      : "border-[rgba(26,158,101,0.5)] bg-[rgba(26,158,101,0.18)] text-[#3DD68C] hover:bg-[rgba(26,158,101,0.28)] cursor-pointer",
   ].join(" ");
 }
 function delBtnCls(disabled) {

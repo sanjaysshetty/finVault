@@ -1,392 +1,262 @@
 import { NavLink } from "react-router-dom";
-import { useState } from "react";
+import { getLoggedInUser } from "../auth/user";
 
-/**
- * Returns true if the active account can see `pageKey`.
- * Owners always pass. Members need pages[pageKey] !== "none".
- * While accounts are still loading (activeAccount is null), show everything.
- */
 function canSee(activeAccount, pageKey) {
   if (!activeAccount || activeAccount.role === "owner") return true;
   return (activeAccount.pages?.[pageKey] || "none") !== "none";
 }
 
-function Icon({ children }) {
+/* ── Icon — exactly matches finVaultUI-2.0 (15×15, strokeWidth 1.8) ─── */
+function Icon({ d }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.9"
-      className="w-4 h-4 shrink-0"
-      aria-hidden="true"
-    >
-      {children}
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+      style={{ flexShrink: 0 }} aria-hidden="true">
+      <path d={d} />
     </svg>
   );
 }
 
-const icons = {
-  sectionAssets: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M4 12h16M4 17h16" />
-    </Icon>
-  ),
-  sectionNav: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 12h16" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16" />
-    </Icon>
-  ),
-  sectionLiabilities: (
-    <Icon>
-      <rect x="4" y="5" width="16" height="14" rx="2.5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M16 11h4M16 14h3" />
-    </Icon>
-  ),
-  sectionInsurance: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l7 3v6c0 5-3.2 8-7 9-3.8-1-7-4-7-9V6l7-3z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.5 12.5l1.7 1.8 3.3-3.7" />
-    </Icon>
-  ),
-  sectionSpending: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 9.5h14v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-8z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 9V7a4 4 0 0 1 8 0v2" />
-    </Icon>
-  ),
-  portfolio: (
-    <Icon>
-      <rect x="4" y="6" width="16" height="12" rx="2.5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M10 11h4" />
-    </Icon>
-  ),
-  stocks: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18V12M11 18V8M16 18v-5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 18h16" />
-    </Icon>
-  ),
-  crypto: (
-    <Icon>
-      <circle cx="12" cy="12" r="8" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v10M9.5 9.5h4a2 2 0 1 1 0 4h-4" />
-    </Icon>
-  ),
-  bullion: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l3-6h8l3 6H5z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4 6 4-6" />
-    </Icon>
-  ),
-  futures: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h8l-1.8-1.8M16 17H8l1.8 1.8" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a5 5 0 0 1 0 10M8 17a5 5 0 0 1 0-10" />
-    </Icon>
-  ),
-  options: (
-    <Icon>
-      <circle cx="12" cy="12" r="8" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3" />
-    </Icon>
-  ),
-  fixedIncome: (
-    <Icon>
-      <rect x="4" y="7" width="16" height="10" rx="2" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5" />
-      <circle cx="17" cy="14" r="1.2" />
-    </Icon>
-  ),
-  others: (
-    <Icon>
-      <circle cx="12" cy="12" r="1.5" />
-      <circle cx="7" cy="12" r="1.5" />
-      <circle cx="17" cy="12" r="1.5" />
-    </Icon>
-  ),
-  nav: (
-    <Icon>
-      <circle cx="12" cy="12" r="7" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 12l3.5-2.5" />
-      <circle cx="12" cy="12" r="1" />
-    </Icon>
-  ),
-  liabilities: (
-    <Icon>
-      <rect x="4" y="5" width="16" height="14" rx="2.5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M16 11h4M16 14h3" />
-    </Icon>
-  ),
-  insurance: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l7 3v6c0 5-3.2 8-7 9-3.8-1-7-4-7-9V6l7-3z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.5 12.5l1.7 1.8 3.3-3.7" />
-    </Icon>
-  ),
-  dashboard: (
-    <Icon>
-      <rect x="4" y="4" width="7" height="7" rx="1.5" />
-      <rect x="13" y="4" width="7" height="5" rx="1.5" />
-      <rect x="13" y="11" width="7" height="9" rx="1.5" />
-      <rect x="4" y="13" width="7" height="7" rx="1.5" />
-    </Icon>
-  ),
-  receipts: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7 4h10v16l-2-1.3L13 20l-2-1.3L9 20l-2-1.3L5 20V6a2 2 0 0 1 2-2z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 9h6M9 12h6" />
-    </Icon>
-  ),
-  accounts: (
-    <Icon>
-      <circle cx="12" cy="8.2" r="3.2" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 19c1.6-3 4-4.5 7-4.5s5.4 1.5 7 4.5" />
-    </Icon>
-  ),
-  sectionResearch: (
-    <Icon>
-      <circle cx="11" cy="11" r="7" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 16.5l3.5 3.5" />
-    </Icon>
-  ),
-  wheelScan: (
-    <Icon>
-      <circle cx="12" cy="12" r="7" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M12 8v8" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l6 6M15 9l-6 6" />
-    </Icon>
-  ),
-  capitalGains: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v18" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6h14" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6l-2 5h4l-2-5z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19 6l-2 5h4l-2-5z" />
-    </Icon>
-  ),
-  assetHub: (
-    <Icon>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.75H4.5A.75.75 0 0 0 3.75 4.5v5.25c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 3.75h-5.25a.75.75 0 0 0-.75.75v5.25c0 .414.336.75.75.75H19.5a.75.75 0 0 0 .75-.75V4.5a.75.75 0 0 0-.75-.75Z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 13.5H4.5a.75.75 0 0 0-.75.75V19.5c0 .414.336.75.75.75h5.25a.75.75 0 0 0 .75-.75v-5.25a.75.75 0 0 0-.75-.75Z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 13.5a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5Z" />
-    </Icon>
-  ),
-  compass: (
-    <Icon>
-      <circle cx="12" cy="12" r="9" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" />
-    </Icon>
-  ),
-  paperTrading: (
-    <Icon>
-      <rect x="4" y="3" width="16" height="18" rx="2" strokeDasharray="2 1.5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M14 17l1.5 1.5 2.5-2.5" />
-    </Icon>
-  ),
-};
-
-/* ── Section header (main menu row) ──────────────────────── */
-function Section({ title, open, onToggle, icon, children }) {
+/* ── Badge ─────────────────────────────────────────────────── */
+function Badge({ label }) {
   return (
-    <div className="mb-0.5">
-      <button
-        type="button"
-        onClick={onToggle}
-        className={[
-          "w-full flex items-center justify-between",
-          "px-3 py-2.5 rounded-xl mx-0",
-          "text-sm font-semibold text-slate-200 hover:text-white",
-          "hover:bg-white/[0.05] transition-all duration-150 cursor-pointer group",
-        ].join(" ")}
-      >
-        <span className="flex items-center gap-2.5">
-          <span className="text-slate-400 group-hover:text-slate-300 transition-colors shrink-0">{icon}</span>
-          <span>{title}</span>
-        </span>
-        <svg
-          viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
-          className={`w-3.5 h-3.5 text-slate-600 transition-transform duration-200 shrink-0 ${open ? "rotate-180" : ""}`}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
-        </svg>
-      </button>
-
-      <div className={`overflow-hidden transition-all duration-200 ${open ? "max-h-96 opacity-100" : "max-h-0 opacity-0"}`}>
-        {/* Indent guide + sub-items */}
-        <div className="ml-[22px] pl-3.5 border-l border-white/[0.07] mb-0.5 mt-0 space-y-0">
-          {children}
-        </div>
-      </div>
-    </div>
+    <span style={{
+      marginLeft: "auto",
+      fontSize: 9,
+      fontWeight: 700,
+      padding: "2px 6px",
+      borderRadius: 99,
+      background: "rgba(61,214,140,0.15)",
+      color: "#3DD68C",
+      border: "1px solid rgba(61,214,140,0.25)",
+      letterSpacing: "0.04em",
+      flexShrink: 0,
+    }}>
+      {label}
+    </span>
   );
 }
 
-/* ── Sub-menu item ────────────────────────────────────────── */
-function Item({ to, label, icon }) {
+/* ── User avatar circle ─────────────────────────────────────── */
+function userInitials(user) {
+  if (!user) return "?";
+  const f = user.firstName?.[0] || "";
+  const l = user.lastName?.[0] || "";
+  if (f && l) return (f + l).toUpperCase();
+  if (f) return f.toUpperCase();
+  return (user.email?.[0] || "?").toUpperCase();
+}
+
+function UserAvatar() {
+  const user = getLoggedInUser();
+  return (
+    <span style={{
+      width: 22, height: 22, borderRadius: "50%",
+      background: "linear-gradient(135deg, #0e6c4a, #1a9e65)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: 9, fontWeight: 800, color: "#fff",
+      flexShrink: 0, letterSpacing: "0.04em",
+    }}>
+      {userInitials(user)}
+    </span>
+  );
+}
+
+/* ── Nav item — exact HTML values ──────────────────────────── */
+function NavItem({ to, label, iconD, badge }) {
   return (
     <NavLink
       to={to}
       title={label}
-      className={({ isActive }) =>
-        [
-          "flex items-center gap-2 px-2.5 py-1 rounded-lg",
-          "text-[13px] font-medium transition-all duration-150",
-          "whitespace-nowrap overflow-hidden",
-          isActive
-            ? "bg-blue-500/[0.12] text-blue-300 font-semibold"
-            : "text-slate-500 hover:text-slate-200 hover:bg-white/[0.05]",
-        ].join(" ")
-      }
+      className="sidebar-item"
+      style={({ isActive }) => ({
+        width: "calc(100% - 16px)",
+        display: "flex",
+        alignItems: "center",
+        gap: 9,
+        padding: "6px 14px",
+        justifyContent: "flex-start",
+        borderRadius: 10,
+        border: "none",
+        cursor: "pointer",
+        background: isActive ? "var(--fv-nav-active-bg)" : "transparent",
+        color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-muted)",
+        fontSize: 13,
+        fontWeight: isActive ? 700 : 600,
+        margin: "1px 8px",
+        fontFamily: "'Manrope', sans-serif",
+        position: "relative",
+        textDecoration: "none",
+      })}
     >
       {({ isActive }) => (
         <>
-          <span className={`shrink-0 transition-colors ${isActive ? "text-blue-400" : "text-slate-600"}`}>
-            {icon}
+          <span style={{ color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-dim)", flexShrink: 0, display: "flex" }}>
+            <Icon d={iconD} />
           </span>
-          <span className="truncate">{label}</span>
+          <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {label}
+          </span>
+          {badge && <Badge label={badge} />}
         </>
       )}
     </NavLink>
   );
 }
 
+/* ── Section group — exact HTML values ─────────────────────── */
+function Group({ children }) {
+  return <div style={{ marginBottom: 2 }}>{children}</div>;
+}
+
+/* ── Section label — exact HTML values ─────────────────────── */
+function SectionLabel({ label }) {
+  return (
+    <div style={{
+      padding: "12px 16px 4px",
+      fontSize: 10,
+      fontWeight: 700,
+      color: "var(--fv-dim)",
+      textTransform: "uppercase",
+      letterSpacing: "0.12em",
+    }}>
+      {label}
+    </div>
+  );
+}
+
+/* ── Icon paths — exact from finVaultUI-2.0.html ───────────── */
+const d = {
+  portfolio:    "M4 5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5zm9 0a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V5zm0 8a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-6zm-9 2a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4z",
+  capitalGains: "M7 16V4m0 0L3 8m4-4 4 4M17 8v12m0 0 4-4m-4 4-4-4",
+  nav:          "M12 3v1m0 16v1M4.22 4.22l.7.7m12.16 12.16.7.7M1 12h1m18 0h1M4.22 19.78l.7-.7M18.36 5.64l.7-.7M12 7a5 5 0 1 1 0 10A5 5 0 0 1 12 7z",
+  stocks:       "M3 17l4-8 4 4 4-6 4 3",
+  crypto:       "M9.5 2A2.5 2.5 0 0 1 12 4.5V5a1 1 0 0 0 1 1h1a2 2 0 0 1 0 4h-1a1 1 0 0 0-1 1v.5a2.5 2.5 0 0 1-5 0V11a1 1 0 0 0-1-1H5a2 2 0 0 1 0-4h1a1 1 0 0 0 1-1v-.5A2.5 2.5 0 0 1 9.5 2z",
+  bullion:      "M5 8h14l-1 9H6L5 8zM3 5h18M9 5V3h6v2",
+  futures:      "M8 7h8M8 12h8M8 17h5m3-5 2 2 2-2",
+  options:      "M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z",
+  fixedIncome:  "M4 7h16v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7zm4 0V5a2 2 0 0 1 4 0v2",
+  others:       "M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm7 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm7 0a1 1 0 1 1-2 0 1 1 0 0 1 2 0z",
+  liabilities:  "M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2",
+  insurance:    "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0 1 12 2.944a11.955 11.955 0 0 1-8.618 3.04A12.02 12.02 0 0 0 3 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
+  spending:     "M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 0 0 3-3V8a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3z",
+  receipts:     "M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01",
+  wheelScan:    "M21 21l-6-6m2-5a7 7 0 1 1-14 0 7 7 0 0 1 14 0z",
+  assetHub:     "M19 11H5m14 0a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2m14 0V9a2 2 0 0 0-2-2M5 11V9a2 2 0 0 1 2-2m0 0V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2M7 7h10",
+  compass:      "M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm3.5 6.5-2 6-6 2 2-6 6-2z",
+  paperTrading: "M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-6 9l2 2 4-4",
+  accounts:     "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
+};
+
 /* ── Sidebar ──────────────────────────────────────────────── */
 export default function SideNav({ activeAccount }) {
-  const [openAssets, setOpenAssets]           = useState(true);
-  const [openNav, setOpenNav]                 = useState(true);
-  const [openLiabilities, setOpenLiabilities] = useState(true);
-  const [openInsurance, setOpenInsurance]     = useState(true);
-  const [openSpending, setOpenSpending]       = useState(true);
-  const [openResearch, setOpenResearch]       = useState(true);
-
-  const hasAsset = (key) => canSee(activeAccount, key);
-  const showSpending =
-    canSee(activeAccount, "spendingDashboard") ||
-    canSee(activeAccount, "receiptsLedger");
+  const has = (key) => canSee(activeAccount, key);
+  const showSpending   = has("spendingDashboard") || has("receiptsLedger");
+  const showPortfolio  = has("portfolio") || has("capitalGains") || has("nav");
+  const showAssets     = has("stocks") || has("crypto") || has("bullion") || has("futures") || has("options") || has("fixedIncome") || has("otherAssets");
+  const showProtection = has("liabilities") || has("insurance");
+  const showResearch   = has("wheelScan") || has("assetHub") || has("advisor") || has("paperTrading");
+  const isOwner        = !activeAccount || activeAccount.role === "owner";
 
   return (
     <aside
-      className={[
-        "hidden md:flex flex-col shrink-0",
-        "w-56 overflow-y-auto overflow-x-hidden",
-        "py-5 px-3",
-        "bg-[#080D1A] border-r border-white/[0.06]",
-        "[&::-webkit-scrollbar]:w-1",
-        "[&::-webkit-scrollbar-thumb]:rounded-full",
-        "[&::-webkit-scrollbar-thumb]:bg-white/[0.06]",
-      ].join(" ")}
+      className="hidden md:flex flex-col shrink-0 [&::-webkit-scrollbar]:w-0"
+      style={{
+        width: 226,
+        minWidth: 226,
+        background: "var(--fv-sidebar)",
+        borderRight: "1px solid var(--fv-border)",
+        overflowY: "auto",
+        overflowX: "hidden",
+        paddingBottom: 16,
+      }}
     >
-      {/* Assets section — only rendered if at least one asset page is visible */}
-      {(hasAsset("portfolio") || hasAsset("stocks") || hasAsset("crypto") ||
-        hasAsset("bullion")   || hasAsset("futures") || hasAsset("options") ||
-        hasAsset("fixedIncome") || hasAsset("otherAssets") || hasAsset("capitalGains")) && (
-        <Section
-          title="Assets"
-          open={openAssets}
-          icon={icons.sectionAssets}
-          onToggle={() => setOpenAssets((v) => !v)}
-        >
-          {hasAsset("portfolio")   && <Item to="/assets/portfolio"   label="Portfolio"    icon={icons.portfolio} />}
-          {hasAsset("stocks")      && <Item to="/assets/stocks"      label="Stocks"       icon={icons.stocks} />}
-          {hasAsset("crypto")      && <Item to="/assets/crypto"      label="Crypto"       icon={icons.crypto} />}
-          {hasAsset("bullion")     && <Item to="/assets/bullion"     label="Bullion"      icon={icons.bullion} />}
-          {hasAsset("futures")     && <Item to="/assets/futures"     label="Futures"      icon={icons.futures} />}
-          {hasAsset("options")     && <Item to="/assets/options-v2"  label="Options"      icon={icons.options} />}
-          {hasAsset("fixedIncome") && <Item to="/assets/fixedincome" label="Fixed Income" icon={icons.fixedIncome} />}
-          {hasAsset("otherAssets")   && <Item to="/assets/otherassets"    label="Others"        icon={icons.others} />}
-          {hasAsset("capitalGains")  && <Item to="/assets/capital-gains"  label="Capital Gains" icon={icons.capitalGains} />}
-        </Section>
+      {/* ── PORTFOLIO ── */}
+      {showPortfolio && (
+        <Group>
+          <SectionLabel label="Portfolio" />
+          {has("portfolio")    && <NavItem to="/assets/portfolio"    label="Dashboard"       iconD={d.portfolio} />}
+          {has("capitalGains") && <NavItem to="/assets/capital-gains" label="Capital Gains"  iconD={d.capitalGains} />}
+          {has("nav")          && <NavItem to="/nav/dashboard"        label="Net Asset Value" iconD={d.nav} />}
+        </Group>
       )}
 
-      {canSee(activeAccount, "nav") && (
-        <Section
-          title="Net Asset Value"
-          open={openNav}
-          icon={icons.sectionNav}
-          onToggle={() => setOpenNav((v) => !v)}
-        >
-          <Item to="/nav/dashboard" label="NAV" icon={icons.nav} />
-        </Section>
+      {/* ── ASSETS ── */}
+      {showAssets && (
+        <Group>
+          <SectionLabel label="Assets" />
+          {has("stocks")      && <NavItem to="/assets/stocks"      label="Stocks"       iconD={d.stocks} />}
+          {has("crypto")      && <NavItem to="/assets/crypto"      label="Crypto"       iconD={d.crypto} />}
+          {has("bullion")     && <NavItem to="/assets/bullion"     label="Bullion"      iconD={d.bullion} />}
+          {has("futures")     && <NavItem to="/assets/futures"     label="Futures"      iconD={d.futures} />}
+          {has("options")     && <NavItem to="/assets/options-v2"  label="Options Pro"  iconD={d.options}  badge="PRO" />}
+          {has("fixedIncome") && <NavItem to="/assets/fixedincome" label="Fixed Income" iconD={d.fixedIncome} />}
+          {has("otherAssets") && <NavItem to="/assets/otherassets" label="Other Assets" iconD={d.others} />}
+        </Group>
       )}
 
-      {canSee(activeAccount, "liabilities") && (
-        <Section
-          title="Liabilities"
-          open={openLiabilities}
-          icon={icons.sectionLiabilities}
-          onToggle={() => setOpenLiabilities((v) => !v)}
-        >
-          <Item to="/liabilities/dashboard" label="Liabilities" icon={icons.liabilities} />
-        </Section>
+      {/* ── PROTECTION ── */}
+      {showProtection && (
+        <Group>
+          <SectionLabel label="Protection" />
+          {has("liabilities") && <NavItem to="/liabilities/dashboard" label="Liabilities" iconD={d.liabilities} />}
+          {has("insurance")   && <NavItem to="/insurance/dashboard"   label="Insurance"   iconD={d.insurance} />}
+        </Group>
       )}
 
-      {canSee(activeAccount, "insurance") && (
-        <Section
-          title="Insurance"
-          open={openInsurance}
-          icon={icons.sectionInsurance}
-          onToggle={() => setOpenInsurance((v) => !v)}
-        >
-          <Item to="/insurance/dashboard" label="Insurance" icon={icons.insurance} />
-        </Section>
-      )}
-
+      {/* ── SPENDING ── */}
       {showSpending && (
-        <Section
-          title="Spending"
-          open={openSpending}
-          icon={icons.sectionSpending}
-          onToggle={() => setOpenSpending((v) => !v)}
-        >
-          {canSee(activeAccount, "spendingDashboard") && (
-            <Item to="/spending/dashboard"       label="Dashboard"       icon={icons.dashboard} />
-          )}
-          {canSee(activeAccount, "receiptsLedger") && (
-            <Item to="/spending/receipts-ledger" label="Receipts Ledger" icon={icons.receipts} />
-          )}
-        </Section>
+        <Group>
+          <SectionLabel label="Spending" />
+          {has("spendingDashboard") && <NavItem to="/spending/dashboard"       label="Spending"        iconD={d.spending} />}
+          {has("receiptsLedger")    && <NavItem to="/spending/receipts-ledger" label="Receipts Ledger" iconD={d.receipts} />}
+        </Group>
       )}
 
-      {(canSee(activeAccount, "wheelScan") || canSee(activeAccount, "assetHub") || canSee(activeAccount, "advisor") || canSee(activeAccount, "paperTrading")) && (
-        <Section
-          title="Research"
-          open={openResearch}
-          icon={icons.sectionResearch}
-          onToggle={() => setOpenResearch((v) => !v)}
-        >
-          {canSee(activeAccount, "wheelScan")    && <Item to="/research/wheel-scan"    label="Wheel Scan"     icon={icons.wheelScan} />}
-          {canSee(activeAccount, "assetHub")     && <Item to="/research/asset-hub"     label="Asset Hub"      icon={icons.assetHub} />}
-          {canSee(activeAccount, "advisor")      && <Item to="/research/compass"       label="Compass"        icon={icons.compass} />}
-          {canSee(activeAccount, "paperTrading") && <Item to="/research/paper-trading" label="Paper Trading"  icon={icons.paperTrading} />}
-        </Section>
+      {/* ── RESEARCH ── */}
+      {showResearch && (
+        <Group>
+          <SectionLabel label="Research" />
+          {has("wheelScan")    && <NavItem to="/research/wheel-scan"    label="Wheel Scan"    iconD={d.wheelScan} />}
+          {has("assetHub")     && <NavItem to="/research/asset-hub"     label="Asset Hub"     iconD={d.assetHub} />}
+          {has("advisor")      && <NavItem to="/research/compass"       label="Compass AI"    iconD={d.compass}   badge="AI" />}
+          {has("paperTrading") && <NavItem to="/research/paper-trading" label="Paper Trading" iconD={d.paperTrading} />}
+        </Group>
       )}
 
-      {/* Accounts link — owners only */}
-      {(!activeAccount || activeAccount.role === "owner") && (
-        <div className="mt-4 pt-4 border-t border-white/[0.06]">
+      {/* ── Spacer ── */}
+      <div style={{ flex: 1 }} />
+
+      {/* ── Accounts (owners only) ── */}
+      {isOwner && (
+        <div style={{ borderTop: "1px solid var(--fv-border)", paddingTop: 10, marginTop: 10 }}>
           <NavLink
             to="/accounts"
-            title="Accounts"
-            className={({ isActive }) =>
-              [
-                "flex items-center gap-2.5 px-3 py-2.5 rounded-xl",
-                "text-sm font-semibold transition-all duration-150",
-                isActive
-                  ? "bg-blue-500/[0.12] text-blue-300"
-                  : "text-slate-200 hover:text-white hover:bg-white/[0.05]",
-              ].join(" ")
-            }
+            className="sidebar-item"
+            style={({ isActive }) => ({
+              width: "calc(100% - 16px)",
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              padding: "6px 14px",
+              borderRadius: 10,
+              border: "none",
+              cursor: "pointer",
+              background: isActive ? "var(--fv-nav-active-bg)" : "transparent",
+              color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-muted)",
+              fontSize: 13,
+              fontWeight: isActive ? 700 : 600,
+              margin: "1px 8px",
+              fontFamily: "'Manrope', sans-serif",
+              textDecoration: "none",
+            })}
           >
             {({ isActive }) => (
               <>
-                <span className={`shrink-0 transition-colors ${isActive ? "text-blue-400" : "text-slate-400"}`}>
-                  {icons.accounts}
+                <UserAvatar />
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  Accounts
                 </span>
-                <span>Accounts</span>
               </>
             )}
           </NavLink>

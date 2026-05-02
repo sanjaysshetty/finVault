@@ -8,7 +8,6 @@ import AccountSwitcher from "../components/AccountSwitcher";
 export default function TopBar({ accounts, activeAccount, onSwitchAccount, theme, onToggleTheme, isManual, onResetToAuto }) {
   const navigate = useNavigate();
   const user = useMemo(() => getLoggedInUser(), []);
-  const logoSrc = `${import.meta.env.BASE_URL}favicon.svg`;
 
   const goHome = () => navigate("/spending/receipts-ledger");
 
@@ -18,30 +17,35 @@ export default function TopBar({ accounts, activeAccount, onSwitchAccount, theme
         "hidden md:grid shrink-0 fv-topbar",
         "h-[54px] px-4 gap-4",
         "grid-cols-[auto_1fr_auto] items-center",
-        "bg-[#080D1A] border-b border-white/[0.06]",
-        "shadow-[0_1px_0_rgba(255,255,255,0.04),0_8px_32px_rgba(0,0,0,0.5)]",
+        "border-b border-white/[0.06]",
       ].join(" ")}
+      style={{ background: "var(--fv-topbar, rgba(7,12,20,0.9))", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}
     >
       {/* LEFT: logo + wordmark */}
-      <div className="flex items-center gap-2.5 select-none shrink-0">
-        <img
-          src={logoSrc}
-          alt="finVault"
-          draggable={false}
-          className="w-7 h-7 object-contain shrink-0"
-        />
-        <span
-          onClick={goHome}
-          className={[
-            "cursor-pointer text-xl font-black tracking-tight whitespace-nowrap transition-colors",
-            import.meta.env.VITE_APP_ENV === "dev"
-              ? "text-amber-400 hover:text-amber-300"
-              : "text-slate-50 hover:text-white",
-          ].join(" ")}
-          style={{ fontFamily: "Epilogue, sans-serif" }}
-        >
-          finVault
-        </span>
+      <div className="flex items-center gap-2.5 select-none shrink-0 cursor-pointer" onClick={goHome}>
+        {/* Meridian mark — exact logo from finVaultUI-2.0 */}
+        <svg width="30" height="30" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="fvmeridian-tb" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor="#0e6c4a" />
+              <stop offset="100%" stopColor="#1a9e65" />
+            </linearGradient>
+          </defs>
+          <rect x="1" y="1" width="38" height="38" rx="11" fill="url(#fvmeridian-tb)" />
+          <path d="M9 24l11-13 11 13" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          <path d="M9 31l11-8 11 8" stroke="#3DD68C" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.85" />
+        </svg>
+        {import.meta.env.VITE_APP_ENV === "dev" ? (
+          <span className="text-xl font-black tracking-tight whitespace-nowrap text-amber-400"
+            style={{ fontFamily: "Manrope, sans-serif" }}>
+            finVault
+          </span>
+        ) : (
+          <span className="text-xl font-black tracking-tight whitespace-nowrap"
+            style={{ fontFamily: "Manrope, sans-serif", color: "var(--fv-text)", letterSpacing: "-0.4px" }}>
+            fin<span style={{ color: "var(--fv-accent-solid, #1a9e65)" }}>Vault</span>
+          </span>
+        )}
       </div>
 
       {/* CENTER: scrollable prices strip */}

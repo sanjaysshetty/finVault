@@ -558,8 +558,6 @@ export default function FixedIncome() {
           </div>
         )}
 
-        <div className="border-t border-white/[0.06]" />
-
         {loading ? (
           <EmptyState type="loading" message="Loading fixed income records…" />
         ) : filteredSortedRows.length === 0 ? (
@@ -583,7 +581,7 @@ export default function FixedIncome() {
               </thead>
               <tbody>
                 {filteredSortedRows.map((r) => (
-                  <tr key={r.id} className="border-t border-white/[0.06] hover:bg-white/[0.015] transition-colors">
+                  <tr key={r.id} className="border-b border-white/[0.06] hover:bg-white/[0.015] transition-colors">
                     <Td>
                       <div className="font-bold text-slate-100">{r.name}</div>
                       {r.notes && <div className="mt-0.5 text-xs text-slate-500">{r.notes}</div>}
@@ -690,6 +688,6 @@ function BtnDanger({ children, ...p }) {
 }
 
 const inputCls = "w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-3 py-2.5 text-slate-200 text-sm outline-none focus:border-blue-500/[0.4] transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
-const btnPrimCls = "text-xs font-bold text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
-const btnSmCls = "text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.08] hover:text-slate-200 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+const btnPrimCls = "text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-solid";
+const btnSmCls = "text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-secondary";
 const btnDanCls = "text-xs font-bold text-red-400 px-3 py-1.5 rounded-lg border border-red-500/[0.3] bg-red-500/[0.08] hover:bg-red-500/[0.15] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";

@@ -228,26 +228,14 @@ export default function PricesBar() {
     queryFn:  () => api.get(pricesPath),
   });
 
-  // ── Portfolio value (USA only — PricesBar always displays in USD)
-  const portfolioValue = useMemo(() => {
-    const isUSA = (t) => String(t?.country || "USA").toUpperCase() === "USA";
-    return computePortfolioValue({
-      fiItems:   fiItems.filter(isUSA),
-      bullionTx: bullionTx.filter(isUSA),
-      stockTx:   stockTx.filter(isUSA),
-      cryptoTx:  cryptoTx.filter(isUSA),
-      otherItems: otherItems.filter(isUSA),
-      pricesData,
-    });
-  }, [fiItems, bullionTx, stockTx, cryptoTx, otherItems, pricesData]);
-
   // ── Display values
   const loading = pricesLoading || !pricesData;
 
-  const spx  = pricesData?.sp500;
-  const ixic = pricesData?.nasdaq;
+  const spx    = pricesData?.sp500;
+  const ixic   = pricesData?.nasdaq;
   const gold   = pricesData?.gold;
   const silver = pricesData?.silver;
+  const inrRow = pricesData?.forex?.["INR=X"];
 
   const btcRow = findBySymbol(pricesData?.crypto, "BTC-USD");
   const ethRow = findBySymbol(pricesData?.crypto, "ETH-USD");
@@ -256,10 +244,11 @@ export default function PricesBar() {
   const btcMid = midFromBidAsk(btcBid, btcAsk);
   const ethMid = midFromBidAsk(ethBid, ethAsk);
 
-  const spxValue  = loading ? "…" : spx?.price  != null ? `${fmtNumber(spx.price)}${fmtPct(spx.price, spx.prevClose)}`   : "—";
-  const ixicValue = loading ? "…" : ixic?.price != null ? `${fmtNumber(ixic.price)}${fmtPct(ixic.price, ixic.prevClose)}` : "—";
+  const spxValue    = loading ? "…" : spx?.price    != null ? `${fmtNumber(spx.price)}${fmtPct(spx.price, spx.prevClose)}`     : "—";
+  const ixicValue   = loading ? "…" : ixic?.price   != null ? `${fmtNumber(ixic.price)}${fmtPct(ixic.price, ixic.prevClose)}` : "—";
   const goldValue   = loading ? "…" : gold?.price   != null ? `${fmtUSD(gold.price)}${fmtPct(gold.price, gold.prev_close_price ?? gold.prevClose)}`     : "—";
   const silverValue = loading ? "…" : silver?.price != null ? `${fmtUSD(silver.price)}${fmtPct(silver.price, silver.prev_close_price ?? silver.prevClose)}` : "—";
+  const inrValue    = loading ? "…" : inrRow?.price != null ? `₹${fmtNumber(inrRow.price)}${fmtPct(inrRow.price, inrRow.prevClose)}` : "—";
 
   function handleRefresh() {
     refetchPrices();
@@ -267,18 +256,13 @@ export default function PricesBar() {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "nowrap", overflowX: "auto", overflowY: "hidden", maxWidth: "100%", minWidth: 0, paddingBottom: 2, WebkitOverflowScrolling: "touch" }}>
-      <MiniCard
-        label="Portfolio"
-        value={!fiRes && !stockRes ? "…" : fmtUSD(portfolioValue)}
-        accent="var(--fv-text)"
-        title="Total holding value (Fixed Income + Stocks + Crypto + Bullion + Other Assets; excluding Property)"
-      />
       <MiniCard label="S&P 500" value={spxValue}    accent={priceColor(spx?.price,    spx?.prevClose)} />
       <MiniCard label="Nasdaq"  value={ixicValue}   accent={priceColor(ixic?.price,   ixic?.prevClose)} />
       <MiniCard label="Gold"    value={goldValue}   accent={priceColor(gold?.price,   gold?.prev_close_price ?? gold?.prevClose)} />
       <MiniCard label="Silver"  value={silverValue} accent={priceColor(silver?.price, silver?.prev_close_price ?? silver?.prevClose)} />
       <MiniCard label="BTC" value={loading ? "…" : btcMid != null ? `${fmtUSD(btcMid)}${fmtPct(btcMid, btcRow?.prevClose)}` : "—"} accent={priceColor(btcMid, btcRow?.prevClose)} />
       <MiniCard label="ETH" value={loading ? "…" : ethMid != null ? `${fmtUSD(ethMid)}${fmtPct(ethMid, ethRow?.prevClose)}` : "—"} accent={priceColor(ethMid, ethRow?.prevClose)} />
+      <MiniCard label="USD/INR" value={inrValue} accent={priceColor(inrRow?.price, inrRow?.prevClose)} title="1 USD in Indian Rupees (live)" />
 
       <button onClick={handleRefresh} className="fv-mini-card-btn" title="Refresh">
         Refresh

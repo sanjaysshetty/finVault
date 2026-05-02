@@ -502,7 +502,7 @@ export default function Portfolio() {
           type="button"
           onClick={handleRefresh}
           disabled={loading || isRefreshing}
-          className="text-xs font-bold text-slate-400 px-3 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.07] hover:text-slate-200 transition-all disabled:opacity-50 cursor-pointer"
+          className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all disabled:opacity-50 cursor-pointer fv-btn-secondary"
         >
           {loading ? "Loading…" : isRefreshing ? "Refreshing…" : "Refresh"}
         </button>
@@ -553,7 +553,7 @@ export default function Portfolio() {
           {/* Asset breakdown table */}
           <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
             {/* Table header */}
-            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3">
+            <div className="px-5 py-4 flex items-center justify-between gap-3">
               <div>
                 <p className="text-lg font-bold text-slate-200">Include Assets</p>
               </div>
@@ -575,7 +575,7 @@ export default function Portfolio() {
                   </tr>
                 </thead>
 
-                <tbody className="divide-y divide-white/[0.04]">
+                <tbody className="">
                   {rows.map((r) => {
                     const showHolding   = !r.ytdOnly;
                     const showPL        = r.key !== "otherAssets" && !r.ytdOnly;
@@ -584,7 +584,7 @@ export default function Portfolio() {
                     const showRealized  = r.key !== "otherAssets";
                     const colorRealized = showRealized && safeNum(r.realized, 0) !== 0;
                     return (
-                      <tr key={r.key} className="hover:bg-white/[0.02] transition-colors">
+                      <tr key={r.key} className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
                         <td className="w-[22%] px-5 py-3.5">
                           {r.href
                             ? <Link to={r.href} className="font-semibold text-slate-200 text-sm hover:text-blue-400 transition-colors">{r.label}</Link>
@@ -613,7 +613,7 @@ export default function Portfolio() {
 
                 {/* Totals row */}
                 <tfoot>
-                  <tr className="border-t border-white/[0.1] bg-white/[0.02]">
+                  <tr className="border-b border-white/[0.1] bg-white/[0.02]">
                     <td className="w-[22%] px-5 py-3.5 text-sm font-black text-slate-300">Total</td>
                     <td className="w-[15%] px-5 py-3.5 text-right text-sm font-black text-slate-100 numeric">
                       {formatMoney(totals.holdingValue)}

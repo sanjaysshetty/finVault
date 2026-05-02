@@ -370,7 +370,7 @@ export default function Bullion() {
 
           {/* Holdings */}
           <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
+            <div className="px-5 py-4 flex items-center justify-between gap-3 flex-wrap">
               <div>
                 <p className="text-sm font-bold text-slate-200">Holdings Overview</p>
                 <p className="mt-0.5 text-xs text-slate-500">{spotStatus || "Spot prices via GoldAPI"}</p>
@@ -385,21 +385,21 @@ export default function Bullion() {
                 <thead>
                   <tr className="border-b border-white/[0.06]">
                     {["Metal", "Qty (oz)", "Avg Cost", "Spot", "Day G/L", "Market Value", "Unrealized"].map((h) => (
-                      <th key={h} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                      <th key={h} className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">{h}</th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.04]">
+                <tbody className="">
                   {metrics.holdings.filter((h) => safeNum(h.qty, 0) > 0).map((h) => (
-                    <tr key={h.metal} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="px-4 py-3">
+                    <tr key={h.metal} className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
+                      <td className="px-3 py-3">
                         <p className="font-bold text-slate-100 text-sm">{h.label}</p>
                       </td>
-                      <td className="px-4 py-3 text-sm text-slate-300 numeric">{round2(h.qty).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                      <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
-                      <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
+                      <td className="px-3 py-3 text-sm text-slate-300 numeric">{round2(h.qty).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                      <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
+                      <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(h.spot)}</td>
                       <td className={`px-4 py-3 text-sm font-bold numeric ${h.dayGL != null ? plClass(h.dayGL) : "text-slate-600"}`}>{h.dayGL != null ? formatMoney(h.dayGL) : "—"}</td>
-                      <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
+                      <td className="px-3 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
                       <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
                     </tr>
                   ))}
@@ -417,7 +417,7 @@ export default function Bullion() {
 
           {/* Transactions */}
           <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] overflow-hidden">
-            <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 flex-wrap">
+            <div className="px-5 py-4 flex items-center justify-between gap-3 flex-wrap">
               <p className="text-sm font-bold text-slate-200">Transactions</p>
               <div className="flex gap-2 items-center flex-nowrap">
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search type / metal / notes…" className={`${inputCls} w-52`} />
@@ -439,25 +439,25 @@ export default function Bullion() {
                   <thead>
                     <tr className="border-b border-white/[0.06]">
                       {["Date", "Type", "Metal", "Qty (oz)", "Unit Price", "Fees", "Net", ""].map((h, i) => (
-                        <th key={i} className="px-4 py-3 text-left text-xs font-bold uppercase tracking-widest text-slate-400">{h}</th>
+                        <th key={i} className="px-3 py-2.5 text-left text-xs font-bold uppercase tracking-widest text-slate-500">{h}</th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/[0.04]">
+                  <tbody className="">
                     {filteredSortedTx.map((t) => {
                       const type = String(t.type || "BUY").toUpperCase();
                       const qty = safeNum(t.quantityOz, 0), px = safeNum(t.unitPrice, 0), fees = safeNum(t.fees, 0);
                       const net = type === "SELL" ? qty * px - fees : qty * px + fees;
                       return (
-                        <tr key={t.id} className="hover:bg-white/[0.02] transition-colors">
-                          <td className="px-4 py-3 text-sm text-slate-400">{t.date || "—"}</td>
-                          <td className="px-4 py-3"><Badge variant={type === "BUY" ? "buy" : type === "SELL" ? "sell" : "summary"}>{type}</Badge></td>
-                          <td className="px-4 py-3 text-sm font-semibold text-slate-200">{String(t.metal || "").toUpperCase()}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{round2(qty).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                          <td className="px-4 py-3 text-sm text-slate-300 numeric">{formatMoney(px)}</td>
-                          <td className="px-4 py-3 text-sm text-slate-400 numeric">{formatMoney(fees)}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(net)}</td>
-                          <td className="px-4 py-3">
+                        <tr key={t.id} className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
+                          <td className="px-3 py-3 text-sm text-slate-400">{t.date || "—"}</td>
+                          <td className="px-3 py-3"><Badge variant={type === "BUY" ? "buy" : type === "SELL" ? "sell" : "summary"}>{type}</Badge></td>
+                          <td className="px-3 py-3 text-sm font-semibold text-slate-200">{String(t.metal || "").toUpperCase()}</td>
+                          <td className="px-3 py-3 text-sm text-slate-300 numeric">{round2(qty).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(px)}</td>
+                          <td className="px-3 py-3 text-sm text-slate-400 numeric">{formatMoney(fees)}</td>
+                          <td className="px-3 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(net)}</td>
+                          <td className="px-3 py-3">
                             <div className="flex gap-2 justify-end">
                               {canWrite && <button type="button" onClick={() => startEdit(t)} disabled={saving} className={btnSmCls}>Edit</button>}
                               {canWrite && <button type="button" onClick={() => onDelete(t)} disabled={saving} className={btnDangerSmCls}>Delete</button>}
@@ -491,7 +491,7 @@ function FLabel({ label, children }) {
 function Btn({ children, onClick, disabled, type = "button" }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
-      className="px-3 py-2 text-sm font-bold rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.07] hover:text-slate-200 transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap">
+      className="px-3 py-2 text-sm font-bold rounded-xl transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap fv-btn-secondary">
       {children}
     </button>
   );
@@ -500,12 +500,12 @@ function Btn({ children, onClick, disabled, type = "button" }) {
 function BtnPrimary({ children, onClick, disabled, type = "button" }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled}
-      className="text-xs font-bold text-white px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+      className="text-xs font-bold px-3 py-1.5 rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-solid">
       {children}
     </button>
   );
 }
 
 const inputCls = "w-full px-3 py-2 rounded-xl bg-[#080D1A] border border-white/[0.1] text-slate-200 text-sm placeholder:text-slate-700 focus:outline-none focus:border-blue-500/40 disabled:opacity-50";
-const btnSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400 hover:bg-white/[0.07] hover:text-slate-200 transition-all disabled:opacity-50 cursor-pointer";
+const btnSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer fv-btn-secondary";
 const btnDangerSmCls = "px-3 py-1.5 text-xs font-bold rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all disabled:opacity-50 cursor-pointer";
