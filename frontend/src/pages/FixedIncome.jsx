@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
+import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
 import { PageHeader } from "../components/ui/PageHeader.jsx";
 import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { FormModal } from "../components/ui/FormModal.jsx";
 import { useCanWrite } from "../hooks/useCanWrite.js";
 
 const COUNTRY_OPTIONS = ["USA", "India"];
@@ -105,6 +107,7 @@ export default function FixedIncome() {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [error, setError] = useState("");
   const [country, setCountry] = useState("USA");
   const currency = COUNTRY_CURRENCY[country] ?? "USD";
@@ -236,7 +239,6 @@ export default function FixedIncome() {
     setEditingId(null);
     setForm({ ...DEFAULT_FORM, country: formCountry });
     setShowForm(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function closeForm() { resetForm({ hide: true }); }
@@ -257,7 +259,6 @@ export default function FixedIncome() {
       notes: r.notes || "",
     });
     setShowForm(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function buildPayloadFromForm() {
@@ -293,10 +294,19 @@ export default function FixedIncome() {
     saveMut.mutate({ id: editingId, payload });
   }
 
-  function onDelete(id) {
+  function onDelete(row) {
     setError("");
-    if (!window.confirm("Delete this fixed income record?")) return;
-    deleteMut.mutate(id);
+    setDeleteTarget(row);
+  }
+
+  function closeDeleteModal() {
+    setDeleteTarget(null);
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget?.id) return;
+    setError("");
+    deleteMut.mutate(deleteTarget.id, { onSuccess: () => closeDeleteModal() });
   }
 
   function onToggleSort(key) {
@@ -329,30 +339,15 @@ export default function FixedIncome() {
 
       {/* Form panel */}
       {canWrite && showForm && (
-        <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h2
-              className="text-sm font-black text-slate-100"
-              style={{ fontFamily: "Epilogue, sans-serif" }}
-            >
-              {editingId ? "Edit Fixed Income" : "Add Fixed Income"}
-            </h2>
-            <div className="flex gap-2">
-              {editingId && (
-                <Btn onClick={() => resetForm({ hide: true })} disabled={saving}>Cancel</Btn>
-              )}
-              <Btn onClick={closeForm} disabled={saving}>Close</Btn>
-            </div>
-          </div>
-
+        <FormModal title={editingId ? "Edit Fixed Income" : "Add Fixed Income"} onClose={closeForm} wide>
           {error && (
-            <div className="mt-3 rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
+            <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
               <div className="text-xs font-bold text-slate-100">Error</div>
               <div className="mt-1 text-xs text-slate-300">{error}</div>
             </div>
           )}
 
-          <form onSubmit={onSubmit} className="mt-4 grid gap-3">
+          <form onSubmit={onSubmit} className="grid gap-3 pt-1">
             {/* Row 1: Name (2fr) · Country · Principal · Rate */}
             <div className="grid gap-3" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr" }}>
               <FLabel label="Name">
@@ -491,7 +486,32 @@ export default function FixedIncome() {
               </BtnPrimary>
             </div>
           </form>
-        </div>
+        </FormModal>
+      )}
+
+      {canWrite && deleteTarget && (
+        <DeleteConfirmModal
+          title={`Delete — ${deleteTarget.name || "Fixed Income Record"}`}
+          message="This will permanently delete this fixed income record. This cannot be undone."
+          confirmLabel="Delete Record"
+          deleting={saving}
+          error={error}
+          onConfirm={confirmDelete}
+          onClose={closeDeleteModal}
+        >
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Country</span>
+            <span className="font-medium">{deleteTarget.country || "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Start Date</span>
+            <span>{deleteTarget.startDate || "—"}</span>
+          </div>
+          <div className="flex justify-between gap-3">
+            <span className="text-slate-400">Principal</span>
+            <span>{formatMoney(deleteTarget.principal)}</span>
+          </div>
+        </DeleteConfirmModal>
       )}
 
       {/* Records table */}
@@ -586,7 +606,7 @@ export default function FixedIncome() {
                     <Td align="right">
                       <div className="flex gap-1.5 justify-end">
                         {canWrite && <Btn onClick={() => startEdit(r)} disabled={saving}>Edit</Btn>}
-                        {canWrite && <BtnDanger onClick={() => onDelete(r.id)} disabled={saving}>Delete</BtnDanger>}
+                        {canWrite && <BtnDanger onClick={() => onDelete(r)} disabled={saving}>Delete</BtnDanger>}
                       </div>
                     </Td>
                   </tr>

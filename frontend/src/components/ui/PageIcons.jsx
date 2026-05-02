@@ -130,4 +130,13 @@ export const PageIcons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" />
     </Icon>
   ),
+  // Paper trading — document with a dashed border and checkmark (staged/reviewed)
+  // Amber-themed in the UI to distinguish from live trading (future: red-themed)
+  paperTrading: (
+    <Icon>
+      <rect x="4" y="3" width="16" height="18" rx="2" strokeDasharray="2 1.5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14 17l1.5 1.5 2.5-2.5" />
+    </Icon>
+  ),
 };

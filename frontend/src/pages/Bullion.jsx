@@ -5,7 +5,9 @@ import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
 import { PageHeader } from "../components/ui/PageHeader.jsx";
 import { PageIcons }  from "../components/ui/PageIcons.jsx";
 import { Badge }      from "../components/ui/Badge.jsx";
+import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
+import { FormModal } from "../components/ui/FormModal.jsx";
 import { useCanWrite } from "../hooks/useCanWrite.js";
 
 /* ── Utilities ───────────────────────────────────────────── */
@@ -119,6 +121,7 @@ export default function Bullion() {
   const [form, setForm]           = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [showForm, setShowForm]   = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [error, setError]         = useState("");
   const [search, setSearch]       = useState("");
   const [sortKey, setSortKey]     = useState("date");
@@ -206,12 +209,12 @@ export default function Bullion() {
 
   function resetForm()  { setForm({ ...DEFAULT_FORM, country }); setEditingId(null); setError(""); }
   function closeForm()  { setShowForm(false); resetForm(); }
-  function openCreate() { setError(""); setEditingId(null); setForm({ ...DEFAULT_FORM, country }); setShowForm(true); setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0); }
+  function openCreate() { setError(""); setEditingId(null); setForm({ ...DEFAULT_FORM, country }); setShowForm(true); }
 
   function startEdit(t) {
     setError(""); setEditingId(t.id);
     setForm({ type: String(t.type || "BUY").toUpperCase(), metal: String(t.metal || "GOLD").toUpperCase(), date: t.date || todayISO(), quantityOz: String(t.quantityOz ?? ""), unitPrice: String(t.unitPrice ?? ""), fees: String(t.fees ?? ""), notes: t.notes || "", country: String(t.country || "USA").toUpperCase() });
-    setShowForm(true); setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+    setShowForm(true);
   }
 
   function buildPayload() {
@@ -233,10 +236,19 @@ export default function Bullion() {
     saveMut.mutate({ id: editingId, payload });
   }
 
-  function onDelete(id) {
+  function onDelete(tx) {
     setError("");
-    if (!window.confirm("Delete this bullion transaction?")) return;
-    deleteMut.mutate(id);
+    setDeleteTarget(tx);
+  }
+
+  function closeDeleteModal() {
+    setDeleteTarget(null);
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget?.id) return;
+    setError("");
+    deleteMut.mutate(deleteTarget.id, { onSuccess: () => closeDeleteModal() });
   }
 
   function refreshSpot() {
@@ -282,13 +294,9 @@ export default function Bullion() {
 
           {/* Add/Edit form */}
           {canWrite && showForm && (
-            <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-5">
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <p className="text-sm font-bold text-slate-200">{editingId ? "Edit Bullion Transaction" : "Add Bullion Transaction"}</p>
-                <Btn onClick={closeForm} disabled={saving}>Close</Btn>
-              </div>
-              {error && <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">{error}</div>}
-              <form onSubmit={onSubmit} className="space-y-3">
+            <FormModal title={editingId ? "Edit Bullion Transaction" : "Add Bullion Transaction"} onClose={closeForm} wide>
+              {error && <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">{error}</div>}
+              <form onSubmit={onSubmit} className="space-y-3 pt-1">
                 <div className="grid grid-cols-4 gap-3">
                   <FLabel label="Type">
                     <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} className={inputCls} disabled={saving}>
@@ -332,7 +340,32 @@ export default function Bullion() {
                   </div>
                 </div>
               </form>
-            </div>
+            </FormModal>
+          )}
+
+          {canWrite && deleteTarget && (
+            <DeleteConfirmModal
+              title={`Delete — ${deleteTarget.metal || "Bullion Transaction"}`}
+              message="This will permanently delete this bullion transaction. This cannot be undone."
+              confirmLabel="Delete Transaction"
+              deleting={saving}
+              error={error}
+              onConfirm={confirmDelete}
+              onClose={closeDeleteModal}
+            >
+              <div className="flex justify-between gap-3">
+                <span className="text-slate-400">Type</span>
+                <span className="font-medium">{deleteTarget.type || "—"}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-slate-400">Date</span>
+                <span>{deleteTarget.date || "—"}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-slate-400">Quantity (oz)</span>
+                <span>{deleteTarget.quantityOz ?? "—"}</span>
+              </div>
+            </DeleteConfirmModal>
           )}
 
           {/* Holdings */}
@@ -427,7 +460,7 @@ export default function Bullion() {
                           <td className="px-4 py-3">
                             <div className="flex gap-2 justify-end">
                               {canWrite && <button type="button" onClick={() => startEdit(t)} disabled={saving} className={btnSmCls}>Edit</button>}
-                              {canWrite && <button type="button" onClick={() => onDelete(t.id)} disabled={saving} className={btnDangerSmCls}>Delete</button>}
+                              {canWrite && <button type="button" onClick={() => onDelete(t)} disabled={saving} className={btnDangerSmCls}>Delete</button>}
                             </div>
                             {t.notes && <p className="text-[11px] text-slate-600 mt-1 text-right pr-1">{t.notes}</p>}
                           </td>

@@ -180,6 +180,13 @@ const icons = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" />
     </Icon>
   ),
+  paperTrading: (
+    <Icon>
+      <rect x="4" y="3" width="16" height="18" rx="2" strokeDasharray="2 1.5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h8M8 14h5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14 17l1.5 1.5 2.5-2.5" />
+    </Icon>
+  ),
 };
 
 /* ── Section header (main menu row) ──────────────────────── */
@@ -288,8 +295,7 @@ export default function SideNav({ activeAccount }) {
           {hasAsset("crypto")      && <Item to="/assets/crypto"      label="Crypto"       icon={icons.crypto} />}
           {hasAsset("bullion")     && <Item to="/assets/bullion"     label="Bullion"      icon={icons.bullion} />}
           {hasAsset("futures")     && <Item to="/assets/futures"     label="Futures"      icon={icons.futures} />}
-          {hasAsset("options")     && <Item to="/assets/options"     label="Options (Legacy)"  icon={icons.options} />}
-          {hasAsset("options")     && <Item to="/assets/options-v2"  label="Options Pro"  icon={icons.options} />}
+          {hasAsset("options")     && <Item to="/assets/options-v2"  label="Options"      icon={icons.options} />}
           {hasAsset("fixedIncome") && <Item to="/assets/fixedincome" label="Fixed Income" icon={icons.fixedIncome} />}
           {hasAsset("otherAssets")   && <Item to="/assets/otherassets"    label="Others"        icon={icons.others} />}
           {hasAsset("capitalGains")  && <Item to="/assets/capital-gains"  label="Capital Gains" icon={icons.capitalGains} />}
@@ -345,16 +351,17 @@ export default function SideNav({ activeAccount }) {
         </Section>
       )}
 
-      {(canSee(activeAccount, "wheelScan") || canSee(activeAccount, "assetHub") || canSee(activeAccount, "advisor")) && (
+      {(canSee(activeAccount, "wheelScan") || canSee(activeAccount, "assetHub") || canSee(activeAccount, "advisor") || canSee(activeAccount, "paperTrading")) && (
         <Section
           title="Research"
           open={openResearch}
           icon={icons.sectionResearch}
           onToggle={() => setOpenResearch((v) => !v)}
         >
-          {canSee(activeAccount, "wheelScan") && <Item to="/research/wheel-scan" label="Wheel Scan"  icon={icons.wheelScan} />}
-          {canSee(activeAccount, "assetHub")  && <Item to="/research/asset-hub"  label="Asset Hub"   icon={icons.assetHub} />}
-          {canSee(activeAccount, "advisor")   && <Item to="/research/compass"    label="Compass"     icon={icons.compass} />}
+          {canSee(activeAccount, "wheelScan")    && <Item to="/research/wheel-scan"    label="Wheel Scan"     icon={icons.wheelScan} />}
+          {canSee(activeAccount, "assetHub")     && <Item to="/research/asset-hub"     label="Asset Hub"      icon={icons.assetHub} />}
+          {canSee(activeAccount, "advisor")      && <Item to="/research/compass"       label="Compass"        icon={icons.compass} />}
+          {canSee(activeAccount, "paperTrading") && <Item to="/research/paper-trading" label="Paper Trading"  icon={icons.paperTrading} />}
         </Section>
       )}
 

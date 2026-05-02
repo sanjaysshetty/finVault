@@ -333,7 +333,7 @@ def handler(event, context):
 
     # Resolve account: manual API trigger passes accountId in event payload;
     # scheduled EventBridge runs fall back to WHEEL_SCAN_ACCOUNT_ID env var.
-    account_id = (event or {}).get("accountId", "") or WHEEL_SCAN_ACCOUNT_ID
+    account_id = ((event or {}).get("accountId", "") or WHEEL_SCAN_ACCOUNT_ID).strip()
     if not account_id:
         logger.error("No accountId in event and WHEEL_SCAN_ACCOUNT_ID not configured — cannot determine output path")
         return {"statusCode": 500, "body": "WHEEL_SCAN_ACCOUNT_ID not configured"}
