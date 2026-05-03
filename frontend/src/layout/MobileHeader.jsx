@@ -23,7 +23,7 @@ export default function MobileHeader({ onMenuClick, theme, onToggleTheme, isManu
       {/* Logo + wordmark */}
       <div
         className="flex items-center gap-2.5 select-none cursor-pointer shrink-0"
-        onClick={() => navigate("/spending/receipts-ledger")}
+        onClick={() => navigate("/assets/portfolio")}
       >
         <img
           src={logoSrc}

@@ -339,7 +339,7 @@ export default function FixedIncome() {
 
       {/* Form panel */}
       {canWrite && showForm && (
-        <FormModal title={editingId ? "Edit Fixed Income" : "Add Fixed Income"} onClose={closeForm} wide>
+        <FormModal title={editingId ? "Edit Fixed Income" : "Add Fixed Income"} onClose={closeForm} wide="xl">
           {error && (
             <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2.5">
               <div className="text-xs font-bold text-slate-100">Error</div>
@@ -349,7 +349,7 @@ export default function FixedIncome() {
 
           <form onSubmit={onSubmit} className="grid gap-3 pt-1">
             {/* Row 1: Name (2fr) · Country · Principal · Rate */}
-            <div className="grid gap-3" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr" }}>
+            <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr" }}>
               <FLabel label="Name">
                 <input
                   value={form.name}
@@ -392,7 +392,7 @@ export default function FixedIncome() {
             </div>
 
             {/* Row 2: Start Date · Term · Interest Type · Compound Freq */}
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-4 gap-3 items-start">
               <FLabel label="Start Date">
                 <input
                   type="date"
@@ -438,7 +438,7 @@ export default function FixedIncome() {
             </div>
 
             {/* Row 3: Notes (3fr) · Preview panel (1fr) */}
-            <div className="grid gap-3" style={{ gridTemplateColumns: "3fr 1fr" }}>
+            <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "3fr 1fr" }}>
               <FLabel label="Notes (optional)">
                 <input
                   value={form.notes}
@@ -448,8 +448,8 @@ export default function FixedIncome() {
                   disabled={saving}
                 />
               </FLabel>
-              <div className="rounded-xl border border-white/[0.06] bg-[#080D1A]/40 p-3">
-                <div className="text-xs font-bold text-slate-500 mb-2">Preview</div>
+              <div className="rounded-xl p-3 bg-[#080D1A] border border-white/[0.06]">
+                <div className="text-xs font-bold mb-2 text-slate-300">Preview</div>
                 <div className="space-y-1.5">
                   <MiniRow
                     label="Maturity Date"
@@ -623,8 +623,8 @@ export default function FixedIncome() {
 
 function FLabel({ label, children }) {
   return (
-    <label className="grid gap-1.5">
-      <span className="text-xs font-bold text-slate-500">{label}</span>
+    <label className="flex flex-col gap-1.5 min-w-0">
+      <span className="text-xs font-bold text-slate-500 whitespace-nowrap">{label}</span>
       {children}
     </label>
   );
@@ -669,8 +669,8 @@ function MiniRow({ label, value }) {
   const v = typeof value === "function" ? value() : value;
   return (
     <div className="flex justify-between gap-2">
-      <span className="text-xs text-slate-500 font-bold">{label}</span>
-      <span className="text-xs text-slate-300 font-bold">{v}</span>
+      <span className="text-xs text-slate-300 font-bold">{label}</span>
+      <span className="text-xs text-slate-200 font-bold">{v}</span>
     </div>
   );
 }
