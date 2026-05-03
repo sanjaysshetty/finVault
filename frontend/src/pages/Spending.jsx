@@ -509,18 +509,8 @@ function btnCls(disabled) {
   ].join(" ");
 }
 function saveBtnCls(disabled) {
-  return [
-    "mr-2 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-colors",
-    disabled
-      ? "border-white/[0.05] bg-white/[0.03] text-slate-600 cursor-not-allowed"
-      : "border-[rgba(26,158,101,0.5)] bg-[rgba(26,158,101,0.18)] text-[#3DD68C] hover:bg-[rgba(26,158,101,0.28)] cursor-pointer",
-  ].join(" ");
+  return "mr-2 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-secondary";
 }
 function delBtnCls(disabled) {
-  return [
-    "px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-colors",
-    disabled
-      ? "border-white/[0.05] bg-[#080D1A] text-slate-600 cursor-not-allowed"
-      : "border-red-900/[0.5] bg-red-950/[0.5] text-red-300 hover:bg-red-900/[0.3] cursor-pointer",
-  ].join(" ");
+  return "px-2.5 py-1.5 rounded-lg text-xs font-bold border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap";
 }

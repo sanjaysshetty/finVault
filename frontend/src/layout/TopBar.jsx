@@ -9,7 +9,7 @@ export default function TopBar({ accounts, activeAccount, onSwitchAccount, theme
   const navigate = useNavigate();
   const user = useMemo(() => getLoggedInUser(), []);
 
-  const goHome = () => navigate("/spending/receipts-ledger");
+  const goHome = () => navigate("/assets/portfolio");
 
   return (
     <header
