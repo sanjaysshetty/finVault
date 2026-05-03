@@ -226,7 +226,7 @@ export default function SpendingDash() {
             className="min-w-[200px] bg-transparent border-0 p-0"
           />
 
-          <div className="flex gap-2.5 flex-wrap items-end">
+          <div className="flex gap-2.5 flex-wrap items-start">
             <FLabel label="Date Range">
               <select value={preset} onChange={(e) => setPreset(e.target.value)} className={`${inputCls} !w-40`}>
                 {presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -243,14 +243,17 @@ export default function SpendingDash() {
                 {(categories?.length ? categories : ["All"]).map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </FLabel>
-            <button
-              type="button"
-              onClick={() => queryClient.invalidateQueries({ queryKey: ["spending", "dashboard"] })}
-              className={btnPrimCls}
-              disabled={loading}
-            >
-              Refresh
-            </button>
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs opacity-0 select-none">_</span>
+              <button
+                type="button"
+                onClick={() => queryClient.invalidateQueries({ queryKey: ["spending", "dashboard"] })}
+                className={`${btnPrimCls} !py-2.5`}
+                disabled={loading}
+              >
+                Refresh
+              </button>
+            </div>
           </div>
         </div>
 
@@ -292,8 +295,8 @@ export default function SpendingDash() {
 
 function FLabel({ label, children }) {
   return (
-    <label className="grid gap-1.5">
-      <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{label}</span>
+    <label className="flex flex-col gap-1.5 min-w-0">
+      <span className="text-xs font-bold uppercase tracking-widest text-slate-500 whitespace-nowrap">{label}</span>
       {children}
     </label>
   );

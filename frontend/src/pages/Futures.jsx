@@ -510,7 +510,7 @@ export default function Futures() {
 
       {/* Add / Edit / Close form */}
       {canWrite && showForm && (
-        <FormModal title={formTitle} onClose={closeForm} wide>
+        <FormModal title={formTitle} onClose={closeForm} wide="xl">
           {formMode === "close" && (
             <div className="rounded-xl border border-amber-500/[0.3] bg-amber-500/[0.08] px-3 py-2 text-xs text-slate-400">
               Closing via FIFO: this transaction will offset the oldest open lot(s) first.
@@ -533,7 +533,7 @@ export default function Futures() {
 
           <form onSubmit={onSubmit} className="grid gap-3 pt-1">
             {/* Row 1 */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-start">
               <FLabel label="Type">
                 <select
                   value={form.type}
@@ -580,7 +580,7 @@ export default function Futures() {
             </div>
 
             {/* Row 2 */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-start">
               <FLabel label="Qty (contracts)">
                 <input
                   value={form.qty}
@@ -625,7 +625,7 @@ export default function Futures() {
             </div>
 
             {/* Row 3 */}
-            <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 items-start">
               <FLabel label="Notes (optional)">
                 <input
                   value={form.notes}
@@ -641,18 +641,20 @@ export default function Futures() {
                   <option value="INDIA">India</option>
                 </select>
               </FLabel>
-              <div className="flex gap-2 items-end justify-end">
-                <Btn
-                  type="button"
-                  onClick={() => setForm((f) => ({ ...f, qty: "", price: "", fees: "", notes: "" }))}
-                  disabled={saving}
-                >
-                  Reset
-                </Btn>
-                <BtnPrimary type="submit" disabled={saving} style={{ opacity: saving ? 0.75 : 1 }}>
-                  {saving ? "Saving…" : formMode === "close" ? "Record Close" : editingId ? "Save Changes" : "Add Transaction"}
-                </BtnPrimary>
-              </div>
+            </div>
+
+            {/* Submit row */}
+            <div className="flex justify-end gap-2 mt-1">
+              <Btn
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, qty: "", price: "", fees: "", notes: "" }))}
+                disabled={saving}
+              >
+                Reset
+              </Btn>
+              <BtnPrimary type="submit" disabled={saving} style={{ opacity: saving ? 0.75 : 1 }}>
+                {saving ? "Saving…" : formMode === "close" ? "Record Close" : editingId ? "Save Changes" : "Add Transaction"}
+              </BtnPrimary>
             </div>
           </form>
         </FormModal>
@@ -823,8 +825,8 @@ export default function Futures() {
 
 function FLabel({ label, children }) {
   return (
-    <label className="grid gap-1.5">
-      <span className="text-xs font-bold text-slate-500">{label}</span>
+    <label className="flex flex-col gap-1.5 min-w-0">
+      <span className="text-xs font-bold text-slate-500 whitespace-nowrap">{label}</span>
       {children}
     </label>
   );
