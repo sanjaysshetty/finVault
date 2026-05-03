@@ -188,7 +188,7 @@ export default function OtherAssets() {
       </div>
 
       {canWrite && showForm && (
-        <FormModal title={editingId ? "Edit Other Asset" : "Add Other Asset"} onClose={() => resetForm({ hide: true })} wide>
+        <FormModal title={editingId ? "Edit Other Asset" : "Add Other Asset"} onClose={() => resetForm({ hide: true })} wide="xl">
           {error && (
             <div className="rounded-xl border border-red-500/[0.3] bg-red-500/[0.08] px-3 py-2">
               <span className="text-xs font-black text-slate-100">Error</span>
@@ -196,7 +196,7 @@ export default function OtherAssets() {
             </div>
           )}
           <form onSubmit={onSubmit} className="grid gap-3 pt-1">
-            <div className="grid gap-3" style={{ gridTemplateColumns: "1fr 1fr 2fr 1fr" }}>
+            <div className="grid gap-3 items-start" style={{ gridTemplateColumns: "1fr 1fr 2fr 1fr" }}>
               <FLabel label="Asset Category">
                 <select value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} className={inputCls} disabled={saving}>
                   {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -210,7 +210,7 @@ export default function OtherAssets() {
               <FLabel label="Asset Description">
                 <input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="e.g., Robinhood Cash Sweep" className={inputCls} disabled={saving} />
               </FLabel>
-              <FLabel label="Latest Asset Value (USD)">
+              <FLabel label="Value (USD)">
                 <input value={form.value} onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))} placeholder="1000.00" inputMode="decimal" className={inputCls} disabled={saving} />
               </FLabel>
             </div>
@@ -326,8 +326,8 @@ export default function OtherAssets() {
 
 function FLabel({ label, children }) {
   return (
-    <label className="grid gap-1.5">
-      <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{label}</span>
+    <label className="flex flex-col gap-1.5 min-w-0">
+      <span className="text-xs font-bold uppercase tracking-widest text-slate-500 whitespace-nowrap">{label}</span>
       {children}
     </label>
   );
