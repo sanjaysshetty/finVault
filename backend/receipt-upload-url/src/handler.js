@@ -27,12 +27,14 @@ function sanitizeFilename(name) {
 function isAllowedContentType(ct) {
   if (!ct) return false;
   if (ct === "application/pdf") return true;
+  if (ct === "text/csv") return true;
   if (ct.startsWith("image/")) return true;
   return false;
 }
 
 function extFromContentType(ct, fallbackName) {
   if (ct === "application/pdf") return ".pdf";
+  if (ct === "text/csv") return ".csv";
   if (ct === "image/jpeg") return ".jpg";
   if (ct === "image/png") return ".png";
   if (ct === "image/webp") return ".webp";

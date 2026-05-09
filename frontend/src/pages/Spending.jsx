@@ -5,6 +5,7 @@ import { useCanWrite } from "../hooks/useCanWrite.js";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
 import { PageHeader } from "../components/ui/PageHeader.jsx";
 import { PageIcons }  from "../components/ui/PageIcons.jsx";
+import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
 
 function fmtUSD(x) {
   const n = typeof x === "string" ? Number(x) : x;
@@ -88,7 +89,7 @@ function groupByReceipt(items) {
     const maxUpdatedAt = rows.map((r) => r.updatedAt).filter(Boolean).sort().slice(-1)[0] || "";
     return { receipt, rows, maxDate, maxUpdatedAt };
   });
-  groups.sort((a, b) => (b.maxUpdatedAt || b.maxDate || "").localeCompare(a.maxUpdatedAt || a.maxDate || ""));
+  groups.sort((a, b) => (b.maxDate || "").localeCompare(a.maxDate || ""));
   return groups;
 }
 
@@ -128,6 +129,157 @@ function shouldDisplayRow(row) {
 }
 function safeDomId(str) { return `date_${String(str).replace(/[^a-zA-Z0-9_-]/g, "_")}`; }
 
+/* ---------- CSV helpers ---------- */
+
+function parseCSVLine(line) {
+  const fields = []; let cur = ""; let inQ = false;
+  for (const c of line) {
+    if (c === '"') inQ = !inQ;
+    else if (c === "," && !inQ) { fields.push(cur); cur = ""; }
+    else cur += c;
+  }
+  fields.push(cur);
+  return fields;
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const headers = parseCSVLine(lines[0]).map(h =>
+    h.trim().replace(/^"|"$/g, "").toLowerCase().replace(/\s+/g, "_")
+  );
+  return lines.slice(1)
+    .map(line => {
+      const fields = parseCSVLine(line);
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = (fields[i] || "").replace(/^"|"$/g, "").trim(); });
+      return obj;
+    })
+    .filter(row => Object.values(row).some(v => v));
+}
+
+function parseDateMDY(s) {
+  const p = String(s || "").split("/");
+  if (p.length !== 3) return "";
+  const [m, d, y] = p;
+  if (!y || y.length !== 4) return "";
+  return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
+const _STATE_RE = /^(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)$/;
+const _SKIP = new Set(["AT","THE","OF","BY","FOR","TO","IN","ON","A","AN","VIA"]);
+
+function extractStoreName(desc) {
+  let s = String(desc || "").trim()
+    .replace(/\b[A-Z0-9]{2,6}\*/gi, "")                              // PP*, RVT*, etc.
+    .replace(/\b(\w+)\.(com|net|org|tv|io|gov|edu)\S*/gi, "$1")      // domain → first word
+    .replace(/\b\d{3}[-\s.]?\d{3}[-\s.]?\d{4,}\b/g, "")             // phone numbers
+    .replace(/\*/g, " ")
+    .replace(/\s*[/\\]\s*/g, " ")
+    .replace(/#\d+/g, "")                                             // #596, #1167
+    .replace(/^[A-Z]{1,5}\d+\s+/i, "")                               // MEN922, leading alpha-numeric codes
+    .replace(/^\d+\s+/, "");                                           // leading pure numbers
+  const words = s.split(/\s+/).filter(w => w.length > 0);
+  const keep = [];
+  for (const w of words) {
+    const up = w.replace(/[^A-Z0-9\-&]/gi, "").toUpperCase();
+    if (!up || up.length < 2) continue;
+    if (_STATE_RE.test(up)) break;
+    if (/^\d+$/.test(up)) continue;
+    if (_SKIP.has(up) && keep.length >= 1) continue;
+    keep.push(w.replace(/[^A-Za-z0-9\-&]/g, ""));
+    if (keep.length >= 3) break;
+  }
+  return keep.join(" ").trim() || desc.slice(0, 20).trim();
+}
+
+function shortId() { return Math.random().toString(36).slice(2, 8); }
+
+function csvRowToItem(row) {
+  const desc = String(row.description || row.desc || "").trim();
+  if (!desc) return null;
+  if (desc.toUpperCase().includes("ONLINE PAYMENT")) return null;
+  const debit  = parseFloat(String(row.debit  || "").replace(/[^0-9.]/g, "")) || 0;
+  const credit = parseFloat(String(row.credit || "").replace(/[^0-9.]/g, "")) || 0;
+  const amount = debit > 0 ? debit : credit > 0 ? -credit : 0;
+  const date = parseDateMDY(row.date || "");
+  if (!date) return null;
+  const storeName = extractStoreName(desc);
+  const receipt = `${storeName} ${date} ${shortId()}`;
+  return { receipt, storeName, lineId: 1, date, productDescription: desc, amount, category: "", source: "csvimport" };
+}
+
+/* ---------- Duplicate detection ---------- */
+
+// Strips dates (both YYYY-MM-DD and MM-DD-YYYY), hex hashes, random IDs,
+// underscores, hyphens between letters (H-E-B → HEB), case — leaving only
+// the meaningful store-name words for fuzzy comparison.
+function normForDedup(receiptName) {
+  return String(receiptName || "")
+    .replace(/_/g, " ")                          // underscores → spaces
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, " ")     // YYYY-MM-DD
+    .replace(/\b\d{2}-\d{2}-\d{4}\b/g, " ")     // MM-DD-YYYY
+    .replace(/\b[0-9a-f]{10,}\b/gi, " ")         // long hex hashes from OCR filenames
+    .replace(/\b\w*\d\w*\b/g, " ")               // any remaining token containing a digit
+    .replace(/-/g, "")                            // strip hyphens: H-E-B → HEB
+    .replace(/[^a-zA-Z\s]/g, " ")                // non-alpha → space
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(w => w.length >= 3)                   // drop single/double-char noise
+    .join(" ")
+    .trim();
+}
+
+// Scanned receipts have individual items + SUBTOTAL + TOTAL rows — naively
+// summing all would double-count. Use the TOTAL row when present; otherwise
+// sum items + tax (which is what a single-line CSV receipt also represents).
+function receiptTotalForDedup(rows) {
+  for (const r of rows) {
+    if (normDesc(r.productDescription) === "TOTAL") {
+      const n = Number(r.amount);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return rows.reduce((s, r) => {
+    if (isBlankLineItem(r) || isSubtotalOrTotal(r) || normDesc(r.category) === "SUMMARY") return s;
+    const n = Number(r.amount);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
+}
+
+// Returns Map<receipt, Set<receipt>> — which receipts each receipt is paired with.
+function computeDuplicatePairs(groups) {
+  const entries = groups.map(g => {
+    const totalAmt = receiptTotalForDedup(g.rows);
+    const norm = normForDedup(g.receipt);
+    return { receipt: g.receipt, norm, cents: Math.round(totalAmt * 100), date: g.maxDate };
+  });
+  const pairs = new Map(); // receipt → Set<receipt>
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const a = entries[i], b = entries[j];
+      if (a.date !== b.date) continue;
+      if (Math.abs(a.cents - b.cents) > 2) continue;
+      if (a.norm.length < 3 || b.norm.length < 3) continue;
+      if (!a.norm.includes(b.norm) && !b.norm.includes(a.norm)) continue;
+      if (!pairs.has(a.receipt)) pairs.set(a.receipt, new Set());
+      if (!pairs.has(b.receipt)) pairs.set(b.receipt, new Set());
+      pairs.get(a.receipt).add(b.receipt);
+      pairs.get(b.receipt).add(a.receipt);
+    }
+  }
+  return pairs;
+}
+
+const ACCEPTED_LS = "finvault.acceptedReceipts";
+function loadAccepted() {
+  try { return new Set(JSON.parse(localStorage.getItem(ACCEPTED_LS) || "[]")); }
+  catch { return new Set(); }
+}
+function saveAccepted(s) {
+  try { localStorage.setItem(ACCEPTED_LS, JSON.stringify([...s])); } catch {}
+}
+
 /* ================================================================
    COMPONENT
 ================================================================ */
@@ -151,6 +303,86 @@ export default function Spending() {
   const hasSetInitialOpen = useRef(false);
 
   const queryClient = useQueryClient();
+  const [deleteModal, setDeleteModal]     = useState(null);
+  const [modalDeleting, setModalDeleting] = useState(false);
+  const lastCsvDate = useMemo(() => {
+    const dates = raw.filter(r => r.source === "csvimport" && r.date).map(r => r.date).sort();
+    return dates[dates.length - 1] || "";
+  }, [raw]);
+  const [acceptedReceipts, setAcceptedReceipts] = useState(() => loadAccepted());
+
+  async function confirmDelete() {
+    if (!deleteModal?.onConfirm) { setDeleteModal(null); return; }
+    setModalDeleting(true);
+    try { await deleteModal.onConfirm(); setDeleteModal(null); }
+    catch (e) { setErr(e?.message || String(e)); setDeleteModal(null); }
+    finally { setModalDeleting(false); }
+  }
+
+  function acceptReceipt(receipt) {
+    setAcceptedReceipts(prev => {
+      const next = new Set(prev);
+      next.add(receipt);
+      saveAccepted(next);
+      return next;
+    });
+  }
+
+  async function handleCSVImport(file) {
+    // Archive to S3 before processing
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${ts}-${sanitizeFilename(file.name)}`;
+    setUploadMsg("Uploading CSV to storage…");
+    await uploadToS3WithPresignedUrl({ fileOrBlob: file, filename, contentType: "text/csv" });
+
+    const text = await file.text();
+    const rows = parseCSV(text);
+    const items = rows.map(csvRowToItem).filter(Boolean);
+    if (items.length === 0) { setUploadMsg("No valid transactions found in CSV."); return; }
+
+    // LLM categorization: batch unique store names → categories
+    setUploadMsg("Categorizing transactions…");
+    const uniqueStores = [...new Set(items.map(i => i.storeName).filter(Boolean))];
+    const catMap = {};
+    try {
+      const catResult = await apiFetch("/spending/categorize", {
+        method: "POST",
+        body: { descriptions: uniqueStores },
+      });
+      uniqueStores.forEach((name, idx) => {
+        catMap[name] = catResult.categories?.[idx] || "Other";
+      });
+    } catch (catErr) {
+      console.warn("Categorize failed:", catErr?.detail || catErr?.message || catErr);
+      setUploadMsg(`Categorization unavailable (${catErr?.status ?? "error"}) — importing without categories…`);
+      await new Promise(r => setTimeout(r, 1500));
+    }
+
+    const categorizedItems = items.map(item => ({
+      ...item,
+      category: catMap[item.storeName] || "",
+    }));
+
+    const dates = categorizedItems.map(i => i.date).filter(Boolean).sort();
+    const latestDate = dates[dates.length - 1];
+    let done = 0;
+    const BATCH = 10;
+    for (let i = 0; i < categorizedItems.length; i += BATCH) {
+      await Promise.all(categorizedItems.slice(i, i + BATCH).map(item =>
+        apiFetch("/spending", { method: "POST", body: item })
+      ));
+      done += Math.min(BATCH, categorizedItems.length - i);
+      setUploadMsg(`Importing CSV: ${done}/${categorizedItems.length} transactions…`);
+    }
+    setUploadMsg(`Imported ${categorizedItems.length} transactions from CSV.`);
+    await queryClient.invalidateQueries({ queryKey: ["spending", "all"] });
+  }
+
+  async function deleteReceipt(receipt) {
+    await apiFetch(`/spending/receipt/${encodeURIComponent(receipt)}`, { method: "DELETE" });
+    setRaw((prev) => prev.filter((r) => r.pk !== `RECEIPT#${receipt}`));
+    queryClient.invalidateQueries({ queryKey: ["spending", "all"] });
+  }
 
   /* ---------- Data query (paginated) ---------- */
 
@@ -227,7 +459,6 @@ export default function Spending() {
     const pk = row.pk; const sk = row.sk;
     if (!pk || !sk) { setErr("Cannot delete: missing pk/sk on this row."); return; }
     const key = rowKeyFromPkSk(row);
-    if (!confirm(`Delete item ${sk} from ${pk}?`)) return;
     setDeleting((p) => ({ ...p, [key]: true })); setErr("");
     try {
       await apiFetch(
@@ -240,7 +471,7 @@ export default function Spending() {
     finally { setDeleting((p) => ({ ...p, [key]: false })); }
   }
 
-  /* ---------- Derived groups ---------- */
+/* ---------- Derived groups ---------- */
 
   const groups = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -249,13 +480,75 @@ export default function Spending() {
     return groupByReceipt(filtered);
   }, [raw, q]);
 
+  const dupPairs = useMemo(() => computeDuplicatePairs(groups), [groups]);
+  const duplicateSet = useMemo(() => new Set(dupPairs.keys()), [dupPairs]);
+
+  const threeMonthsAgo = useMemo(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 3);
+    return d.toISOString().slice(0, 10);
+  }, []);
+
+  const [showAll, setShowAll] = useState(false);
+
+  const visibleGroups = useMemo(() => {
+    const base = showAll ? groups : groups.filter(g => !g.maxDate || g.maxDate >= threeMonthsAgo);
+
+    // Separate active dups from the rest
+    const activeDupGroups = base.filter(g => dupPairs.has(g.receipt) && !acceptedReceipts.has(g.receipt));
+    const rest = base.filter(g => !dupPairs.has(g.receipt) || acceptedReceipts.has(g.receipt));
+
+    // BFS cluster: group each connected component of dup pairs together
+    const receiptToGroup = new Map(activeDupGroups.map(g => [g.receipt, g]));
+    const visited = new Set();
+    const clusters = [];
+
+    for (const g of activeDupGroups) {
+      if (visited.has(g.receipt)) continue;
+      const cluster = [];
+      const queue = [g.receipt];
+      visited.add(g.receipt);
+      while (queue.length) {
+        const r = queue.shift();
+        if (receiptToGroup.has(r)) cluster.push(receiptToGroup.get(r));
+        for (const peer of (dupPairs.get(r) || [])) {
+          if (!visited.has(peer) && receiptToGroup.has(peer)) {
+            visited.add(peer);
+            queue.push(peer);
+          }
+        }
+      }
+      clusters.push(cluster);
+    }
+
+    // Sort clusters by most-recent date desc, then flatten
+    clusters.sort((a, b) => {
+      const aDate = [...a].map(g => g.maxDate || "").sort().at(-1) || "";
+      const bDate = [...b].map(g => g.maxDate || "").sort().at(-1) || "";
+      return bDate.localeCompare(aDate);
+    });
+
+    // Sort rest by receipt date desc
+    rest.sort((a, b) => (b.maxDate || "").localeCompare(a.maxDate || ""));
+
+    return [...clusters.flat(), ...rest];
+  }, [groups, dupPairs, acceptedReceipts, showAll, threeMonthsAgo]);
+
+  const hiddenCount = useMemo(
+    () => showAll ? 0 : groups.filter(g => g.maxDate && g.maxDate < threeMonthsAgo).length,
+    [groups, showAll, threeMonthsAgo]
+  );
+
   /* ---------- Upload ---------- */
 
   async function handleUploadFiles(files) {
     if (!files || files.length === 0) return;
     setUploading(true); setUploadMsg(""); setErr("");
+    let hadImageUpload = false;
     try {
       for (const file of files) {
+        const isCSV = file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
+        if (isCSV) { await handleCSVImport(file); continue; }
         const contentType = file.type || "application/octet-stream";
         const ok = contentType === "application/pdf" || contentType.startsWith("image/") || /\.(pdf|png|jpg|jpeg|webp)$/i.test(file.name);
         if (!ok) throw new Error(`Unsupported file type: ${file.name}`);
@@ -263,9 +556,12 @@ export default function Spending() {
         const filename = `${ts}-${sanitizeFilename(file.name)}`;
         setUploadMsg(`Uploading ${file.name}…`);
         await uploadToS3WithPresignedUrl({ fileOrBlob: file, filename, contentType });
+        hadImageUpload = true;
       }
-      setUploadMsg("Uploaded. Processing receipt... (refresh in a moment).");
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ["spending", "all"] }), 2500);
+      if (hadImageUpload) {
+        setUploadMsg("Uploaded. Processing receipt... (refresh in a moment).");
+        setTimeout(() => queryClient.invalidateQueries({ queryKey: ["spending", "all"] }), 2500);
+      }
     } catch (e) { setErr(String(e)); setUploadMsg(""); }
     finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ""; }
   }
@@ -338,7 +634,7 @@ export default function Spending() {
             className="flex-1 min-w-[160px] bg-[#080D1A] border border-white/[0.08] text-slate-200 px-3 py-2.5 rounded-xl text-sm outline-none focus:border-blue-500/[0.4] transition-colors"
           />
           {canWrite && <button onClick={openScanner} disabled={uploading} className={btnCls(uploading)}>Scan</button>}
-          {canWrite && <input ref={fileInputRef} type="file" accept="image/*,application/pdf" multiple onChange={(e) => handleUploadFiles(Array.from(e.target.files || []))} className="hidden" id="receipt-file-input" />}
+          {canWrite && <input ref={fileInputRef} type="file" accept="image/*,application/pdf,.csv" multiple onChange={(e) => handleUploadFiles(Array.from(e.target.files || []))} className="hidden" id="receipt-file-input" />}
           {canWrite && <button onClick={() => document.getElementById("receipt-file-input")?.click()} disabled={uploading} className={btnCls(uploading)}>Upload</button>}
           <button
             onClick={() => refetch()}
@@ -353,6 +649,15 @@ export default function Spending() {
       {(uploadMsg || uploading) && (
         <div className="mb-3 rounded-xl border border-white/[0.08] bg-[#080D1A] px-3 py-2.5 text-sm text-slate-300">
           {uploading ? "Working…" : uploadMsg}
+        </div>
+      )}
+
+      {lastCsvDate && (
+        <div className="mb-3 flex items-center gap-2 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-slate-400">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-cyan-400 shrink-0">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+          </svg>
+          Last CSV transaction: <span className="font-bold text-cyan-400 ml-1">{lastCsvDate}</span>
         </div>
       )}
 
@@ -373,7 +678,7 @@ export default function Spending() {
         </div>
       )}
 
-      {loading && <EmptyState type="loading" message="Loading receipts…" />}
+{loading && <EmptyState type="loading" message="Loading receipts…" />}
 
       {err && (
         <div className="mt-2.5 rounded-xl border border-white/[0.08] bg-[#080D1A] px-3 py-2.5 text-sm text-red-300 whitespace-pre-wrap">
@@ -385,9 +690,26 @@ export default function Spending() {
         <EmptyState type="empty" message="No receipts match your search." />
       )}
 
-      {!loading && groups.length > 0 && (
+      {!loading && !err && groups.length > 0 && visibleGroups.length === 0 && (
+        <div className="flex flex-col items-center gap-3 py-10 text-slate-400 text-sm">
+          <span>No receipts in the last 3 months.</span>
+          <button onClick={() => setShowAll(true)} className={btnCls(false)}>Show all receipts</button>
+        </div>
+      )}
+
+      {deleteModal && (
+        <DeleteConfirmModal
+          title={deleteModal.title}
+          message={deleteModal.message}
+          deleting={modalDeleting}
+          onConfirm={confirmDelete}
+          onClose={() => { if (!modalDeleting) setDeleteModal(null); }}
+        />
+      )}
+
+      {!loading && visibleGroups.length > 0 && (
         <div className="grid gap-2.5">
-          {groups.map((g) => {
+          {visibleGroups.map((g) => {
             const isOpen = open.has(g.receipt);
             const totalItems = g.rows.filter(isCountableItem).length;
             const totalDollars = g.rows.reduce((sum, r) => {
@@ -396,22 +718,66 @@ export default function Spending() {
               return sum + (Number.isFinite(n) ? n : 0);
             }, 0);
 
+            const isDup = duplicateSet.has(g.receipt) && !acceptedReceipts.has(g.receipt);
+            const isCSVReceipt = g.rows.some(r => r.source === "csvimport");
             return (
-              <div key={g.receipt} className="rounded-2xl border border-white/[0.08] bg-[#0F1729] overflow-hidden">
+              <div key={g.receipt} className={`rounded-2xl border overflow-hidden ${isDup ? "border-amber-500/40 bg-amber-500/[0.07]" : "border-white/[0.08] bg-[#0F1729]"}`}>
+                {isDup && (
+                  <div className="px-4 pt-2 pb-0 flex items-center gap-1.5 text-xs text-amber-400/80">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    Potential duplicate — accept if correct, or delete.
+                  </div>
+                )}
                 <div
-                  onClick={() => toggleReceipt(g.receipt)}
-                  className="cursor-pointer px-4 py-3 grid items-center gap-3.5"
-                  style={{ gridTemplateColumns: "1fr auto auto" }}
+                  className="px-4 py-3 grid items-center gap-2"
+                  style={{ gridTemplateColumns: "1fr auto auto auto" }}
                 >
-                  <div className="flex flex-col min-w-0">
-                    <span className="font-black text-slate-100 truncate" title={g.receipt}>{g.receipt}</span>
+                  <div className="flex flex-col min-w-0 cursor-pointer" onClick={() => toggleReceipt(g.receipt)}>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {isCSVReceipt ? (
+                        <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-500/15 text-cyan-400 border border-cyan-500/20" title="Imported from CSV">
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>
+                          CSV
+                        </span>
+                      ) : (
+                        <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/20" title="Scanned or uploaded">
+                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                          Scan
+                        </span>
+                      )}
+                      <span className="font-black text-slate-100 truncate" title={g.receipt}>{g.receipt}</span>
+                    </div>
                     <span className="mt-0.5 text-xs text-slate-400">
                       <span className="font-bold text-slate-200">{totalItems}</span> items · Total{" "}
                       <span className="font-black text-white">{fmtUSD(totalDollars)}</span>
                     </span>
                   </div>
-                  <span className="font-bold text-slate-300 text-sm justify-self-end" title="Receipt Date">{g.maxDate || "—"}</span>
-                  <span className="font-black text-slate-400 justify-self-end pl-1.5" aria-label={isOpen ? "Collapse" : "Expand"}>{isOpen ? "–" : "+"}</span>
+                  <span className="font-bold text-slate-300 text-sm justify-self-end cursor-pointer" title="Receipt Date" onClick={() => toggleReceipt(g.receipt)}>{g.maxDate || "—"}</span>
+                  <div className="flex items-center gap-1 justify-self-end">
+                    {isDup && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); acceptReceipt(g.receipt); }}
+                        className="p-1.5 rounded-lg border border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/25 transition-colors"
+                        title="Accept — not a duplicate"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      </button>
+                    )}
+                    {canWrite && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteModal({ title: "Delete Receipt", message: `Delete all ${g.rows.length} item(s) in "${g.receipt}"? This cannot be undone.`, onConfirm: () => deleteReceipt(g.receipt) }); }}
+                        className="p-1.5 rounded-lg border border-red-500/20 bg-red-500/10 text-red-400 hover:bg-red-500/25 transition-colors"
+                        title="Delete receipt"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  <span className="font-black text-slate-400 justify-self-end pl-1.5 cursor-pointer" aria-label={isOpen ? "Collapse" : "Expand"} onClick={() => toggleReceipt(g.receipt)}>{isOpen ? "–" : "+"}</span>
                 </div>
 
                 {isOpen && (
@@ -468,7 +834,7 @@ export default function Spending() {
                                   <button onClick={() => saveRow(row)} disabled={!hasEdits(rowKey) || saving[rowKey]} className={saveBtnCls(!hasEdits(rowKey) || saving[rowKey])}>
                                     {saving[rowKey] ? "Saving…" : "Save"}
                                   </button>
-                                  {canWrite && <button onClick={() => deleteRow(row)} disabled={deleting[rowKey]} className={delBtnCls(deleting[rowKey])}>
+                                  {canWrite && <button onClick={() => setDeleteModal({ title: "Delete Item", message: `Delete "${row.productDescription || row.sk}"?`, onConfirm: () => deleteRow(row) })} disabled={deleting[rowKey]} className={delBtnCls(deleting[rowKey])}>
                                     {deleting[rowKey] ? "Deleting…" : "Delete"}
                                   </button>}
                                 </td>
@@ -486,6 +852,24 @@ export default function Spending() {
               </div>
             );
           })}
+
+          {/* Show older / collapse controls */}
+          {!showAll && hiddenCount > 0 && (
+            <button
+              onClick={() => setShowAll(true)}
+              className="mt-1 w-full rounded-2xl border border-white/[0.06] bg-[#0A0F1E] py-3 text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors"
+            >
+              Show {hiddenCount} older receipt{hiddenCount !== 1 ? "s" : ""} (before {threeMonthsAgo})
+            </button>
+          )}
+          {showAll && (
+            <button
+              onClick={() => setShowAll(false)}
+              className="mt-1 w-full rounded-2xl border border-white/[0.06] bg-[#0A0F1E] py-3 text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors"
+            >
+              Show last 3 months only
+            </button>
+          )}
         </div>
       )}
     </div>
