@@ -5,15 +5,15 @@
 // Example: Costco_01-24-2026_feffa2087d299d5d
 //
 // Required env vars:
-//   OPENAI_API_KEY
+//   ANTHROPIC_API_KEY
 //   RECEIPT_LEDGER_TABLE
 //
 // Optional env vars:
-//   OPENAI_MODEL (default: gpt-5.2)
+//   ANTHROPIC_MODEL (default: claude-sonnet-4-6)
 //   RECEIPT_KEY_PREFIX (default: receipts/ ; set to "" to disable prefix filtering)
 
 import crypto from "crypto";
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
@@ -21,6 +21,27 @@ import { DynamoDBDocumentClient, PutCommand, BatchWriteCommand } from "@aws-sdk/
 // AWS clients
 const s3 = new S3Client({});
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+
+/* -------------------- Category taxonomy -------------------- */
+
+const CATEGORY_SYSTEM_PROMPT = `You extract structured receipt data from images.
+
+CATEGORY GUIDANCE:
+Assign a category to every line item. Use broad, meaningful categories — aim for roughly 10 across all your receipts, give or take a few. Avoid creating overly granular or one-off categories. Good examples: Groceries, Produce, Meat & Seafood, Dairy & Eggs, Beverages, Household, Personal Care, Health & Medicine, Dining & Restaurant, Electronics, Clothing, Fuel & Auto, Other. You are not limited to this list — use your best judgment to pick a short, consistent label that would make sense across many receipts.
+
+Category reasoning rules:
+- Be specific when the item clearly belongs to a sub-category (e.g., fresh apples → Produce, not Groceries).
+- If a product code is present, use it to confirm (e.g., PLU codes 3000–4999 → Produce).
+- For combo items (e.g., "Rotisserie Chicken"), use the dominant component (Meat & Seafood).
+- NEVER leave category null or empty. If genuinely uncertain, use "Other".
+- Summary rows (SUBTOTAL, TAX, TOTAL) always get category "SUMMARY" — handled separately, not by you.
+
+Receipt extraction rules:
+- "lines" must contain ONLY purchasable item lines (actual products purchased).
+- Exclude payment method lines (VISA/CASH/debit), loyalty points, coupon adjustments, membership fees.
+- "summaryLines" MUST include exactly three objects: SUBTOTAL, TAX, TOTAL (amount can be null if not printed).
+- Keep product codes exactly as printed on the receipt (e.g., "738435" or "4011").
+- If a field other than category is missing or illegible, use null.`;
 
 /* -------------------- Helpers -------------------- */
 
@@ -73,8 +94,7 @@ function simplifyStoreName(store) {
   if (upper.includes("KROGER")) return "Kroger";
   if (upper.includes("WHOLE FOODS")) return "WholeFoods";
   if (upper.includes("99")) return "99 Ranch";
-  if (upper.includes("HEB")) return "HEB";
-  if (upper.includes("H")) return "HEB";
+  if (upper.includes("HEB") || upper.includes("H-E-B")) return "HEB";
   if (upper.includes("TRIVENI")) return "Triveni";
   if (upper.includes("IBC")) return "IBC";
   if (upper.includes("KEEMAT")) return "Keemat";
@@ -172,14 +192,12 @@ function makeCurationFields({ nowIso, pk, sk }) {
   };
 }
 
-function buildReceiptSchema() {
+function buildReceiptToolSchema() {
   return {
     type: "object",
-    additionalProperties: false,
     properties: {
       receipt: {
         type: "object",
-        additionalProperties: false,
         properties: {
           store: { type: ["string", "null"] },
           purchaseDate: { type: ["string", "null"], description: "YYYY-MM-DD if present; otherwise null" },
@@ -191,13 +209,12 @@ function buildReceiptSchema() {
         type: "array",
         items: {
           type: "object",
-          additionalProperties: false,
           properties: {
             lineId: { type: "integer" },
             productCode: { type: ["string", "null"] },
             productDescription: { type: ["string", "null"] },
             amount: { type: ["number", "null"] },
-            category: { type: ["string", "null"] },
+            category: { type: "string", description: "One of the 10 allowed categories from the system prompt. Never null." },
             rawText: { type: ["string", "null"] },
           },
           required: ["lineId", "productCode", "productDescription", "amount", "category", "rawText"],
@@ -205,10 +222,9 @@ function buildReceiptSchema() {
       },
       summaryLines: {
         type: "array",
-        description: "Must include exactly these types: SUBTOTAL, TAX, TOTAL (amount can be null if missing).",
+        description: "Must include exactly: SUBTOTAL, TAX, TOTAL (amount can be null if missing).",
         items: {
           type: "object",
-          additionalProperties: false,
           properties: {
             type: { type: "string", enum: ["SUBTOTAL", "TAX", "TOTAL"] },
             amount: { type: ["number", "null"] },
@@ -223,58 +239,46 @@ function buildReceiptSchema() {
 }
 
 async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
-  const apiKey = requireEnv("OPENAI_API_KEY");
-  const model = process.env.OPENAI_MODEL || "gpt-5.2";
-  const client = new OpenAI({ apiKey });
+  const apiKey = requireEnv("ANTHROPIC_API_KEY");
+  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+  const client = new Anthropic({ apiKey });
 
   const base64 = Buffer.from(imageBytes).toString("base64");
-  const dataUrl = `data:${mimeType};base64,${base64}`;
-  const schema = buildReceiptSchema();
 
-  const resp = await client.responses.create({
+  const response = await client.messages.create({
     model,
-    input: [
-      {
-        role: "system",
-        content:
-          "You extract structured receipt data.\n" +
-          "Return ONLY JSON that matches the provided schema.\n" +
-          "\n" +
-          "Rules:\n" +
-          "- 'lines' must include ONLY purchasable item lines.\n" +
-          "- Exclude payment lines (VISA/CASH), rebates, membership, non-item adjustments.\n" +
-          "- 'summaryLines' MUST include exactly three objects with type SUBTOTAL, TAX, TOTAL (amount can be null).\n" +
-          "- Keep product codes exactly as printed when present.\n" +
-          "\n" +
-          "Category requirement (IMPORTANT):\n" +
-          "- For EVERY object in 'lines', you MUST provide a category.\n" +
-          "- Do NOT leave 'category' null or empty.\n" +
-          "- Infer the most accurate category.\n" +
-          "- If unsure, set category to \"Uncategorized\" (never null).\n" +
-          "\n" +
-          "Missing fields:\n" +
-          "- If a field besides 'category' is missing/unclear, use null.\n",
-      },
+    max_tokens: 4096,
+    system: CATEGORY_SYSTEM_PROMPT,
+    messages: [
       {
         role: "user",
         content: [
-          { type: "input_text", text: "Extract receipt line items and summary totals from this receipt image." },
-          { type: "input_image", image_url: dataUrl },
+          {
+            type: "image",
+            source: { type: "base64", media_type: mimeType, data: base64 },
+          },
+          {
+            type: "text",
+            text: "Extract all line items and summary totals from this receipt image. Call the extract_receipt tool with the structured data.",
+          },
         ],
       },
     ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "receipt_extraction",
-        strict: true,
-        schema,
+    tools: [
+      {
+        name: "extract_receipt",
+        description: "Output structured receipt data extracted from the receipt image",
+        input_schema: buildReceiptToolSchema(),
       },
-    },
+    ],
+    tool_choice: { type: "tool", name: "extract_receipt" },
   });
 
-  console.log("OpenAI raw JSON:", resp.output_text);
-  return JSON.parse(resp.output_text);
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  if (!toolUse) throw new Error("Anthropic did not call the extract_receipt tool");
+
+  console.log("Anthropic extraction done. stop_reason:", response.stop_reason);
+  return toolUse.input;
 }
 
 function normalizeSummaryLines(summaryLines) {
@@ -330,7 +334,7 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, 
         pk: `RECEIPT#${receiptId}`,
         sk: `META#${receiptId}`,
         receiptId,
-        userId, // ✅ include
+        userId,
         date: purchaseDate,
         store: extracted?.receipt?.store ?? null,
         currency: extracted?.receipt?.currency ?? "USD",
@@ -355,17 +359,16 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, 
           pk,
           sk,
           receiptId,
-          userId, // ✅ include
+          userId,
           date: purchaseDate,
           productCode: ln?.productCode ?? null,
           productDescription: ln?.productDescription ?? null,
           amount: ln?.amount ?? null,
-          category: ln?.category ?? null,
+          category: ln?.category ?? "Other",
+          source: "scan",
           itemCount: 1,
           rawText: ln?.rawText ?? null,
           updatedAt: now,
-
-          // ✅ batch curation markers (GSI1 queryable)
           ...makeCurationFields({ nowIso: now, pk, sk }),
         },
       },
@@ -381,17 +384,16 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, 
           pk,
           sk,
           receiptId,
-          userId, // ✅ include
+          userId,
           date: purchaseDate,
           productCode: null,
           productDescription: s.type,
           amount: s.amount ?? null,
           category: "SUMMARY",
+          source: "scan",
           itemCount: 1,
           rawText: s.rawText ?? s.type,
           updatedAt: now,
-
-          // ✅ batch curation markers (GSI1 queryable)
           ...makeCurationFields({ nowIso: now, pk, sk }),
         },
       },
@@ -406,7 +408,6 @@ async function markFailed({ receiptId, bucket, s3Key, errorMessage, userId }) {
   const table = requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
 
-  // META failure row (NOT part of curation queue)
   await ddb.send(
     new PutCommand({
       TableName: table,
@@ -414,7 +415,7 @@ async function markFailed({ receiptId, bucket, s3Key, errorMessage, userId }) {
         pk: `RECEIPT#${receiptId}`,
         sk: `META#${receiptId}`,
         receiptId,
-        userId: userId || null, // ✅ include
+        userId: userId || null,
         s3Bucket: bucket,
         s3Key,
         status: "FAILED",
@@ -449,7 +450,6 @@ async function processRecord(rec) {
   let receiptId = `S3-${uniqueId}`; // provisional
   console.log("provisional receiptId:", receiptId);
 
-  // ✅ resolve userId once
   const userId = await resolveUserIdFromS3({ bucket, key });
   console.log("Resolved userId:", userId || "(missing)");
 
@@ -471,16 +471,16 @@ async function processRecord(rec) {
       throw new Error(`Unsupported content type: ${mimeType}. Expected image/*`);
     }
 
-    console.log("Calling OpenAI...");
+    console.log("Calling Anthropic...");
     const extracted = await extractReceiptFromImageBytes({ imageBytes: bytes, mimeType });
-    console.log("OpenAI extraction done. Lines:", Array.isArray(extracted.lines) ? extracted.lines.length : 0);
+    console.log("Anthropic extraction done. Lines:", Array.isArray(extracted.lines) ? extracted.lines.length : 0);
 
     const store = extracted?.receipt?.store ?? null;
     const purchaseDate = resolvePurchaseDate(extracted?.receipt?.purchaseDate);
 
     receiptId = buildReceiptId({ store, purchaseDate, uniqueId });
     if (!isYYYYMMDD(extracted?.receipt?.purchaseDate)) {
-      console.log("OpenAI did not return a valid purchaseDate. Using current date fallback.");
+      console.log("Anthropic did not return a valid purchaseDate. Using current date fallback.");
     }
     console.log("final receiptId:", receiptId);
 
@@ -510,7 +510,7 @@ export const handler = async (event) => {
     throw new Error("This Lambda is S3-triggered only. Expected an S3 ObjectCreated event.");
   }
 
-  // Process all records sequentially (safer for OpenAI + DynamoDB)
+  // Process all records sequentially
   const results = [];
   for (const rec of records) {
     results.push(await processRecord(rec));

@@ -581,6 +581,7 @@ async function createItem(event) {
     date: d || "",
     amount: toNumber(body.amount),
     category: typeof body.category === "string" ? body.category.trim() : "",
+    source: typeof body.source === "string" ? body.source.slice(0, 20) : "scan",
     gsi1pk: d ? `DATE#${d}` : "DATE#UNKNOWN",
     gsi1sk: `${pk}#${sk}`,
     userId,
@@ -718,6 +719,107 @@ async function deleteItemByPkSk(event) {
   return json(200, { ok: true });
 }
 
+async function deleteReceipt(event) {
+  requireTableName();
+  const userId = await getUserIdFromJwt(event);
+
+  const receipt = normalizeReceipt(event.pathParameters?.receipt);
+  const pk = `RECEIPT#${receipt}`;
+
+  // Query all items for this receipt (key-based, no scan)
+  let lastKey = undefined;
+  const items = [];
+  do {
+    const resp = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: "pk = :pk",
+        FilterExpression: "#uid = :uid",
+        ExpressionAttributeNames: { "#uid": "userId" },
+        ExpressionAttributeValues: { ":pk": pk, ":uid": userId },
+        ExclusiveStartKey: lastKey,
+      })
+    );
+    if (resp.Items?.length) items.push(...resp.Items);
+    lastKey = resp.LastEvaluatedKey;
+  } while (lastKey);
+
+  if (items.length === 0) return json(404, { error: "Receipt not found" });
+
+  await Promise.all(
+    items.map((it) =>
+      ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { pk: it.pk, sk: it.sk } }))
+    )
+  );
+
+  return json(200, { ok: true, deleted: items.length });
+}
+
+/* -------------------- Categorize (LLM) -------------------- */
+
+async function categorizeDescriptions(event) {
+  await assertWrite(await resolveCtxCached(event), "receiptsLedger");
+  const body = parseBody(event);
+  const descriptions = Array.isArray(body.descriptions) ? body.descriptions : [];
+  if (!descriptions.length) return json(200, { categories: [] });
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return json(500, { error: "ANTHROPIC_API_KEY not configured" });
+
+  const model = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
+  const AnthropicModule = require("@anthropic-ai/sdk");
+  const AnthropicClass = AnthropicModule.default ?? AnthropicModule;
+  const client = new AnthropicClass({ apiKey });
+
+  const systemPrompt =
+    `You assign spending categories to store names or transaction descriptions.\n` +
+    `Use broad, meaningful categories — aim for roughly 10 across all your responses, give or take a few.\n` +
+    `Avoid overly granular or one-off labels. Good examples: Groceries, Produce, Meat & Seafood, Dairy & Eggs, ` +
+    `Beverages, Household, Personal Care, Health & Medicine, Dining & Restaurant, Electronics, Clothing, ` +
+    `Fuel & Auto, Other. You are not limited to this list — reason from the store type.\n\n` +
+    `Category reasoning guidance:\n` +
+    `- Grocery chains (H-E-B, Kroger, Costco, Walmart, Aldi, Whole Foods, Trader Joe's) → Groceries\n` +
+    `- Restaurants, fast food, cafés, food delivery, bakeries → Dining & Restaurant\n` +
+    `- Pharmacies (CVS, Walgreens), clinics, dental → Health & Medicine\n` +
+    `- Salons, spas, beauty supply (Ulta, Sally Beauty) → Personal Care\n` +
+    `- Liquor stores, coffee shops, juice bars → Beverages\n` +
+    `- Home improvement (Home Depot, Lowe's), cleaning supply stores → Household\n` +
+    `- Gas stations, auto shops → Fuel & Auto\n` +
+    `- Clothing retailers → Clothing\n` +
+    `- Electronics retailers → Electronics\n` +
+    `- Streaming, utilities, insurance, anything else → Other\n` +
+    `\nReturn ONLY a JSON array of category strings in the same order as the input. No explanation.`;
+
+  const userMsg = `Categorize each of these descriptions:\n${descriptions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`;
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userMsg }],
+  });
+
+  const text = response.content.find((b) => b.type === "text")?.text || "[]";
+  let categories;
+  try {
+    const match = text.match(/\[[\s\S]*\]/);
+    categories = JSON.parse(match ? match[0] : text);
+  } catch {
+    categories = text
+      .split("\n")
+      .map((l) => l.replace(/^\d+\.\s*/, "").replace(/^["']|["']$/g, "").trim())
+      .filter(Boolean);
+  }
+
+  // Ensure same length as input; only fall back to "Other" if blank
+  const result = descriptions.map((_, i) => {
+    const cat = String(categories[i] || "").trim();
+    return cat || "Other";
+  });
+
+  return json(200, { categories: result });
+}
+
 /* -------------------- Router -------------------- */
 
 exports.handler = async (event) => {
@@ -749,9 +851,16 @@ exports.handler = async (event) => {
     if (method === "GET" && rawPath === "/spending") return await listSpending(event);
     if (method === "POST" && rawPath === "/spending") return await createItem(event);
 
-    // Receipt query
+    // LLM categorization for CSV import
+    if (method === "POST" && rawPath === "/spending/categorize")
+      return await categorizeDescriptions(event);
+
+    // Receipt query / delete
     if (method === "GET" && rawPath.startsWith("/spending/receipt/"))
       return await getReceipt(event);
+
+    if (method === "DELETE" && /^\/spending\/receipt\/[^/]+$/.test(rawPath))
+      return await deleteReceipt(event);
 
     // pk/sk update/delete
     if (method === "PATCH" && rawPath.startsWith("/spending/item/"))

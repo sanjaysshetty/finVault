@@ -1,12 +1,17 @@
+import { useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { NavLink } from "react-router-dom";
 import { getLoggedInUser } from "../auth/user";
+
+const COLLAPSED_KEY  = "finvault.sideNavCollapsed";
+const SECTIONS_KEY   = "finvault.sideNavSections";
 
 function canSee(activeAccount, pageKey) {
   if (!activeAccount || activeAccount.role === "owner") return true;
   return (activeAccount.pages?.[pageKey] || "none") !== "none";
 }
 
-/* ── Icon — exactly matches finVaultUI-2.0 (15×15, strokeWidth 1.8) ─── */
+/* ── Icon ────────────────────────────────────────────────────── */
 function Icon({ d }) {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none"
@@ -17,7 +22,18 @@ function Icon({ d }) {
   );
 }
 
-/* ── Badge ─────────────────────────────────────────────────── */
+/* ── Chevron ─────────────────────────────────────────────────── */
+function Chevron({ open }) {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      style={{ flexShrink: 0, color: "var(--fv-dim)", transition: "transform 0.18s ease", transform: open ? "rotate(0deg)" : "rotate(-90deg)" }}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+/* ── Badge ──────────────────────────────────────────────────── */
 function Badge({ label }) {
   return (
     <span style={{
@@ -62,70 +78,160 @@ function UserAvatar() {
   );
 }
 
-/* ── Nav item — exact HTML values ──────────────────────────── */
-function NavItem({ to, label, iconD, badge }) {
+/* ── Hover tooltip (for collapsed mode) ─────────────────────── */
+const tipStyle = {
+  position: "fixed",
+  left: 64,
+  transform: "translateY(-50%)",
+  background: "#1a2540",
+  border: "1px solid var(--fv-border)",
+  borderRadius: 8,
+  padding: "4px 10px",
+  fontSize: 11,
+  fontWeight: 600,
+  color: "#e2e8f0",
+  whiteSpace: "nowrap",
+  zIndex: 9999,
+  pointerEvents: "none",
+  boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+};
+
+/* ── Nav item ───────────────────────────────────────────────── */
+function NavItem({ to, label, iconD, badge, sideCollapsed }) {
+  const wrapRef = useRef(null);
+  const [tipY, setTipY] = useState(null);
+
+  function showTip() {
+    if (!sideCollapsed) return;
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (rect) setTipY(rect.top + rect.height / 2);
+  }
+
   return (
-    <NavLink
-      to={to}
-      title={label}
-      className="sidebar-item"
-      style={({ isActive }) => ({
-        width: "calc(100% - 16px)",
-        display: "flex",
-        alignItems: "center",
-        gap: 9,
-        padding: "6px 14px",
-        justifyContent: "flex-start",
-        borderRadius: 10,
-        border: "none",
-        cursor: "pointer",
-        background: isActive ? "var(--fv-nav-active-bg)" : "transparent",
-        color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-muted)",
-        fontSize: 13,
-        fontWeight: isActive ? 700 : 600,
-        margin: "1px 8px",
-        fontFamily: "'Manrope', sans-serif",
-        position: "relative",
-        textDecoration: "none",
-      })}
-    >
-      {({ isActive }) => (
-        <>
-          <span style={{ color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-dim)", flexShrink: 0, display: "flex" }}>
-            <Icon d={iconD} />
-          </span>
-          <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {label}
-          </span>
-          {badge && <Badge label={badge} />}
-        </>
+    <div ref={wrapRef} onMouseEnter={showTip} onMouseLeave={() => setTipY(null)}>
+      <NavLink
+        to={to}
+        className="sidebar-item"
+        style={({ isActive }) => ({
+          width: sideCollapsed ? 40 : "calc(100% - 16px)",
+          display: "flex",
+          alignItems: "center",
+          gap: sideCollapsed ? 0 : 9,
+          padding: sideCollapsed ? "6px 0" : "5px 14px",
+          justifyContent: sideCollapsed ? "center" : "flex-start",
+          borderRadius: 10,
+          border: "none",
+          cursor: "pointer",
+          background: isActive ? "var(--fv-nav-active-bg)" : "transparent",
+          color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-muted)",
+          fontSize: 13,
+          fontWeight: isActive ? 700 : 600,
+          margin: sideCollapsed ? "1px auto" : "1px 8px",
+          fontFamily: "'Manrope', sans-serif",
+          position: "relative",
+          textDecoration: "none",
+          transition: "background 0.15s, color 0.15s",
+        })}
+      >
+        {({ isActive }) => (
+          <>
+            <span style={{ color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-dim)", flexShrink: 0, display: "flex" }}>
+              <Icon d={iconD} />
+            </span>
+            {!sideCollapsed && (
+              <>
+                <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {label}
+                </span>
+                {badge && <Badge label={badge} />}
+              </>
+            )}
+          </>
+        )}
+      </NavLink>
+      {sideCollapsed && tipY !== null && createPortal(
+        <div style={{ ...tipStyle, top: tipY }}>
+          {label}
+          {badge && <span style={{ marginLeft: 5, fontSize: 8, fontWeight: 700, padding: "1px 4px", borderRadius: 99, background: "rgba(61,214,140,0.15)", color: "#3DD68C", border: "1px solid rgba(61,214,140,0.25)" }}>{badge}</span>}
+        </div>,
+        document.body
       )}
-    </NavLink>
-  );
-}
-
-/* ── Section group — exact HTML values ─────────────────────── */
-function Group({ children }) {
-  return <div style={{ marginBottom: 2 }}>{children}</div>;
-}
-
-/* ── Section label — exact HTML values ─────────────────────── */
-function SectionLabel({ label }) {
-  return (
-    <div style={{
-      padding: "12px 16px 4px",
-      fontSize: 10,
-      fontWeight: 700,
-      color: "var(--fv-dim)",
-      textTransform: "uppercase",
-      letterSpacing: "0.12em",
-    }}>
-      {label}
     </div>
   );
 }
 
-/* ── Icon paths — exact from finVaultUI-2.0.html ───────────── */
+/* ── Section label — clickable to toggle vertical collapse ───── */
+function SectionLabel({ label, sideCollapsed, open, onToggle }) {
+  if (sideCollapsed) {
+    return <div style={{ height: 1, margin: "6px 14px", background: "var(--fv-border)" }} />;
+  }
+  return (
+    <button
+      onClick={onToggle}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        width: "100%",
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        padding: "12px 16px 4px",
+        gap: 6,
+        fontFamily: "'Manrope', sans-serif",
+      }}
+    >
+      <span style={{
+        flex: 1,
+        fontSize: 11,
+        fontWeight: 800,
+        color: "var(--fv-text)",
+        textTransform: "uppercase",
+        letterSpacing: "0.1em",
+        textAlign: "left",
+      }}>
+        {label}
+      </span>
+      <Chevron open={open} />
+    </button>
+  );
+}
+
+/* ── Horizontal collapse toggle ─────────────────────────────── */
+function CollapseBtn({ collapsed, onToggle }) {
+  return (
+    <button
+      onClick={onToggle}
+      title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+      style={{
+        background: "transparent",
+        border: "1px solid var(--fv-border)",
+        borderRadius: 6,
+        cursor: "pointer",
+        color: "var(--fv-muted)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 24,
+        height: 24,
+        padding: 0,
+        flexShrink: 0,
+        transition: "color 0.15s, border-color 0.15s",
+      }}
+      onMouseEnter={e => { e.currentTarget.style.color = "var(--fv-text)"; e.currentTarget.style.borderColor = "var(--fv-muted)"; }}
+      onMouseLeave={e => { e.currentTarget.style.color = "var(--fv-muted)"; e.currentTarget.style.borderColor = "var(--fv-border)"; }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        {collapsed
+          ? <><path d="M13 17l5-5-5-5" /><path d="M6 17l5-5-5-5" /></>
+          : <><path d="M11 17l-5-5 5-5" /><path d="M18 17l-5-5 5-5" /></>
+        }
+      </svg>
+    </button>
+  );
+}
+
+/* ── Icon paths ─────────────────────────────────────────────── */
 const d = {
   portfolio:    "M4 5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5zm9 0a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V5zm0 8a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-6zm-9 2a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4z",
   capitalGains: "M7 16V4m0 0L3 8m4-4 4 4M17 8v12m0 0 4-4m-4 4-4-4",
@@ -148,9 +254,94 @@ const d = {
   accounts:     "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
 };
 
-/* ── Sidebar ──────────────────────────────────────────────── */
+/* ── Accounts nav link (with tooltip in collapsed mode) ─────── */
+function AccountsNavLink({ sc }) {
+  const wrapRef = useRef(null);
+  const [tipY, setTipY] = useState(null);
+
+  function showTip() {
+    if (!sc) return;
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (rect) setTipY(rect.top + rect.height / 2);
+  }
+
+  return (
+    <div ref={wrapRef} onMouseEnter={showTip} onMouseLeave={() => setTipY(null)}
+      style={{ borderTop: "1px solid var(--fv-border)", paddingTop: 10, marginTop: 10 }}>
+      <NavLink
+        to="/accounts"
+        className="sidebar-item"
+        style={({ isActive }) => ({
+          width: sc ? 40 : "calc(100% - 16px)",
+          display: "flex",
+          alignItems: "center",
+          gap: sc ? 0 : 9,
+          padding: sc ? "6px 0" : "5px 14px",
+          justifyContent: sc ? "center" : "flex-start",
+          borderRadius: 10,
+          border: "none",
+          cursor: "pointer",
+          background: isActive ? "var(--fv-nav-active-bg)" : "transparent",
+          color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-muted)",
+          fontSize: 13,
+          fontWeight: isActive ? 700 : 600,
+          margin: sc ? "1px auto" : "1px 8px",
+          fontFamily: "'Manrope', sans-serif",
+          textDecoration: "none",
+          transition: "background 0.15s, color 0.15s",
+        })}
+      >
+        {() => (
+          <>
+            <UserAvatar />
+            {!sc && (
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                Accounts
+              </span>
+            )}
+          </>
+        )}
+      </NavLink>
+      {sc && tipY !== null && createPortal(
+        <div style={{ ...tipStyle, top: tipY }}>Accounts</div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
 export default function SideNav({ activeAccount }) {
-  const has = (key) => canSee(activeAccount, key);
+  const [sideCollapsed, setSideCollapsed] = useState(() => {
+    try { return localStorage.getItem(COLLAPSED_KEY) === "true"; } catch { return false; }
+  });
+
+  const [sections, setSections] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(SECTIONS_KEY) || "{}"); } catch { return {}; }
+  });
+
+  function toggleSide() {
+    setSideCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch {}
+      return next;
+    });
+  }
+
+  function toggleSection(key) {
+    setSections(prev => {
+      const next = { ...prev, [key]: !(prev[key] ?? true) };
+      try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  // default open = true
+  const isOpen = (key) => sections[key] ?? true;
+
+  const has  = (key) => canSee(activeAccount, key);
+  const sc   = sideCollapsed;
+
   const showSpending   = has("spendingDashboard") || has("receiptsLedger");
   const showPortfolio  = has("portfolio") || has("capitalGains") || has("nav");
   const showAssets     = has("stocks") || has("crypto") || has("bullion") || has("futures") || has("options") || has("fixedIncome") || has("otherAssets");
@@ -158,70 +349,110 @@ export default function SideNav({ activeAccount }) {
   const showResearch   = has("wheelScan") || has("assetHub") || has("advisor") || has("paperTrading");
   const isOwner        = !activeAccount || activeAccount.role === "owner";
 
+  const W = sc ? 56 : 226;
+
   return (
     <aside
       className="hidden md:flex flex-col shrink-0 [&::-webkit-scrollbar]:w-0"
       style={{
-        width: 226,
-        minWidth: 226,
+        width: W,
+        minWidth: W,
         background: "var(--fv-sidebar)",
         borderRight: "1px solid var(--fv-border)",
         overflowY: "auto",
         overflowX: "hidden",
         paddingBottom: 16,
+        transition: "width 0.2s ease, min-width 0.2s ease",
       }}
     >
       {/* ── PORTFOLIO ── */}
       {showPortfolio && (
-        <Group>
-          <SectionLabel label="Portfolio" />
-          {has("portfolio")    && <NavItem to="/assets/portfolio"    label="Dashboard"       iconD={d.portfolio} />}
-          {has("capitalGains") && <NavItem to="/assets/capital-gains" label="Capital Gains"  iconD={d.capitalGains} />}
-          {has("nav")          && <NavItem to="/nav/dashboard"        label="Net Asset Value" iconD={d.nav} />}
-        </Group>
+        <div style={{ marginBottom: 2 }}>
+          {sc ? (
+            <div style={{ display: "flex", justifyContent: "center", padding: "10px 0 4px" }}>
+              <CollapseBtn collapsed={sc} onToggle={toggleSide} />
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", padding: "10px 12px 2px", gap: 4 }}>
+              <button
+                onClick={() => toggleSection("portfolio")}
+                style={{ flex: 1, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px", fontFamily: "'Manrope', sans-serif" }}
+              >
+                <span style={{ fontSize: 11, fontWeight: 800, color: "var(--fv-text)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  Portfolio
+                </span>
+                <Chevron open={isOpen("portfolio")} />
+              </button>
+              <CollapseBtn collapsed={sc} onToggle={toggleSide} />
+            </div>
+          )}
+          {(sc || isOpen("portfolio")) && (
+            <>
+              {has("portfolio")    && <NavItem sideCollapsed={sc} to="/assets/portfolio"     label="Dashboard"       iconD={d.portfolio} />}
+              {has("capitalGains") && <NavItem sideCollapsed={sc} to="/assets/capital-gains" label="Capital Gains"   iconD={d.capitalGains} />}
+              {has("nav")          && <NavItem sideCollapsed={sc} to="/nav/dashboard"         label="Net Asset Value" iconD={d.nav} />}
+            </>
+          )}
+        </div>
       )}
 
       {/* ── ASSETS ── */}
       {showAssets && (
-        <Group>
-          <SectionLabel label="Assets" />
-          {has("stocks")      && <NavItem to="/assets/stocks"      label="Stocks"       iconD={d.stocks} />}
-          {has("crypto")      && <NavItem to="/assets/crypto"      label="Crypto"       iconD={d.crypto} />}
-          {has("bullion")     && <NavItem to="/assets/bullion"     label="Bullion"      iconD={d.bullion} />}
-          {has("futures")     && <NavItem to="/assets/futures"     label="Futures"      iconD={d.futures} />}
-          {has("options")     && <NavItem to="/assets/options-v2"  label="Options Pro"  iconD={d.options}  badge="PRO" />}
-          {has("fixedIncome") && <NavItem to="/assets/fixedincome" label="Fixed Income" iconD={d.fixedIncome} />}
-          {has("otherAssets") && <NavItem to="/assets/otherassets" label="Other Assets" iconD={d.others} />}
-        </Group>
+        <div style={{ marginBottom: 2 }}>
+          <SectionLabel label="Assets" sideCollapsed={sc} open={isOpen("assets")} onToggle={() => toggleSection("assets")} />
+          {(sc || isOpen("assets")) && (
+            <>
+              {has("stocks")      && <NavItem sideCollapsed={sc} to="/assets/stocks"      label="Stocks"       iconD={d.stocks} />}
+              {has("crypto")      && <NavItem sideCollapsed={sc} to="/assets/crypto"      label="Crypto"       iconD={d.crypto} />}
+              {has("bullion")     && <NavItem sideCollapsed={sc} to="/assets/bullion"     label="Bullion"      iconD={d.bullion} />}
+              {has("futures")     && <NavItem sideCollapsed={sc} to="/assets/futures"     label="Futures"      iconD={d.futures} />}
+              {has("options")     && <NavItem sideCollapsed={sc} to="/assets/options-v2"  label="Options Pro"  iconD={d.options} badge="PRO" />}
+              {has("fixedIncome") && <NavItem sideCollapsed={sc} to="/assets/fixedincome" label="Fixed Income" iconD={d.fixedIncome} />}
+              {has("otherAssets") && <NavItem sideCollapsed={sc} to="/assets/otherassets" label="Other Assets" iconD={d.others} />}
+            </>
+          )}
+        </div>
       )}
 
       {/* ── PROTECTION ── */}
       {showProtection && (
-        <Group>
-          <SectionLabel label="Protection" />
-          {has("liabilities") && <NavItem to="/liabilities/dashboard" label="Liabilities" iconD={d.liabilities} />}
-          {has("insurance")   && <NavItem to="/insurance/dashboard"   label="Insurance"   iconD={d.insurance} />}
-        </Group>
+        <div style={{ marginBottom: 2 }}>
+          <SectionLabel label="Protection" sideCollapsed={sc} open={isOpen("protection")} onToggle={() => toggleSection("protection")} />
+          {(sc || isOpen("protection")) && (
+            <>
+              {has("liabilities") && <NavItem sideCollapsed={sc} to="/liabilities/dashboard" label="Liabilities" iconD={d.liabilities} />}
+              {has("insurance")   && <NavItem sideCollapsed={sc} to="/insurance/dashboard"   label="Insurance"   iconD={d.insurance} />}
+            </>
+          )}
+        </div>
       )}
 
       {/* ── SPENDING ── */}
       {showSpending && (
-        <Group>
-          <SectionLabel label="Spending" />
-          {has("spendingDashboard") && <NavItem to="/spending/dashboard"       label="Spending"        iconD={d.spending} />}
-          {has("receiptsLedger")    && <NavItem to="/spending/receipts-ledger" label="Receipts Ledger" iconD={d.receipts} />}
-        </Group>
+        <div style={{ marginBottom: 2 }}>
+          <SectionLabel label="Spending" sideCollapsed={sc} open={isOpen("spending")} onToggle={() => toggleSection("spending")} />
+          {(sc || isOpen("spending")) && (
+            <>
+              {has("spendingDashboard") && <NavItem sideCollapsed={sc} to="/spending/dashboard"       label="Spending"        iconD={d.spending} />}
+              {has("receiptsLedger")    && <NavItem sideCollapsed={sc} to="/spending/receipts-ledger" label="Receipts Ledger" iconD={d.receipts} />}
+            </>
+          )}
+        </div>
       )}
 
       {/* ── RESEARCH ── */}
       {showResearch && (
-        <Group>
-          <SectionLabel label="Research" />
-          {has("wheelScan")    && <NavItem to="/research/wheel-scan"    label="Wheel Scan"    iconD={d.wheelScan} />}
-          {has("assetHub")     && <NavItem to="/research/asset-hub"     label="Asset Hub"     iconD={d.assetHub} />}
-          {has("advisor")      && <NavItem to="/research/compass"       label="Compass AI"    iconD={d.compass}   badge="AI" />}
-          {has("paperTrading") && <NavItem to="/research/paper-trading" label="Paper Trading" iconD={d.paperTrading} />}
-        </Group>
+        <div style={{ marginBottom: 2 }}>
+          <SectionLabel label="Research" sideCollapsed={sc} open={isOpen("research")} onToggle={() => toggleSection("research")} />
+          {(sc || isOpen("research")) && (
+            <>
+              {has("wheelScan")    && <NavItem sideCollapsed={sc} to="/research/wheel-scan"    label="Wheel Scan"    iconD={d.wheelScan} />}
+              {has("assetHub")     && <NavItem sideCollapsed={sc} to="/research/asset-hub"     label="Asset Hub"     iconD={d.assetHub} />}
+              {has("advisor")      && <NavItem sideCollapsed={sc} to="/research/compass"       label="Compass AI"    iconD={d.compass} badge="AI" />}
+              {has("paperTrading") && <NavItem sideCollapsed={sc} to="/research/paper-trading" label="Paper Trading" iconD={d.paperTrading} />}
+            </>
+          )}
+        </div>
       )}
 
       {/* ── Spacer ── */}
@@ -229,38 +460,7 @@ export default function SideNav({ activeAccount }) {
 
       {/* ── Accounts (owners only) ── */}
       {isOwner && (
-        <div style={{ borderTop: "1px solid var(--fv-border)", paddingTop: 10, marginTop: 10 }}>
-          <NavLink
-            to="/accounts"
-            className="sidebar-item"
-            style={({ isActive }) => ({
-              width: "calc(100% - 16px)",
-              display: "flex",
-              alignItems: "center",
-              gap: 9,
-              padding: "6px 14px",
-              borderRadius: 10,
-              border: "none",
-              cursor: "pointer",
-              background: isActive ? "var(--fv-nav-active-bg)" : "transparent",
-              color: isActive ? "var(--fv-nav-active-text)" : "var(--fv-muted)",
-              fontSize: 13,
-              fontWeight: isActive ? 700 : 600,
-              margin: "1px 8px",
-              fontFamily: "'Manrope', sans-serif",
-              textDecoration: "none",
-            })}
-          >
-            {({ isActive }) => (
-              <>
-                <UserAvatar />
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  Accounts
-                </span>
-              </>
-            )}
-          </NavLink>
-        </div>
+        <AccountsNavLink sc={sc} />
       )}
     </aside>
   );

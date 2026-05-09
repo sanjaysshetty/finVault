@@ -48,7 +48,7 @@ export default function App() {
       <Routes>
         {/* ✅ callback must be outside auth guard */}
         <Route path="/auth/callback" element={<AuthCallback />} />
-        {/* ✅ everything else requires login */}
+{/* ✅ everything else requires login */}
         <Route
           element={
             <RequireAuth>
