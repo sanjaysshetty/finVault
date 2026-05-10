@@ -1,5 +1,5 @@
 // curate-incremental.mjs
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
@@ -11,7 +11,7 @@ import pLimit from "p-limit";
 /**
  * Incremental curation Lambda:
  * - Fetches ONLY items that have needsCuration = true (via Scan + FilterExpression)
- * - Classifies category using OpenAI
+ * - Classifies category using Anthropic Claude
  * - Updates item with category + sets needsCuration=false
  * - Uses ConditionExpression to be idempotent and race-safe
  */
@@ -20,11 +20,10 @@ const REGION =
   process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
 const TABLE = process.env.TABLE || "StoreReceiptLedger";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!OPENAI_API_KEY) throw new Error("Missing OPENAI_API_KEY env var");
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+if (!ANTHROPIC_API_KEY) throw new Error("Missing ANTHROPIC_API_KEY env var");
 
-// Model: pick one you have access to
-const MODEL = process.env.MODEL || "gpt-5.2";
+const MODEL = process.env.MODEL || "claude-haiku-4-5-20251001";
 
 // Concurrency (keep modest to avoid DynamoDB throttling + API bursts)
 const CONCURRENCY = Number(process.env.CONCURRENCY || "5");
@@ -51,7 +50,7 @@ const CATEGORIES = [
   "Miscellaneous / Other",
 ];
 
-const client = new OpenAI({ apiKey: OPENAI_API_KEY });
+const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
   marshallOptions: { removeUndefinedValues: true },
@@ -125,19 +124,15 @@ Return ONLY valid JSON with this schema:
 async function classifyOne(item) {
   const payload = normalizeItemForModel(item);
 
-  const res = await client.responses.create({
+  const res = await client.messages.create({
     model: MODEL,
-    instructions: buildInstructions(),
-    input: [
-      {
-        role: "user",
-        content: [{ type: "input_text", text: JSON.stringify(payload) }],
-      },
-    ],
+    max_tokens: 256,
+    system: buildInstructions(),
+    messages: [{ role: "user", content: JSON.stringify(payload) }],
     temperature: 0.2,
   });
 
-  const text = res.output_text;
+  const text = res.content[0].text;
   let json;
   try {
     json = JSON.parse(text);
