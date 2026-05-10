@@ -1,106 +1,280 @@
-import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, queryKeys } from "../../api/client.js";
-import { PageHeader }         from "../../components/ui/PageHeader.jsx";
-import { PageIcons }          from "../../components/ui/PageIcons.jsx";
-import { useCanWrite }        from "../../hooks/useCanWrite.js";
-import PaperProceedQueue      from "./PaperProceedQueue.jsx";
-import PaperStagedOrders      from "./PaperStagedOrders.jsx";
-import PaperOrderHistory      from "./PaperOrderHistory.jsx";
-import PaperStageOrderModal   from "./PaperStageOrderModal.jsx";
+import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, queryKeys }       from "../../api/client.js";
+import { PageHeader }           from "../../components/ui/PageHeader.jsx";
+import { PageIcons }            from "../../components/ui/PageIcons.jsx";
+import { useCanWrite }          from "../../hooks/useCanWrite.js";
+import PaperProceedQueue        from "./PaperProceedQueue.jsx";
+import PaperStagedOrders        from "./PaperStagedOrders.jsx";
+import PaperPositionsTab        from "./PaperPositionsTab.jsx";
+import PaperOrderHistory        from "./PaperOrderHistory.jsx";
+import PaperStageOrderModal     from "./PaperStageOrderModal.jsx";
 
-const IBKR_ACCOUNT_ID = import.meta.env.VITE_IBKR_PAPER_ACCOUNT_ID || "";
+const TABS    = ["Orders", "Positions", "History"];
+const PERIODS = ["1M", "3M", "6M", "1Y", "Custom"];
 
-/**
- * PaperTradingDesk — main page for /research/paper-trading.
- *
- * Human-in-the-loop flow:
- *   1. PROCEED QUEUE   — pulls PROCEED recs from wheel scan; user clicks "Stage Order"
- *   2. STAGE MODAL     — user reviews/edits the pre-filled order, clicks "Stage for Review"
- *                        → POST /paper-trade/staged (DynamoDB only, no IBKR call yet)
- *   3. STAGED ORDERS   — user sees pending cards; clicks "Confirm & Submit to IBKR"
- *                        → POST /paper-trade/submit/{id} (resolves conId + places order)
- *   4. ORDER HISTORY   — shows SUBMITTED/FILLED/CANCELLED with IBKR audit trail
- *
- * The PAPER badge is shown everywhere — header, modal, every order card —
- * so there is never ambiguity between paper and (future) live trading.
- */
+function periodStart(p, from) {
+  const now = new Date();
+  if (p === "1M") return new Date(now.getFullYear(), now.getMonth() - 1,  now.getDate());
+  if (p === "3M") return new Date(now.getFullYear(), now.getMonth() - 3,  now.getDate());
+  if (p === "6M") return new Date(now.getFullYear(), now.getMonth() - 6,  now.getDate());
+  if (p === "1Y") return new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+  if (p === "Custom" && from) return new Date(from);
+  return null;
+}
+
+function fmt$(n) {
+  if (n == null) return "—";
+  return `$${Math.abs(Number(n)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function pnlColor(n) { return n >= 0 ? "text-emerald-400" : "text-red-400"; }
+
+function historyDate(order) {
+  return order.closedAt || order.expiredAt || order.cancelledAt || order.updatedAt;
+}
+
+const OPTION_STRATEGIES = new Set(["SELL_PUT", "BUY_PUT", "SELL_CALL", "BUY_CALL"]);
+
+function estimateUnrealizedPnl(order) {
+  const snap = order.lastSnapshot || order.fillSnapshot;
+  const mark = snap?.marketPrice;
+  if (mark == null || order.fillPrice == null) return 0;
+  const qty    = order.quantity || 1;
+  const mult   = OPTION_STRATEGIES.has(order.strategy) ? 100 : 1;
+  const isSell = (order.strategy || "").startsWith("SELL");
+  return (isSell ? order.fillPrice - mark : mark - order.fillPrice) * qty * mult;
+}
+
 export default function PaperTradingDesk() {
-  const canWrite    = useCanWrite("paperTrading");
-  const queryClient = useQueryClient();
-  const [modalRec, setModalRec] = useState(null);   // the PROCEED rec being staged
+  const canWrite = useCanWrite("paperTrading");
+  const qc       = useQueryClient();
+
+  const [tab,        setTab]        = useState("Orders");
+  const [period,     setPeriod]     = useState("3M");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo,   setCustomTo]   = useState("");
+  const [modalRec,   setModalRec]   = useState(null);
 
   const stageMutation = useMutation({
     mutationFn: (order) => api.post("/paper-trade/staged", order),
-    onSuccess: () => {
+    onSuccess:  () => {
       setModalRec(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.paperTradeStaged() });
+      qc.invalidateQueries({ queryKey: queryKeys.paperTradeStaged() });
     },
   });
 
+  const { data: ordersData, isLoading, isError } = useQuery({
+    queryKey: queryKeys.paperTradeOrders(),
+    queryFn:  () => api.get("/paper-trade/orders"),
+    staleTime: 30_000,
+  });
+
+  const allOrders = useMemo(() => ordersData?.orders || [], [ordersData]);
+
+  const pStart = useMemo(() => periodStart(period, customFrom), [period, customFrom]);
+  const pEnd   = useMemo(() => {
+    if (period === "Custom" && customTo) return new Date(customTo + "T23:59:59Z");
+    return null;
+  }, [period, customTo]);
+
+  function filterByDate(orders, getDate) {
+    return orders.filter((o) => {
+      const d = getDate(o) ? new Date(getDate(o)) : null;
+      if (!d) return true;
+      if (pStart && d < pStart) return false;
+      if (pEnd   && d > pEnd)   return false;
+      return true;
+    });
+  }
+
+  const submittedOrders = useMemo(
+    () => allOrders.filter((o) => o.status === "SUBMITTED"),
+    [allOrders]
+  );
+  const filledOrders = useMemo(
+    () => filterByDate(allOrders.filter((o) => o.status === "FILLED"), (o) => o.filledAt),
+    [allOrders, pStart, pEnd]  // eslint-disable-line
+  );
+  const closedOrders = useMemo(
+    () => filterByDate(
+      allOrders.filter((o) => ["CLOSED", "EXPIRED", "CANCELLED"].includes(o.status)),
+      historyDate
+    ),
+    [allOrders, pStart, pEnd]  // eslint-disable-line
+  );
+
+  // Metrics are always all-time — independent of the period filter
+  const unrealizedPnl = useMemo(
+    () => allOrders
+      .filter((o) => o.status === "FILLED")
+      .reduce((s, o) => s + estimateUnrealizedPnl(o), 0),
+    [allOrders]
+  );
+  const realizedPnl = useMemo(
+    () => allOrders
+      .filter((o) => o.status === "CLOSED")
+      .reduce((s, o) => s + (o.realizedPnl || 0), 0),
+    [allOrders]
+  );
+  const closedCount = useMemo(
+    () => allOrders.filter((o) => o.status === "CLOSED").length,
+    [allOrders]
+  );
+
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-6xl mx-auto">
-      {/* Stage Order modal */}
+    <div className="flex flex-col gap-5 p-6 max-w-6xl mx-auto">
       {modalRec && (
         <PaperStageOrderModal
           rec={modalRec}
-          onConfirm={(order) => stageMutation.mutate(order)}
+          onConfirm={(o) => stageMutation.mutate(o)}
           onCancel={() => { setModalRec(null); stageMutation.reset(); }}
           isPending={stageMutation.isPending}
         />
       )}
 
-      {/* Staging error toast */}
-      {stageMutation.isError && (
-        <div className="rounded-xl bg-red-500/[0.12] border border-red-500/[0.2] px-4 py-3 text-sm text-red-400">
-          Failed to stage order: {stageMutation.error?.detail?.error || stageMutation.error?.message || "Unknown error"}
-        </div>
-      )}
-
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <PageHeader
-          title="Trading Desk"
-          subtitle="Wheel scan recommendations → human review → IBKR paper order"
+          title="Paper Trading Desk"
+          subtitle="Internal Black-Scholes engine · Finnhub data · No broker required"
           icon={PageIcons.paperTrading}
         />
-        {/* Persistent PAPER badge + account indicator */}
-        <div className="flex items-center gap-2 shrink-0 pt-1">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-500/[0.3] bg-amber-500/[0.08]">
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-            <span className="text-xs font-bold text-amber-400 uppercase tracking-wide">Paper Account</span>
-          </div>
-          {IBKR_ACCOUNT_ID && (
-            <span className="text-xs text-slate-600 font-mono">{IBKR_ACCOUNT_ID}</span>
-          )}
+        <div className="flex items-center gap-1.5 shrink-0 pt-1 px-3 py-1.5 rounded-xl border border-amber-500/30 bg-amber-500/[0.08]">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+          <span className="text-xs font-bold text-amber-400 uppercase tracking-wide">Paper Mode</span>
         </div>
       </div>
 
-      {/* Flow indicator */}
-      <div className="flex items-center gap-2 text-[11px] text-slate-600 flex-wrap">
-        <span className="px-2 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-400">1 · PROCEED Queue</span>
-        <span>→</span>
-        <span className="px-2 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-400">2 · Stage Order</span>
-        <span>→</span>
-        <span className="px-2 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] text-slate-400">3 · Review &amp; Confirm</span>
-        <span>→</span>
-        <span className="px-2 py-1 rounded-md bg-white/[0.04] border border-white/[0.06] text-amber-400/70">4 · IBKR Paper Order</span>
-      </div>
-
-      {/* Panel 1: PROCEED Queue */}
-      {canWrite ? (
-        <PaperProceedQueue onStage={(rec) => { stageMutation.reset(); setModalRec(rec); }} />
-      ) : (
-        <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] px-4 py-8 text-center text-slate-500 text-sm">
-          You have read-only access to this page.
+      {stageMutation.isError && (
+        <div className="rounded-xl bg-red-500/[0.12] border border-red-500/20 px-4 py-3 text-sm text-red-400">
+          Failed to stage order: {stageMutation.error?.detail?.error || stageMutation.error?.message}
         </div>
       )}
 
-      {/* Panel 2: Staged Orders */}
-      <PaperStagedOrders canWrite={canWrite} />
+      {/* P&L summary strip — always visible across all tabs */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1729] px-4 py-3">
+          <p className="text-[10px] text-slate-600 uppercase tracking-wide mb-1">Unrealized P&L</p>
+          <p className={`text-xl font-black ${pnlColor(unrealizedPnl)}`} style={{ fontFamily: "Epilogue, sans-serif" }}>
+            {unrealizedPnl >= 0 ? "+" : "−"}{fmt$(unrealizedPnl)}
+          </p>
+          <p className="text-[10px] text-slate-600 mt-0.5">
+            {allOrders.filter((o) => o.status === "FILLED").length} open position{allOrders.filter((o) => o.status === "FILLED").length !== 1 ? "s" : ""} · est.
+          </p>
+        </div>
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1729] px-4 py-3">
+          <p className="text-[10px] text-slate-600 uppercase tracking-wide mb-1">Realized P&L</p>
+          <p className={`text-xl font-black ${pnlColor(realizedPnl)}`} style={{ fontFamily: "Epilogue, sans-serif" }}>
+            {realizedPnl >= 0 ? "+" : "−"}{fmt$(realizedPnl)}
+          </p>
+          <p className="text-[10px] text-slate-600 mt-0.5">{closedCount} closed · all time</p>
+        </div>
+        <div className="rounded-xl border border-white/[0.06] bg-[#0F1729] px-4 py-3">
+          <p className="text-[10px] text-slate-600 uppercase tracking-wide mb-1">Closed Positions</p>
+          <p className="text-xl font-black text-slate-100" style={{ fontFamily: "Epilogue, sans-serif" }}>
+            {closedCount}
+          </p>
+          <p className="text-[10px] text-slate-600 mt-0.5">all time</p>
+        </div>
+      </div>
 
-      {/* Panel 3: Order History */}
-      <PaperOrderHistory />
+      {/* Tabs + period filter */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div
+          className="flex gap-1 rounded-xl border p-1"
+          style={{ background: "var(--fv-chip-bg)", borderColor: "var(--fv-border)" }}
+        >
+          {TABS.map((t) => (
+            <button key={t} type="button" onClick={() => setTab(t)}
+              className="relative px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer"
+              style={tab === t
+                ? { background: "#2563eb", color: "#ffffff" }
+                : { color: "var(--fv-text-secondary)" }
+              }
+            >
+              {t}
+              {t === "Orders" && submittedOrders.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 flex items-center justify-center rounded-full bg-amber-500 text-[9px] font-black text-black">
+                  {submittedOrders.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {tab !== "Orders" && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <div
+              className="flex gap-0.5 rounded-xl border p-1"
+              style={{ background: "var(--fv-chip-bg)", borderColor: "var(--fv-border)" }}
+            >
+              {PERIODS.map((p) => (
+                <button key={p} type="button" onClick={() => setPeriod(p)}
+                  className="px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer"
+                  style={period === p
+                    ? { background: "#334155", color: "#f1f5f9" }
+                    : { color: "var(--fv-text-secondary)" }
+                  }
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            {period === "Custom" && (
+              <div className="flex items-center gap-1.5">
+                <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)}
+                  className="rounded-lg bg-white/[0.04] border border-white/10 text-slate-300 text-[11px] px-2 py-1 outline-none focus:border-blue-500/50" />
+                <span className="text-slate-600 text-xs">→</span>
+                <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)}
+                  className="rounded-lg bg-white/[0.04] border border-white/10 text-slate-300 text-[11px] px-2 py-1 outline-none focus:border-blue-500/50" />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Tab content */}
+      {tab === "Orders" && (
+        <div className="flex flex-col gap-5">
+          {canWrite
+            ? <PaperProceedQueue onStage={(rec) => { stageMutation.reset(); setModalRec(rec); }} />
+            : <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] px-4 py-8 text-center text-slate-500 text-sm">Read-only access.</div>
+          }
+          <PaperStagedOrders
+            canWrite={canWrite}
+            submittedOrders={submittedOrders}
+            ordersLoading={isLoading}
+          />
+        </div>
+      )}
+
+      {tab === "Positions" && (
+        <PaperPositionsTab
+          orders={filledOrders}
+          isLoading={isLoading}
+          isError={isError}
+          canWrite={canWrite}
+          onWriteCC={(stockOrder) => {
+            stageMutation.reset();
+            setModalRec({
+              ticker:           stockOrder.ticker,
+              name:             stockOrder.ticker,
+              _lockedStrategy:  "SELL_CALL",
+              _maxContracts:    Math.floor((stockOrder.quantity || 100) / 100),
+              _fromPosition:    stockOrder.tradeId,
+            });
+          }}
+        />
+      )}
+
+      {tab === "History" && (
+        <PaperOrderHistory
+          orders={closedOrders}
+          isLoading={isLoading}
+          isError={isError}
+        />
+      )}
     </div>
   );
 }

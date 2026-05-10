@@ -567,6 +567,10 @@ html.light .date-btn svg { stroke: #0e6c4a !important; }
 
 /* ── Shared action button classes (theme-aware) ─────────── */
 
+/* Tab / period pill — inactive state, theme-aware */
+.fv-pill { color: var(--fv-text-secondary); }
+.fv-pill:hover { color: var(--fv-text); }
+
 /* Solid primary: Save / Add / Submit */
 .fv-btn-solid {
   background: #1a9e65;
