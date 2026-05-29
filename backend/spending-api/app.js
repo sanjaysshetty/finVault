@@ -292,9 +292,22 @@ function normalizeCategory(raw) {
 }
 
 function shouldExcludeLine(item) {
+  // Tax lines are always included regardless of category label.
+  if (isTaxLine(item)) return false;
+
+  // Exclude SUMMARY-category rows — receipt-level aggregations that would
+  // double-count the individual line items already present in the data.
+  const cat = String(item?.category || "").trim().toUpperCase();
+  if (cat === "SUMMARY" || cat === "_SUMMARY") return true;
+
+  // Negative amounts are returns/discounts — always include them so they
+  // correctly reduce the running total.
+  const amt = Number(item?.amount);
+  if (Number.isFinite(amt) && amt < 0) return false;
+
+  // Exclude positive-amount aggregation rows identified by description.
   const desc = String(item?.productDescription || "").trim().toUpperCase();
   if (!desc) return false;
-
   if (desc.includes("SUBTOTAL")) return true;
   if (desc === "TOTAL" || desc.includes(" TOTAL")) return true;
   if (desc.includes("BALANCE DUE")) return true;
@@ -605,6 +618,45 @@ async function createItem(event) {
   return json(201, { ok: true, item });
 }
 
+async function updateReceiptDate(event) {
+  requireTableName();
+  const userId = await getUserIdFromJwt(event);
+
+  const receipt = normalizeReceipt(event.pathParameters?.receipt);
+  const pk = `RECEIPT#${receipt}`;
+
+  const body = parseBody(event);
+  const d = normalizeDateYYYYMMDD(body.date);
+  if (!d) throw new Error("date is required (YYYY-MM-DD)");
+
+  const resp = await ddb.send(new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: "pk = :pk",
+    ExpressionAttributeValues: { ":pk": pk, ":uid": userId },
+    FilterExpression: "#uid = :uid",
+    ExpressionAttributeNames: { "#uid": "userId" },
+  }));
+
+  const items = resp.Items || [];
+  if (items.length === 0) {
+    const err = new Error("Receipt not found"); err.statusCode = 404; throw err;
+  }
+
+  const now = new Date().toISOString();
+  await Promise.all(items.map(it =>
+    ddb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { pk: it.pk, sk: it.sk },
+      UpdateExpression: "SET #date = :date, #gsi1pk = :gsi1pk, #updatedAt = :updatedAt",
+      ExpressionAttributeNames: { "#date": "date", "#gsi1pk": "gsi1pk", "#updatedAt": "updatedAt" },
+      ExpressionAttributeValues: { ":date": d, ":gsi1pk": `DATE#${d}`, ":updatedAt": now },
+      ConditionExpression: "attribute_exists(pk)",
+    }))
+  ));
+
+  return json(200, { ok: true, date: d, count: items.length });
+}
+
 // OLD update: receipt + lineId
 async function updateItemByReceiptLine(event) {
   requireTableName();
@@ -861,6 +913,9 @@ exports.handler = async (event) => {
 
     if (method === "DELETE" && /^\/spending\/receipt\/[^/]+$/.test(rawPath))
       return await deleteReceipt(event);
+
+    if (method === "PATCH" && /^\/spending\/receipt\/[^/]+\/date$/.test(rawPath))
+      return await updateReceiptDate(event);
 
     // pk/sk update/delete
     if (method === "PATCH" && rawPath.startsWith("/spending/item/"))

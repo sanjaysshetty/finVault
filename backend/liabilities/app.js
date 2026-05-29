@@ -179,7 +179,13 @@ exports.handler = async (event) => {
 
     const ctx = await resolveCtxCached(event);
     if (method === "GET") {
-      assertRead(ctx, "liabilities");
+      // nav page shows liabilities; grant read if user has nav or liabilities access
+      const hasAccess =
+        ctx.role === "owner" ||
+        (ctx.pages?.["liabilities"] || "none") !== "none" ||
+        (ctx.pages?.["nav"] || "none") !== "none" ||
+        (ctx.pages?.["portfolio"] || "none") !== "none";
+      if (!hasAccess) assertRead(ctx, "liabilities");
     } else {
       assertWrite(ctx, "liabilities");
     }

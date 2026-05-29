@@ -20,6 +20,24 @@ async function getUserIdFromJwt(event) {
   return accountId;
 }
 
+// Aggregate pages that pull data from multiple asset endpoints.
+// Having access to an aggregate page grants READ on all its constituent endpoints.
+// Writes still require the specific page permission.
+const PAGE_COVERS = {
+  portfolio:    new Set(["nav", "stocks", "bullion", "crypto", "options", "futures", "fixedIncome", "otherAssets", "insurance"]),
+  capitalGains: new Set(["stocks", "bullion", "crypto", "options", "futures"]),
+  nav:          new Set(["stocks", "bullion", "crypto", "fixedIncome", "otherAssets", "insurance"]),
+};
+
+function assertAssetRead(ctx, pageKey) {
+  if (ctx.role === "owner") return;
+  if ((ctx.pages?.[pageKey] || "none") !== "none") return;
+  for (const [page, covered] of Object.entries(PAGE_COVERS)) {
+    if (covered.has(pageKey) && (ctx.pages?.[page] || "none") !== "none") return;
+  }
+  assertRead(ctx, pageKey);
+}
+
 // Maps a request path to the page key used for permission checks.
 function pageKeyForPath(path) {
   if (path.startsWith(NAV_BASE))          return "nav";
@@ -1320,7 +1338,7 @@ module.exports.handler = async (event) => {
     const pageKey = pageKeyForPath(path);
     if (pageKey) {
       if (method === "GET") {
-        assertRead(ctx, pageKey);
+        assertAssetRead(ctx, pageKey);
       } else {
         assertWrite(ctx, pageKey);
       }

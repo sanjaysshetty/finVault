@@ -7,12 +7,12 @@ import { safeNum, round2, formatMoney, plColorClass } from "../utils/format.js";
 
 // ── IRS Tax Brackets (2025, Single Filer) ─────────────────────────────────
 const BRACKETS = [
-  { label: "10 – 12%", ordinary: 0.12, lt: 0.00, collLT: 0.12 },
-  { label: "22%",      ordinary: 0.22, lt: 0.15, collLT: 0.22 },
-  { label: "24%",      ordinary: 0.24, lt: 0.15, collLT: 0.24 },
-  { label: "32%",      ordinary: 0.32, lt: 0.15, collLT: 0.28 },
-  { label: "35%",      ordinary: 0.35, lt: 0.15, collLT: 0.28 },
-  { label: "37%",      ordinary: 0.37, lt: 0.20, collLT: 0.28 },
+  { label: "10 – 12%", ordinary: 0.12, lt: 0.00, collLT: 0.12, niit: false },
+  { label: "22%",      ordinary: 0.22, lt: 0.15, collLT: 0.22, niit: false },
+  { label: "24%",      ordinary: 0.24, lt: 0.15, collLT: 0.24, niit: false },
+  { label: "32%",      ordinary: 0.32, lt: 0.15, collLT: 0.28, niit: true  },
+  { label: "35%",      ordinary: 0.35, lt: 0.15, collLT: 0.28, niit: true  },
+  { label: "37%",      ordinary: 0.37, lt: 0.20, collLT: 0.28, niit: true  },
 ];
 
 const CY = new Date().getFullYear();
@@ -170,13 +170,25 @@ function calcOptions(txs, year) {
     else if (OPEN_LEGS.has(t.leg))  byPos[t.positionId].opens.push(t);
   }
 
+  // Bridge pre-V2 open legs: OPEN legs saved before positionId/leg fields existed have
+  // no positionId/leg in DDB (→ legacyTxs), but their CLOSE legs were saved with
+  // positionId = OPEN leg's own txId (OptionsV2 normalizeRow falls back to txId).
+  // Find those orphaned close-only groups and attach the matching legacy open.
+  for (const pos of Object.values(byPos)) {
+    if (!pos.opens.length && pos.closes.length) {
+      const pid = pos.closes[0].positionId;
+      const legacyOpen = legacyTxs.find(t => (t.txId || t.assetId) === pid);
+      if (legacyOpen) pos.opens.push(legacyOpen);
+    }
+  }
+
   for (const pos of Object.values(byPos)) {
     if (!pos.closes.length || !pos.opens.length) continue;
     const openLeg  = pos.opens[0];
     const closeLeg = pos.closes[0];
 
     // CLOSE leg stores its actual close date in openDate (see OptionsV2 handleClosePosition)
-    const closeDate = String(closeLeg.openDate || "").trim();
+    const closeDate = String(closeLeg.openDate || closeLeg.closeDate || "").trim();
     if (!closeDate || closeDate < yS || closeDate > yE) continue;
 
     const openDate = String(openLeg.openDate || "").trim();
@@ -256,6 +268,7 @@ function calcOptions(txs, year) {
     });
   }
 
+  details.sort((a, b) => String(b.closeDate || "").localeCompare(String(a.closeDate || "")));
   return { st: round2(st), lt: round2(lt), details };
 }
 
@@ -353,11 +366,15 @@ function computeScheduleD(stocks, crypto, bullion, options, futures) {
 
 function estimateTax(schedD, bracket) {
   const { netST, netRegLT, netCollLT } = schedD;
-  const { ordinary, lt, collLT } = bracket;
+  const { ordinary, lt, collLT, niit } = bracket;
   const stTax   = netST    > 0 ? round2(netST    * ordinary)                    : 0;
   const regTax  = netRegLT > 0 ? round2(netRegLT * lt)                          : 0;
   const collTax = netCollLT > 0 ? round2(netCollLT * Math.min(collLT, ordinary)) : 0;
-  return { stTax, regTax, collTax, total: round2(stTax + regTax + collTax) };
+  // NIIT (3.8%) auto-applied for 32%+ brackets — ordinary income alone in those brackets
+  // already exceeds the $250K MFJ threshold, so full net investment income is subject to NIIT.
+  const niitBase = niit ? round2(Math.max(netST, 0) + Math.max(netRegLT, 0) + Math.max(netCollLT, 0)) : 0;
+  const niitTax  = niitBase > 0 ? round2(niitBase * 0.038) : 0;
+  return { stTax, regTax, collTax, niitTax, total: round2(stTax + regTax + collTax + niitTax) };
 }
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
@@ -723,9 +740,9 @@ export default function CapitalGains() {
         <>
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <SummaryCard label="Short-Term Gains"  value={gains.schedD.rawST}     sub="Ordinary income rate" />
-            <SummaryCard label="LT Regular Gains"  value={gains.schedD.rawRegLT}  sub={`${(bracket.lt * 100).toFixed(0)}% rate · stocks, crypto, options`} />
-            <SummaryCard label="Collectibles LT"   value={gains.schedD.rawCollLT} sub="Max 28% · bullion" />
+            <SummaryCard label="Short-Term Gains"  value={gains.schedD.rawST}     sub={bracket.niit ? `${(bracket.ordinary * 100).toFixed(0)}% + 3.8% NIIT` : "Ordinary income rate"} />
+            <SummaryCard label="LT Regular Gains"  value={gains.schedD.rawRegLT}  sub={bracket.niit ? `${(bracket.lt * 100).toFixed(0)}% + 3.8% NIIT · stocks, crypto, options` : `${(bracket.lt * 100).toFixed(0)}% rate · stocks, crypto, options`} />
+            <SummaryCard label="Collectibles LT"   value={gains.schedD.rawCollLT} sub={bracket.niit ? "Max 28% + 3.8% NIIT · bullion" : "Max 28% · bullion"} />
             <TaxCard value={tax.total} />
           </div>
 
@@ -864,6 +881,15 @@ export default function CapitalGains() {
                   </div>
                   <span className="text-sm font-semibold text-amber-400 tabular-nums">{formatMoney(tax.collTax)}</span>
                 </div>
+                {bracket.niit && (
+                  <div className="flex items-center justify-between px-4 py-2.5">
+                    <div>
+                      <div className="text-sm text-slate-400">NIIT <span className="text-[11px] text-slate-600">(Net Investment Income Tax)</span></div>
+                      <div className="text-[11px] text-slate-600">{formatMoney(Math.max(gains.schedD.netST, 0) + Math.max(gains.schedD.netRegLT, 0) + Math.max(gains.schedD.netCollLT, 0))} × 3.8% · auto-applied for 32%+ bracket</div>
+                    </div>
+                    <span className="text-sm font-semibold text-amber-400 tabular-nums">{formatMoney(tax.niitTax)}</span>
+                  </div>
+                )}
                 <div className="mx-4 my-1 h-px bg-white/[0.06]" />
                 <div className="flex items-center justify-between px-4 py-3">
                   <span className="text-sm font-bold text-slate-200">Total Estimated Tax</span>
@@ -881,7 +907,7 @@ export default function CapitalGains() {
               <p><span className="text-slate-500 font-semibold">FIFO</span> cost basis used for stocks, crypto, and bullion. Each detail row shows one buy-lot matched against a sell. Holding period &gt; 365 days = long-term.</p>
               <p><span className="text-slate-500 font-semibold">Options</span> classified by openDate → closeDate holding period. Only closed positions (closeDate set and in selected year) appear.</p>
               <p><span className="text-slate-500 font-semibold">Section 1256</span> futures: 60% LT / 40% ST applied to the net annual P&L, not per-trade. Each row shows the raw trade P&L before the split.</p>
-              <p><span className="text-slate-500 font-semibold">Estimate only.</span> Wash sales, open positions, NIIT (3.8%), state taxes, and AMT not included. Consult a tax professional.</p>
+              <p><span className="text-slate-500 font-semibold">Estimate only.</span> Wash sales, open positions, state taxes, and AMT not included. NIIT (3.8%) auto-applied for 32%+ brackets assuming MAGI exceeds $250K threshold. Consult a tax professional.</p>
             </div>
           </div>
         </>

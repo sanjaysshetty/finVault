@@ -244,6 +244,11 @@ async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
   const client = new Anthropic({ apiKey });
 
   const base64 = Buffer.from(imageBytes).toString("base64");
+  const isPdf = mimeType === "application/pdf";
+
+  const mediaBlock = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
+    : { type: "image",    source: { type: "base64", media_type: mimeType, data: base64 } };
 
   const response = await client.messages.create({
     model,
@@ -253,13 +258,10 @@ async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
       {
         role: "user",
         content: [
-          {
-            type: "image",
-            source: { type: "base64", media_type: mimeType, data: base64 },
-          },
+          mediaBlock,
           {
             type: "text",
-            text: "Extract all line items and summary totals from this receipt image. Call the extract_receipt tool with the structured data.",
+            text: "Extract all line items and summary totals from this receipt. Call the extract_receipt tool with the structured data.",
           },
         ],
       },
@@ -267,7 +269,7 @@ async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
     tools: [
       {
         name: "extract_receipt",
-        description: "Output structured receipt data extracted from the receipt image",
+        description: "Output structured receipt data extracted from the receipt",
         input_schema: buildReceiptToolSchema(),
       },
     ],
@@ -464,11 +466,8 @@ async function processRecord(rec) {
     const mimeType = guessMimeType(obj.ContentType, key);
     console.log("Guessed mimeType:", mimeType);
 
-    if (mimeType === "application/pdf" || key.toLowerCase().endsWith(".pdf")) {
-      throw new Error("PDF uploaded but PDF-to-image is not implemented. Upload an image for now.");
-    }
-    if (!mimeType.startsWith("image/")) {
-      throw new Error(`Unsupported content type: ${mimeType}. Expected image/*`);
+    if (mimeType !== "application/pdf" && !mimeType.startsWith("image/")) {
+      throw new Error(`Unsupported content type: ${mimeType}. Expected an image or PDF.`);
     }
 
     console.log("Calling Anthropic...");

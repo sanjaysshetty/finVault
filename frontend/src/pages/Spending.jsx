@@ -85,11 +85,19 @@ function groupByReceipt(items) {
     map.get(receipt).push(it);
   }
   const groups = Array.from(map.entries()).map(([receipt, rows]) => {
-    const maxDate = rows.map((r) => r.date).filter(Boolean).sort().slice(-1)[0] || "";
-    const maxUpdatedAt = rows.map((r) => r.updatedAt).filter(Boolean).sort().slice(-1)[0] || "";
-    return { receipt, rows, maxDate, maxUpdatedAt };
+    const dates = rows.map((r) => r.date).filter(Boolean).sort();
+    const updatedAts = rows.map((r) => r.updatedAt).filter(Boolean).sort();
+    const maxDate      = dates.slice(-1)[0] || "";
+    const maxUpdatedAt = updatedAts.slice(-1)[0] || "";
+    const minUpdatedAt = updatedAts[0] || "";
+    return { receipt, rows, maxDate, maxUpdatedAt, minUpdatedAt };
   });
-  groups.sort((a, b) => (b.maxDate || "").localeCompare(a.maxDate || ""));
+  groups.sort((a, b) => {
+    const dateCmp = (b.maxDate || "").localeCompare(a.maxDate || "");
+    if (dateCmp !== 0) return dateCmp;
+    // Same transaction date — sort by upload time (earliest updatedAt) descending
+    return (b.minUpdatedAt || "").localeCompare(a.minUpdatedAt || "");
+  });
   return groups;
 }
 
@@ -113,6 +121,8 @@ function isTax(row) { return normDesc(row.productDescription) === "TAX"; }
 function isCountableItem(row) {
   if (isBlankLineItem(row)) return false;
   if (isSummaryRow(row)) return false;
+  const n = Number(row.amount);
+  if (Number.isFinite(n) && n < 0) return false;
   return true;
 }
 function isIncludedInDollarTotal(row) {
@@ -293,6 +303,8 @@ export default function Spending() {
   const [edits, setEdits] = useState({});
   const [saving, setSaving] = useState({});
   const [deleting, setDeleting] = useState({});
+  const [receiptDateEdits, setReceiptDateEdits] = useState({});
+  const [receiptDateSaving, setReceiptDateSaving] = useState({});
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
   const fileInputRef = useRef(null);
@@ -471,6 +483,21 @@ export default function Spending() {
     finally { setDeleting((p) => ({ ...p, [key]: false })); }
   }
 
+  async function saveReceiptDate(receiptId, newDate) {
+    const d = normalizeDateInput(newDate);
+    if (!d) return;
+    setReceiptDateSaving(p => ({ ...p, [receiptId]: true })); setErr("");
+    try {
+      await apiFetch(`/spending/receipt/${encodeURIComponent(receiptId)}/date`, { method: "PATCH", body: { date: d } });
+      setRaw(prev => prev.map(r => {
+        const rId = r.receipt || (r.pk ? String(r.pk).replace("RECEIPT#", "") : null);
+        return rId === receiptId ? { ...r, date: d } : r;
+      }));
+      setReceiptDateEdits(p => { const n = { ...p }; delete n[receiptId]; return n; });
+    } catch (e) { setErr(e?.message || String(e)); }
+    finally { setReceiptDateSaving(p => ({ ...p, [receiptId]: false })); }
+  }
+
 /* ---------- Derived groups ---------- */
 
   const groups = useMemo(() => {
@@ -483,16 +510,12 @@ export default function Spending() {
   const dupPairs = useMemo(() => computeDuplicatePairs(groups), [groups]);
   const duplicateSet = useMemo(() => new Set(dupPairs.keys()), [dupPairs]);
 
-  const threeMonthsAgo = useMemo(() => {
-    const d = new Date();
-    d.setMonth(d.getMonth() - 3);
-    return d.toISOString().slice(0, 10);
-  }, []);
+  const ytdStart = useMemo(() => `${new Date().getFullYear()}-01-01`, []);
 
   const [showAll, setShowAll] = useState(false);
 
   const visibleGroups = useMemo(() => {
-    const base = showAll ? groups : groups.filter(g => !g.maxDate || g.maxDate >= threeMonthsAgo);
+    const base = showAll ? groups : groups.filter(g => !g.maxDate || g.maxDate >= ytdStart);
 
     // Separate active dups from the rest
     const activeDupGroups = base.filter(g => dupPairs.has(g.receipt) && !acceptedReceipts.has(g.receipt));
@@ -532,11 +555,11 @@ export default function Spending() {
     rest.sort((a, b) => (b.maxDate || "").localeCompare(a.maxDate || ""));
 
     return [...clusters.flat(), ...rest];
-  }, [groups, dupPairs, acceptedReceipts, showAll, threeMonthsAgo]);
+  }, [groups, dupPairs, acceptedReceipts, showAll, ytdStart]);
 
   const hiddenCount = useMemo(
-    () => showAll ? 0 : groups.filter(g => g.maxDate && g.maxDate < threeMonthsAgo).length,
-    [groups, showAll, threeMonthsAgo]
+    () => showAll ? 0 : groups.filter(g => g.maxDate && g.maxDate < ytdStart).length,
+    [groups, showAll, ytdStart]
   );
 
   /* ---------- Upload ---------- */
@@ -752,7 +775,34 @@ export default function Spending() {
                       <span className="font-black text-white">{fmtUSD(totalDollars)}</span>
                     </span>
                   </div>
-                  <span className="font-bold text-slate-300 text-sm justify-self-end cursor-pointer" title="Receipt Date" onClick={() => toggleReceipt(g.receipt)}>{g.maxDate || "—"}</span>
+                  {canWrite ? (() => {
+                    const hdrDateId = safeDomId(`receipt_hdr_${g.receipt}`);
+                    const pendingDate = receiptDateEdits[g.receipt];
+                    const isDirty = pendingDate !== undefined && pendingDate !== g.maxDate;
+                    return (
+                      <div className="flex items-center gap-1.5 justify-self-end" onClick={e => e.stopPropagation()}>
+                        <div className="date-wrap" style={{ width: 170 }}>
+                          <input
+                            id={hdrDateId}
+                            type="date"
+                            value={pendingDate ?? g.maxDate ?? ""}
+                            onChange={e => setReceiptDateEdits(p => ({ ...p, [g.receipt]: e.target.value }))}
+                            className="spend-date"
+                          />
+                          <button type="button" className="date-btn" onClick={e => { e.preventDefault(); e.stopPropagation(); openDatePickerById(hdrDateId); }} aria-label="Pick date">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v3M16 3v3M4 8h16M6 6h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" /></svg>
+                          </button>
+                        </div>
+                        {isDirty && (
+                          <button onClick={() => saveReceiptDate(g.receipt, pendingDate)} disabled={receiptDateSaving[g.receipt]} className={saveBtnCls(receiptDateSaving[g.receipt])}>
+                            {receiptDateSaving[g.receipt] ? "…" : "Apply"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })() : (
+                    <span className="font-bold text-slate-300 text-sm justify-self-end cursor-pointer" title="Receipt Date" onClick={() => toggleReceipt(g.receipt)}>{g.maxDate || "—"}</span>
+                  )}
                   <div className="flex items-center gap-1 justify-self-end">
                     {isDup && (
                       <button
@@ -859,7 +909,7 @@ export default function Spending() {
               onClick={() => setShowAll(true)}
               className="mt-1 w-full rounded-2xl border border-white/[0.06] bg-[#0A0F1E] py-3 text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors"
             >
-              Show {hiddenCount} older receipt{hiddenCount !== 1 ? "s" : ""} (before {threeMonthsAgo})
+              Show {hiddenCount} older receipt{hiddenCount !== 1 ? "s" : ""} (before Jan 1)
             </button>
           )}
           {showAll && (
@@ -867,7 +917,7 @@ export default function Spending() {
               onClick={() => setShowAll(false)}
               className="mt-1 w-full rounded-2xl border border-white/[0.06] bg-[#0A0F1E] py-3 text-sm text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-colors"
             >
-              Show last 3 months only
+              Show YTD only
             </button>
           )}
         </div>
