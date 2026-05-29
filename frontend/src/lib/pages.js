@@ -31,6 +31,7 @@ export const PAGE_ROUTES = [
   // ── Spending ───────────────────────────────────────────────
   { pageKey: "spendingDashboard", path: "/spending/dashboard",       label: "Spending",      group: "Spending" },
   { pageKey: "receiptsLedger",    path: "/spending/receipts-ledger", label: "Receipts",      group: "Spending" },
+  { pageKey: "budget",            path: "/budget/overview",          label: "Budget & Goals", group: "Spending" },
 
   // ── Research ───────────────────────────────────────────────
   { pageKey: "wheelScan",         path: "/research/wheel-scan",      label: "Wheel Scan",    group: "Research" },

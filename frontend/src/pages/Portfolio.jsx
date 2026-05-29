@@ -103,7 +103,8 @@ function computeBullion(transactions, spot, pricesData) {
   };
 }
 
-function computeStocks(transactions, quoteMap) {
+// coveredCallCaps: { [symbol]: lowestOpenCCStrike } — caps unrealized + day G/L when spot > strike
+function computeStocks(transactions, quoteMap, coveredCallCaps = {}) {
   const bySym = {};
   const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
   for (const t of txs) {
@@ -121,16 +122,33 @@ function computeStocks(transactions, quoteMap) {
     }
   }
   let holdingValue = 0, unrealized = 0, realized = 0, dayGL = 0, hasDayGL = false, totalCost = 0, prevDayValue = 0;
+  let hasCCCap = false;
   for (const [sym, s] of Object.entries(bySym)) {
     const spot      = safeNum(quoteMap[sym]?.price,    0);
-    const change    = quoteMap[sym]?.change ?? null; // Finnhub: change = price − prevClose
     const prevClose = safeNum(quoteMap[sym]?.prevClose, 0);
-    holdingValue += s.shares * spot; unrealized += (spot - s.avg) * s.shares; realized += s.realized;
-    totalCost += s.shares * (s.avg || 0);
-    if (change != null) { dayGL += s.shares * safeNum(change, 0); hasDayGL = true; }
-    if (prevClose > 0) prevDayValue += s.shares * prevClose;
+    const ccStrike  = coveredCallCaps[sym] ?? null;
+    const ccActive  = ccStrike !== null && spot > ccStrike;
+    if (ccActive) hasCCCap = true;
+    const effectiveSpot      = ccActive ? ccStrike : spot;
+    const effectivePrevClose = (ccActive && prevClose > ccStrike) ? ccStrike : prevClose;
+    holdingValue += s.shares * effectiveSpot;
+    unrealized   += (effectiveSpot - (s.avg || 0)) * s.shares;
+    realized     += s.realized;
+    totalCost    += s.shares * (s.avg || 0);
+    if (ccActive) {
+      // Use effective prices directly when capped
+      if (effectivePrevClose > 0) {
+        dayGL += s.shares * (effectiveSpot - effectivePrevClose);
+        hasDayGL = true;
+        prevDayValue += s.shares * effectivePrevClose;
+      }
+    } else {
+      const change = quoteMap[sym]?.change ?? null; // Finnhub: change = price − prevClose
+      if (change != null) { dayGL += s.shares * safeNum(change, 0); hasDayGL = true; }
+      if (prevClose > 0) prevDayValue += s.shares * prevClose;
+    }
   }
-  return { holdingValue: round2(holdingValue), unrealized: round2(unrealized), realized: round2(realized), dayGL: hasDayGL ? round2(dayGL) : null, totalCost: round2(totalCost), prevDayValue: round2(prevDayValue) };
+  return { holdingValue: round2(holdingValue), unrealized: round2(unrealized), realized: round2(realized), dayGL: hasDayGL ? round2(dayGL) : null, totalCost: round2(totalCost), prevDayValue: round2(prevDayValue), hasCCCap };
 }
 
 function computeCrypto(transactions, spotMap, cryptoData) {
@@ -271,23 +289,72 @@ function computeFuturesYTDRealized(transactions) {
 /* ── Options YTD (sum closed P/L where closeDate in current year) ── */
 function computeOptionsYTDRealized(rawItems) {
   const year = new Date().getFullYear();
-  const yearStart = `${year}-01-01`;
-  const yearEnd   = `${year}-12-31`;
+  const yS = `${year}-01-01`;
+  const yE = `${year}-12-31`;
+  const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
+  const OPEN_LEGS  = new Set(["OPEN",  "ROLL_OPEN"]);
+
+  const v2Txs     = rawItems.filter(t => t.positionId && t.leg);
+  const legacyTxs = rawItems.filter(t => !(t.positionId && t.leg));
+
   let total = 0;
-  for (const it of rawItems) {
-    const closeDate = String(it.closeDate ?? it.close_date ?? "");
-    if (!closeDate || closeDate < yearStart || closeDate > yearEnd) continue;
-    const typeU = String(it.type || "").trim().toUpperCase();
-    const qty   = safeNum(it.qty, 0), fill = safeNum(it.fill, 0), fee = safeNum(it.fee, 0);
-    const closeRaw = it.closePrice;
+
+  // ── V2: group by positionId, pair OPEN + CLOSE legs ──
+  const byPos = {};
+  for (const t of v2Txs) {
+    if (!byPos[t.positionId]) byPos[t.positionId] = { opens: [], closes: [] };
+    if (CLOSE_LEGS.has(t.leg))     byPos[t.positionId].closes.push(t);
+    else if (OPEN_LEGS.has(t.leg)) byPos[t.positionId].opens.push(t);
+  }
+
+  // Bridge pre-V2 open legs (no positionId/leg saved in DDB) to V2 close legs.
+  // OptionsV2 normalizeRow falls back to txId as positionId, so CLOSE legs reference
+  // the old OPEN leg's txId — find them in legacyTxs by ID.
+  for (const pos of Object.values(byPos)) {
+    if (!pos.opens.length && pos.closes.length) {
+      const pid = pos.closes[0].positionId;
+      const legacyOpen = legacyTxs.find(t => (t.txId || t.assetId) === pid);
+      if (legacyOpen) pos.opens.push(legacyOpen);
+    }
+  }
+
+  for (const pos of Object.values(byPos)) {
+    if (!pos.closes.length || !pos.opens.length) continue;
+    const openLeg  = pos.opens[0];
+    const closeLeg = pos.closes[0];
+    const closeDate = String(closeLeg.openDate || closeLeg.closeDate || "").trim();
+    if (!closeDate || closeDate < yS || closeDate > yE) continue;
+    const typeU = String(openLeg.type || "").toUpperCase();
+    const qty   = safeNum(openLeg.qty, 0);
+    if (qty <= 0) continue;
+    const openFill  = safeNum(openLeg.fill,  0);
+    const closeFill = safeNum(closeLeg.fill, 0);
+    const openFee   = safeNum(openLeg.fee,   0);
+    const closeFee  = safeNum(closeLeg.fee,  0);
+    let pl;
+    if      (typeU === "SELL") pl = (openFill - closeFill) * qty * 100 - openFee - closeFee;
+    else if (typeU === "BUY")  pl = (closeFill - openFill) * qty * 100 - openFee - closeFee;
+    else if (typeU === "ASS")  pl = (closeFill - openFill) * qty * 100 - openFee - closeFee;
+    else continue;
+    total += pl;
+  }
+
+  // ── Legacy: true single-row records (closePrice on same record as open) ──
+  for (const t of legacyTxs) {
+    const closeDate = String(t.closeDate ?? t.close_date ?? "");
+    if (!closeDate || closeDate < yS || closeDate > yE) continue;
+    const typeU = String(t.type || "").trim().toUpperCase();
+    const qty   = safeNum(t.qty, 0), fill = safeNum(t.fill, 0), fee = safeNum(t.fee, 0);
+    const closeRaw = t.closePrice;
     if (closeRaw === "" || closeRaw === null || closeRaw === undefined) continue;
     const close = safeNum(closeRaw, NaN); if (!Number.isFinite(close)) continue;
     let pl = null;
-    if (typeU === "SELL")                          pl = (fill - close - fee / 100) * qty * 100;
+    if      (typeU === "SELL")                                           pl = (fill - close - fee / 100) * qty * 100;
     else if (typeU === "BUY" || typeU === "ASS" || typeU === "ASSIGNED") pl = (close - fill - fee / 100) * qty * 100;
-    else if (typeU === "SDI")                      pl = (close - fill) * qty - fee;
+    else if (typeU === "SDI")                                            pl = (close - fill) * qty - fee;
     if (pl !== null) total += pl;
   }
+
   return round2(total);
 }
 
@@ -396,13 +463,40 @@ export default function Portfolio() {
   const futuresTxByCountry = useMemo(() => futuresTx.filter((t) => String(t.country   || "USA").toUpperCase() === country), [futuresTx, country]);
   const optionsTxByCountry = useMemo(() => optionsTx.filter((t) => String(t.country   || "USA").toUpperCase() === country), [optionsTx, country]);
 
+  // Lowest open covered-call strike per ticker — caps stock unrealized + day G/L when spot > strike
+  const coveredCallCaps = useMemo(() => {
+    const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
+    const OPEN_LEGS  = new Set(["OPEN", "ROLL_OPEN"]);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const byPos = {};
+    for (const r of optionsTxByCountry) {
+      const pid = String(r.positionId || r.txId || r.assetId || r.id || "");
+      if (!byPos[pid]) byPos[pid] = [];
+      byPos[pid].push(r);
+    }
+    const caps = {};
+    for (const legs of Object.values(byPos)) {
+      const openLeg  = legs.find(l => OPEN_LEGS.has(String(l.leg || "OPEN").toUpperCase()));
+      const closeLeg = legs.find(l => CLOSE_LEGS.has(String(l.leg || "").toUpperCase()));
+      if (!openLeg || closeLeg) continue;
+      if (String(openLeg.event || "").toLowerCase() !== "call") continue;
+      if (String(openLeg.type  || "").toUpperCase()           !== "SELL") continue;
+      if (openLeg.expiry && new Date(`${openLeg.expiry}T00:00:00`) < today) continue;
+      const ticker = String(openLeg.ticker || "").toUpperCase();
+      const strike = safeNum(openLeg.strikes, 0);
+      if (!ticker || strike <= 0) continue;
+      if (caps[ticker] === undefined || strike < caps[ticker]) caps[ticker] = strike;
+    }
+    return caps;
+  }, [optionsTxByCountry]);
+
   const rollups = useMemo(() => ({
-    stocks:      computeStocks(stockTxByCountry, quotes),
+    stocks:      computeStocks(stockTxByCountry, quotes, coveredCallCaps),
     crypto:      computeCrypto(cryptoTxByCountry, cryptoSpots, pricesRes?.crypto),
     bullion:     computeBullion(bullionTxByCountry, spot, pricesRes),
     fixedIncome: computeFixedIncome(fixedIncomeByCountry),
     otherAssets: computeOtherAssets(otherAssetsByCountry),
-  }), [fixedIncomeByCountry, bullionTxByCountry, stockTxByCountry, cryptoTxByCountry, otherAssetsByCountry, spot, quotes, cryptoSpots, pricesRes]);
+  }), [fixedIncomeByCountry, bullionTxByCountry, stockTxByCountry, cryptoTxByCountry, otherAssetsByCountry, spot, quotes, cryptoSpots, pricesRes, coveredCallCaps]);
 
   const totals = useMemo(() => {
     if (country === "INDIA") {
@@ -599,12 +693,18 @@ export default function Portfolio() {
                         </td>
                         <td className={`w-[16%] px-5 py-3.5 text-right font-bold text-sm numeric ${showPL ? plColorClass(r.unrealized) : "text-slate-700"}`}>
                           {showPL ? formatMoney(r.unrealized) : "—"}
+                          {r.hasCCCap && showPL && (
+                            <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">gains capped</span>
+                          )}
                         </td>
                         <td className={`w-[16%] px-5 py-3.5 text-right font-bold text-sm numeric ${colorRealized ? plColorClass(r.realized) : "text-slate-700"}`}>
                           {showRealized ? formatMoney(r.realized) : "—"}
                         </td>
                         <td className={`w-[16%] px-5 py-3.5 text-right font-bold text-sm numeric ${showDayGL ? plColorClass(r.dayGL) : "text-slate-700"}`}>
                           {showDayGL ? formatMoney(r.dayGL) : "—"}
+                          {r.hasCCCap && showDayGL && (
+                            <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">gains capped</span>
+                          )}
                         </td>
                       </tr>
                     );

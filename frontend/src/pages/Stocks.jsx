@@ -38,7 +38,8 @@ function normalizeTx(item) {
   return { ...item, id: item.txId || item.assetId || item.id, symbol: String(item.symbol || "").toUpperCase(), type: String(item.type || "BUY").toUpperCase() };
 }
 
-function computeStockMetrics(transactions, quoteMap) {
+// coveredCallCaps: { [symbol]: lowestOpenCCStrike } — passed in from options data
+function computeStockMetrics(transactions, quoteMap, coveredCallCaps = {}) {
   const bySymbol = {};
   const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 
@@ -60,15 +61,31 @@ function computeStockMetrics(transactions, quoteMap) {
   const holdings = Object.entries(bySymbol).map(([symbol, s]) => {
     const q = quoteMap[symbol];
     const spot = safeNum(q?.price, 0), prevClose = safeNum(q?.prevClose, 0);
-    const mv = s.shares * spot;
-    return { symbol, shares: s.shares, avgCost: s.avg, spot, prevClose, marketValue: mv, unrealized: (spot - (s.avg || 0)) * s.shares, realized: s.realized, buys: s.buys, sells: s.sells, quoteTs: q?.timestamp };
+    // Apply covered call cap: if spot > CC strike, clamp effective price to strike
+    const ccStrike = coveredCallCaps[symbol] ?? null;
+    const ccActive = ccStrike !== null && spot > ccStrike;
+    const effectiveSpot = ccActive ? ccStrike : spot;
+    const effectivePrevClose = (ccActive && prevClose > ccStrike) ? ccStrike : prevClose;
+    return {
+      symbol, shares: s.shares, avgCost: s.avg,
+      spot, prevClose,
+      effectiveSpot, effectivePrevClose,
+      marketValue: s.shares * effectiveSpot,
+      unrealized: (effectiveSpot - (s.avg || 0)) * s.shares,
+      realized: s.realized, buys: s.buys, sells: s.sells, quoteTs: q?.timestamp,
+      ccStrike, ccActive,
+    };
   }).filter(h => h.shares > 0).sort((a, b) => b.marketValue - a.marketValue);
 
   const totals = holdings.reduce((acc, h) => {
     acc.holdingValue += h.marketValue; acc.unrealized += h.unrealized; acc.realized += h.realized;
     acc.totalCost += h.shares * (h.avgCost || 0);
-    const mv = spotMove(h.spot, h.prevClose);
-    if (mv.hasPrev) { acc.dayGL += h.shares * mv.change; acc.hasDayGL = true; acc.prevDayValue += h.shares * h.prevClose; }
+    const effPrev = h.effectivePrevClose;
+    if (effPrev > 0) {
+      acc.dayGL += h.shares * (h.effectiveSpot - effPrev);
+      acc.hasDayGL = true;
+      acc.prevDayValue += h.shares * effPrev;
+    }
     return acc;
   }, { holdingValue: 0, unrealized: 0, realized: 0, dayGL: 0, hasDayGL: false, totalCost: 0, prevDayValue: 0 });
 
@@ -172,6 +189,60 @@ export default function Stocks() {
 
   const quotes = useMemo(() => pricesData?.stocks || {}, [pricesData]);
 
+  // Options data — used to detect open covered calls that cap stock P/L.
+  // React Query deduplicates: no extra HTTP request if OptionsV2 is already mounted.
+  const { data: optionsData } = useQuery({
+    queryKey: queryKeys.optionsTx(),
+    queryFn: () => api.get("/assets/options/transactions"),
+  });
+
+  // Build a map of ticker → lowest open covered call strike for the current country filter.
+  // A covered call = SELL CALL position where the open leg has no matching close/roll/assign leg
+  // and the expiry is still in the future.
+  const coveredCallCaps = useMemo(() => {
+    const items = Array.isArray(optionsData?.items) ? optionsData.items : Array.isArray(optionsData) ? optionsData : [];
+    const rows = items
+      .filter(r => String(r.country || "USA").toUpperCase() === country)
+      .map(r => ({
+        ...r,
+        ticker: String(r.ticker || "").toUpperCase(),
+        event: String(r.event || "").toLowerCase(),
+        type: String(r.type || "").toUpperCase(),
+        leg: String(r.leg || "OPEN").toUpperCase(),
+        positionId: String(r.positionId || r.txId || r.assetId || r.id || ""),
+      }));
+
+    // Group legs by positionId to determine open vs closed positions
+    const byPos = {};
+    for (const r of rows) {
+      if (!byPos[r.positionId]) byPos[r.positionId] = [];
+      byPos[r.positionId].push(r);
+    }
+
+    const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
+    const OPEN_LEGS  = new Set(["OPEN", "ROLL_OPEN"]);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const caps = {};
+
+    for (const legs of Object.values(byPos)) {
+      const openLeg  = legs.find(l => OPEN_LEGS.has(l.leg));
+      const closeLeg = legs.find(l => CLOSE_LEGS.has(l.leg));
+      if (!openLeg || closeLeg) continue; // no open leg or already closed
+      if (openLeg.event !== "call" || openLeg.type !== "SELL") continue;
+      if (openLeg.expiry) {
+        const expDate = new Date(`${openLeg.expiry}T00:00:00`);
+        if (expDate < today) continue; // expired
+      }
+      const ticker = openLeg.ticker;
+      const strike = safeNum(openLeg.strikes, 0);
+      if (!ticker || strike <= 0) continue;
+      // Keep the most restrictive (lowest) strike if multiple open CCs on same ticker
+      if (caps[ticker] === undefined || strike < caps[ticker]) caps[ticker] = strike;
+    }
+
+    return caps;
+  }, [optionsData, country]);
+
   const quoteStatus = pricesFetching
     ? "Refreshing quotes…"
     : pricesData
@@ -207,7 +278,7 @@ export default function Stocks() {
     [tx, country]
   );
 
-  const metrics = useMemo(() => computeStockMetrics(txByCountry, quotes), [txByCountry, quotes]);
+  const metrics = useMemo(() => computeStockMetrics(txByCountry, quotes, coveredCallCaps), [txByCountry, quotes, coveredCallCaps]);
   const ytd = useMemo(() => computeStockYTDRealized(txByCountry), [txByCountry]);
   const currentYear = String(new Date().getFullYear());
 
@@ -422,24 +493,40 @@ export default function Stocks() {
                   {metrics.holdings.length === 0 ? (
                     <tr><td colSpan={7}><EmptyState type="empty" message="No holdings yet. Add a BUY transaction." /></td></tr>
                   ) : metrics.holdings.map((h) => {
-                    const mv = spotMove(h.spot, h.prevClose);
-                    const dayGL = mv.hasPrev ? safeNum(h.shares, 0) * mv.change : null;
+                    // Spot column always shows actual price and actual % move
+                    const spotMv = spotMove(h.spot, h.prevClose);
+                    // Day G/L uses effective (CC-capped) values when a covered call is active
+                    const effMv  = spotMove(h.effectiveSpot, h.effectivePrevClose);
+                    const dayGL  = effMv.hasPrev ? safeNum(h.shares, 0) * effMv.change : null;
                     return (
                       <tr key={h.symbol} className="border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors">
                         <td className="px-3 py-3">
                           <p className="font-bold text-slate-100 text-sm">{h.symbol}</p>
+                          {h.ccActive && (
+                            <p className="text-[10px] text-amber-400 font-semibold mt-0.5" title={`Open covered call — upside capped at ${formatMoney(h.ccStrike)}`}>
+                              CC @{formatMoney(h.ccStrike)}
+                            </p>
+                          )}
                         </td>
                         <td className="px-3 py-3 text-sm text-slate-300 numeric">{round2(h.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
                         <td className="px-3 py-3 text-sm text-slate-300 numeric">{formatMoney(h.avgCost)}</td>
                         <td className="px-3 py-3">
-                          <span className={`text-sm font-bold numeric ${plClass(mv.change)}`}>{formatMoney(h.spot)}</span>
-                          {mv.hasPrev && <span className={`ml-1.5 text-[11px] font-semibold numeric ${plClass(mv.change)}`}>{formatPct(mv.pct)}</span>}
+                          <span className={`text-sm font-bold numeric ${plClass(spotMv.change)}`}>{formatMoney(h.spot)}</span>
+                          {spotMv.hasPrev && <span className={`ml-1.5 text-[11px] font-semibold numeric ${plClass(spotMv.change)}`}>{formatPct(spotMv.pct)}</span>}
                         </td>
-                        <td className={`px-4 py-3 text-sm font-bold numeric ${mv.hasPrev ? plClass(dayGL) : "text-slate-600"}`}>
-                          {mv.hasPrev ? formatMoney(dayGL) : "—"}
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${effMv.hasPrev ? plClass(dayGL) : "text-slate-600"}`}>
+                          {effMv.hasPrev ? formatMoney(dayGL) : "—"}
+                          {h.ccActive && effMv.hasPrev && (
+                            <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">gains capped</span>
+                          )}
                         </td>
                         <td className="px-3 py-3 text-sm font-bold text-slate-200 numeric">{formatMoney(h.marketValue)}</td>
-                        <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>{formatMoney(h.unrealized)}</td>
+                        <td className={`px-4 py-3 text-sm font-bold numeric ${plClass(h.unrealized)}`}>
+                          {formatMoney(h.unrealized)}
+                          {h.ccActive && (
+                            <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">gains capped</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}

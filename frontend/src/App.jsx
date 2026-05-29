@@ -22,6 +22,7 @@ import WheelScanResult from "./pages/WheelScan/WheelScanResult";
 import AssetHub from "./pages/AssetHub";
 import AdvisorChat from "./pages/AdvisorChat";
 import PaperTradingDesk from "./pages/PaperTrading/PaperTradingDesk";
+import BudgetPage from "./pages/Budget/BudgetPage";
 import CapitalGains from "./pages/CapitalGains";
 import AuthCallback from "./auth/AuthCallback";
 import RequireAuth from "./auth/RequireAuth";
@@ -93,6 +94,9 @@ export default function App() {
           <Route path="/research/asset-hub" element={<AssetHub />} />
           <Route path="/research/compass" element={<AdvisorChat />} />
           <Route path="/research/paper-trading" element={<PaperTradingDesk />} />
+
+          {/* Budget & Goals */}
+          <Route path="/budget/overview" element={<BudgetPage />} />
 
           {/* Accounts */}
           <Route path="/accounts" element={<AccountsPage />} />

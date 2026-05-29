@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, Fragment } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
@@ -582,6 +582,36 @@ export default function OptionsV2() {
       return String(b.openLeg?.openDate || "").localeCompare(String(a.openLeg?.openDate || ""));
     });
   }, [positionsWithMetrics, tickerFilter, statusFilter, fromDate, toDate]);
+
+  /* ── Weekly P/L — past 8 calendar weeks (always, ignores date filter) ── */
+  const weeklyPL = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dow = today.getDay();
+    const daysSinceMonday = dow === 0 ? 6 : dow - 1;
+    const thisMonday = new Date(today);
+    thisMonday.setDate(today.getDate() - daysSinceMonday);
+
+    const weeks = Array.from({ length: 12 }, (_, i) => {
+      const start = new Date(thisMonday);
+      start.setDate(thisMonday.getDate() - (11 - i) * 7);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      const label = start.toLocaleString("en-US", { month: "short", day: "numeric" });
+      return { start, end, pl: 0, label };
+    });
+
+    for (const p of positionsWithMetrics) {
+      const m = p.metrics;
+      if (m.realizedPL === null || !m.closeDate) continue;
+      const cd = new Date(`${m.closeDate}T00:00:00`);
+      for (const w of weeks) {
+        if (cd >= w.start && cd <= w.end) { w.pl += m.realizedPL; break; }
+      }
+    }
+
+    return weeks.map(w => ({ ...w, pl: Math.round(w.pl * 100) / 100 }));
+  }, [positionsWithMetrics]);
 
   /* ── Summary cards (date-range filtered) ─────────────────── */
   // Mirrors Options.jsx exactly:
@@ -1344,58 +1374,164 @@ export default function OptionsV2() {
         )}
       </PageHeader>
 
-      {/* ══ FILTERS ═════════════════════════════════════════════ */}
-      <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-3">
-        <div className="flex gap-3 flex-wrap items-end">
-          <div>
-            <div className={labelCls}>From</div>
-            <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className={`${inputCls} !w-40`} />
-          </div>
-          <div>
-            <div className={labelCls}>To</div>
-            <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className={`${inputCls} !w-40`} />
-          </div>
-          <div>
-            <div className={labelCls}>Ticker</div>
-            <input type="text" value={tickerFilter} onChange={e => setTickerFilter(e.target.value)}
-              placeholder="(all)" className={`${inputCls} !w-28 uppercase`} />
-          </div>
-          <div>
-            <div className={labelCls}>Status</div>
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={`${inputCls} !w-28`}>
-              <option value="all">All</option>
-              <option value="open">Open</option>
-              <option value="closed">Closed</option>
-            </select>
-          </div>
-          <div className="ml-auto">
+      {/* ══ FILTERS + METRICS (left) | WEEKLY CHART (right) ════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
+
+        {/* Left column: filters + 2×2 metric cards */}
+        <div className="flex flex-col gap-3">
+          <div className="rounded-2xl border border-[rgba(59,130,246,0.12)] bg-[#0F1729] p-3">
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div>
+                <div className={labelCls}>From</div>
+                <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className={`${inputCls} !w-full`} />
+              </div>
+              <div>
+                <div className={labelCls}>To</div>
+                <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className={`${inputCls} !w-full`} />
+              </div>
+              <div>
+                <div className={labelCls}>Ticker</div>
+                <input type="text" value={tickerFilter} onChange={e => setTickerFilter(e.target.value)}
+                  placeholder="(all)" className={`${inputCls} !w-full uppercase`} />
+              </div>
+              <div>
+                <div className={labelCls}>Status</div>
+                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={`${inputCls} !w-full`}>
+                  <option value="all">All</option>
+                  <option value="open">Open</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </div>
+            </div>
             <button type="button"
               onClick={() => { const d = new Date(); d.setMonth(d.getMonth() - 3); setFromDate(d.toISOString().slice(0, 10)); setToDate(todayISO()); }}
               className={btnSecondary}>
               Reset Dates
             </button>
           </div>
-        </div>
-      </div>
 
-      {/* ══ SUMMARY CARDS ════════════════════════════════════════ */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MetricCard label="Cash Collected" value={formatMoney(summary.cashCollected)}
-          sub="Filtered by Open Date + Ticker"
-          valueClass={summary.cashCollected >= 0 ? "text-green-400" : "text-red-400"} />
-        <MetricCard label="Realized P&L" value={formatMoney(summary.totalRealized)}
-          sub="Filtered by Close Date + Ticker"
-          valueClass={summary.totalRealized >= 0 ? "text-green-400" : "text-red-400"} />
-        <MetricCard
-          label="Unrealized P&L"
-          value={summary.totalUnrealized === null ? "—" : formatMoney(summary.totalUnrealized)}
-          sub="Open positions at mark"
-          valueClass={summary.totalUnrealized === null ? "text-slate-500" : summary.totalUnrealized >= 0 ? "text-green-400" : "text-red-400"} />
-        <MetricCard
-          label="Ann. ROC"
-          value={summary.annRoc === null ? "—" : fmtPct(summary.annRoc)}
-          sub="Weighted annualized ROC"
-          valueClass={summary.annRoc === null ? "text-slate-500" : summary.annRoc >= 0 ? "text-green-400" : "text-red-400"} />
+          <div className="grid grid-cols-2 gap-3">
+            <MetricCard label="Cash Collected" value={formatMoney(summary.cashCollected)}
+              sub="Filtered by Open Date + Ticker"
+              valueClass={summary.cashCollected >= 0 ? "text-green-400" : "text-red-400"} />
+            <MetricCard label="Realized P&L" value={formatMoney(summary.totalRealized)}
+              sub="Filtered by Close Date + Ticker"
+              valueClass={summary.totalRealized >= 0 ? "text-green-400" : "text-red-400"} />
+            <MetricCard
+              label="Unrealized P&L"
+              value={summary.totalUnrealized === null ? "—" : formatMoney(summary.totalUnrealized)}
+              sub="Open positions at mark"
+              valueClass={summary.totalUnrealized === null ? "text-slate-500" : summary.totalUnrealized >= 0 ? "text-green-400" : "text-red-400"} />
+            <MetricCard
+              label="Ann. ROC"
+              value={summary.annRoc === null ? "—" : fmtPct(summary.annRoc)}
+              sub="Weighted annualized ROC"
+              valueClass={summary.annRoc === null ? "text-slate-500" : summary.annRoc >= 0 ? "text-green-400" : "text-red-400"} />
+          </div>
+        </div>
+
+        {/* Right column: weekly realized P/L vertical bar chart — fills full grid row height */}
+        <div className="rounded-2xl border border-white/[0.06] bg-[#0F1729] p-4 flex flex-col">
+          <div className="flex items-baseline justify-between mb-2 shrink-0">
+            <p className="text-[10px] text-slate-500 uppercase tracking-wide">Weekly Realized P/L — past 12 weeks</p>
+            {(() => {
+              const avg = Math.round(weeklyPL.reduce((s, w) => s + w.pl, 0) / 12 * 100) / 100;
+              return (
+                <span className={`text-xs font-semibold tabular-nums ${avg >= 0 ? "text-emerald-400" : "text-red-400"}`} style={{ fontFamily: "Epilogue, sans-serif" }}>
+                  avg {formatMoney(avg)}/wk
+                </span>
+              );
+            })()}
+          </div>
+          {(() => {
+            const maxAbs = Math.max(...weeklyPL.map(w => Math.abs(w.pl)), 1);
+            const raw = maxAbs / 4;
+            const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
+            const tickInterval = [1, 2, 2.5, 5, 10].map(s => s * mag).find(s => s >= raw) ?? mag * 10;
+            const ticks = Array.from({ length: Math.floor(maxAbs / tickInterval) }, (_, i) => (i + 1) * tickInterval);
+            const fmtTick = v => v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : String(v);
+            const YAXIS_W = "2.5rem";
+            return (
+              <div className="flex flex-col flex-1 min-h-0">
+                <div className="flex flex-1 min-h-0">
+                  {/* Y-axis */}
+                  <div className="relative shrink-0" style={{ width: YAXIS_W, borderRight: "1px solid rgba(148,163,184,0.12)" }}>
+                    <span className="absolute text-xs text-slate-500 leading-none" style={{ top: "50%", right: "4px", transform: "translateY(-50%)" }}>0</span>
+                    {ticks.map(v => {
+                      const pct = (v / maxAbs) * 48;
+                      return (
+                        <Fragment key={v}>
+                          <span className="absolute text-xs text-emerald-600/70 leading-none" style={{ top: `${50 - pct}%`, right: "4px", transform: "translateY(-50%)" }}>{fmtTick(v)}</span>
+                          <span className="absolute text-xs text-red-600/70 leading-none" style={{ top: `${50 + pct}%`, right: "4px", transform: "translateY(-50%)" }}>-{fmtTick(v)}</span>
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                  {/* Bars area */}
+                  <div className="relative flex-1 min-h-0">
+                    {/* Zero line */}
+                    <div className="absolute left-0 right-0" style={{ top: "50%", borderTop: "1px dotted rgba(148,163,184,0.25)" }} />
+                    {/* Subtle horizontal grid lines at each tick */}
+                    {ticks.map(v => {
+                      const pct = (v / maxAbs) * 48;
+                      return (
+                        <Fragment key={v}>
+                          <div className="absolute left-0 right-0" style={{ top: `${50 - pct}%`, borderTop: "1px solid rgba(148,163,184,0.07)" }} />
+                          <div className="absolute left-0 right-0" style={{ top: `${50 + pct}%`, borderTop: "1px solid rgba(148,163,184,0.07)" }} />
+                        </Fragment>
+                      );
+                    })}
+                    {/* Bar columns */}
+                    <div className="absolute inset-0 flex gap-1">
+                      {weeklyPL.map((w, i) => {
+                        const isPos  = w.pl > 0;
+                        const isZero = w.pl === 0;
+                        const barPct = isZero ? 0 : (Math.abs(w.pl) / maxAbs) * 48;
+                        return (
+                          <div key={i} className="flex-1 relative">
+                            {!isZero && (
+                              <>
+                                {/* Bar */}
+                                <div
+                                  className={`absolute left-0.5 right-0.5 rounded-sm transition-all duration-300 ${isPos ? "bg-emerald-500/50" : "bg-red-500/50"}`}
+                                  style={isPos
+                                    ? { bottom: "50%",          height: `${barPct}%` }
+                                    : { top: "calc(50% + 1px)", height: `${barPct}%` }}
+                                />
+                                {/* Value at the tip of the bar */}
+                                <div
+                                  className="absolute left-0 right-0 text-center overflow-hidden"
+                                  style={isPos
+                                    ? { bottom: `calc(50% + ${barPct}%)`,       lineHeight: 1 }
+                                    : { top:    `calc(50% + ${barPct}% + 2px)`, lineHeight: 1 }}
+                                >
+                                  <span
+                                    className={`text-[10px] tabular-nums block truncate font-semibold ${isPos ? "text-emerald-400" : "text-red-400"}`}
+                                    style={{ fontFamily: "Epilogue, sans-serif" }}>
+                                    {formatMoney(w.pl)}
+                                  </span>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                {/* Week labels — left-padded to align with bars */}
+                <div className="flex gap-1 mt-1 shrink-0" style={{ paddingLeft: YAXIS_W }}>
+                  {weeklyPL.map((w, i) => (
+                    <div key={i} className="flex-1 text-center overflow-hidden">
+                      <span className="text-xs text-slate-500 block truncate leading-tight">{w.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
       </div>
 
       {/* ══ POSITIONS ════════════════════════════════════════════ */}

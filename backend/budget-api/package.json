@@ -1,0 +1,10 @@
+{
+  "name": "budget-api",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "description": "Budget & Goals API — income, budget definitions, cash outflows, financial goals",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  }
+}

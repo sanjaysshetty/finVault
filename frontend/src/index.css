@@ -311,7 +311,7 @@ input.spend-text:focus {
   box-shadow: 0 0 0 4px rgba(59,130,246,.18);
 }
 input.spend-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-input.spend-date::-webkit-calendar-picker-indicator { opacity: 1 !important; cursor: pointer; }
+input.spend-date::-webkit-calendar-picker-indicator { opacity: 0 !important; cursor: pointer; }
 
 /* Date pickers: force dark color-scheme so text + calendar icon are white */
 input[type="date"] {
@@ -550,8 +550,7 @@ html.light input.spend-date {
   border: 1px solid rgba(1,45,29,0.15) !important;
 }
 html.light input.spend-date::-webkit-calendar-picker-indicator {
-  opacity: 1 !important;
-  filter: invert(0.3) sepia(1) saturate(3) hue-rotate(90deg);
+  opacity: 0 !important;
   cursor: pointer;
 }
 html.light input.spend-text {

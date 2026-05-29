@@ -76,4 +76,7 @@ local/
 # GitIgnore
 .gitignore
 
-
+# MS Office Documents
+**/*.docx
+**/*.xlsx
+**/*.pptx

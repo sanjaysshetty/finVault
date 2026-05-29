@@ -124,4 +124,14 @@ export const queryKeys = {
   // so a future liveTrade namespace stays clearly separate.
   paperTradeStaged: ()         => ["paperTrade", "staged"],
   paperTradeOrders: ()         => ["paperTrade", "orders"],
+
+  // Budget & Goals
+  budgetDefinition: (year, month) =>
+    month != null ? ["budget", "definition", year, month] : ["budget", "definition", year],
+  budgetIncome:     (year)        => ["budget", "income", year],
+  budgetOutflows:   (year, month) => ["budget", "outflows", year, month],
+  budgetGoals:      (year)        => ["budget", "goals", year],
+  budgetCCActuals:    (year, month) => ["budget", "cc-actuals", year, month],
+  budgetSpendActuals: (year)        => ["budget", "spend-actuals", year],
+  budgetAlerts:     ()            => ["budget", "alerts"],
 };
