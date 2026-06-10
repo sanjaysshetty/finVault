@@ -24,6 +24,7 @@ import AdvisorChat from "./pages/AdvisorChat";
 import PaperTradingDesk from "./pages/PaperTrading/PaperTradingDesk";
 import BudgetPage from "./pages/Budget/BudgetPage";
 import CapitalGains from "./pages/CapitalGains";
+import TaxReturn from "./pages/TaxReturn/TaxReturn";
 import AuthCallback from "./auth/AuthCallback";
 import RequireAuth from "./auth/RequireAuth";
 import { useAccounts } from "./hooks/useAccounts.js";
@@ -97,6 +98,7 @@ export default function App() {
 
           {/* Budget & Goals */}
           <Route path="/budget/overview" element={<BudgetPage />} />
+          <Route path="/tax/return" element={<TaxReturn />} />
 
           {/* Accounts */}
           <Route path="/accounts" element={<AccountsPage />} />

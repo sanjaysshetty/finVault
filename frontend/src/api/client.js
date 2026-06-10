@@ -134,4 +134,7 @@ export const queryKeys = {
   budgetCCActuals:    (year, month) => ["budget", "cc-actuals", year, month],
   budgetSpendActuals: (year)        => ["budget", "spend-actuals", year],
   budgetAlerts:     ()            => ["budget", "alerts"],
+
+  // Tax Return
+  taxReturn: (year) => ["tax-return", year],
 };

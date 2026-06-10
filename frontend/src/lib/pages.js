@@ -41,6 +41,9 @@ export const PAGE_ROUTES = [
   // ── Trading ────────────────────────────────────────────────
   // paperTrading is intentionally separate from any future liveTrading entry.
   { pageKey: "paperTrading",      path: "/research/paper-trading",   label: "Paper Trading", group: "Trading" },
+
+  // ── Tax ────────────────────────────────────────────────────
+  { pageKey: "taxReturn",         path: "/tax/return",               label: "Tax Return",    group: "Tax" },
 ];
 
 /** Returns the pageKey for a given pathname, or null if not permission-gated. */

@@ -43,6 +43,41 @@ s3 = boto3.client("s3")
 
 # ── Claude tool definitions ────────────────────────────────────
 
+# Server-side web search tool (Anthropic-hosted, no client execution needed)
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
+
+# Tool to record synthesized macro context
+MACRO_SYNTHESIZE_TOOL = {
+    "name": "synthesize_macro_context",
+    "description": (
+        "Record the synthesized current macro context for the Wheel Strategy scan. "
+        "Call this after researching current conditions via web search."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "fed_policy":      {"type": "string", "description": "Current Fed rate stance and forward guidance"},
+            "tariff_regime":   {"type": "string", "description": "Active tariff/trade environment and impacted sectors"},
+            "inflation":       {"type": "string", "description": "Latest CPI/PCE readings and trend"},
+            "growth_cycle":    {"type": "string", "description": "GDP, employment, consumer spending — current phase"},
+            "leading_sectors": {
+                "type": "array", "items": {"type": "string"},
+                "description": "Sectors with tailwinds for covered-call / CSP premium selling"
+            },
+            "key_risks": {
+                "type": "array", "items": {"type": "string"},
+                "description": "Top macro risks that could spike volatility"
+            },
+            "summary_bullets": {
+                "type": "array", "items": {"type": "string"},
+                "description": "5-7 terse bullet points covering the full macro picture for stock scoring"
+            },
+        },
+        "required": ["fed_policy", "tariff_regime", "inflation", "growth_cycle",
+                     "leading_sectors", "key_risks", "summary_bullets"]
+    }
+}
+
 CLAUDE_TOOLS = [
     {
         "name": "apply_macro_scores",
@@ -103,9 +138,73 @@ CLAUDE_TOOLS = [
 ]
 
 
+# ── Macro context synthesis ────────────────────────────────────
+
+def get_dynamic_macro_context():
+    """
+    Pre-pass Claude call: web-search current macro conditions and return a structured
+    context dict that is both injected into the stock-scoring prompt and stored in the
+    report JSON (so the UI always shows the context that actually drove this scan).
+    Returns None on failure; caller falls back gracefully.
+    """
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    today = datetime.date.today().isoformat()
+
+    prompt = (
+        f"Today is {today}. You are preparing macro context for a Wheel Options Strategy screener "
+        f"that sells covered calls and cash-secured puts on large-cap US equities.\n\n"
+        "Use web search to get current data on:\n"
+        "1. Federal Reserve: current federal funds rate, most recent FOMC decision, next meeting, rate path expectations\n"
+        "2. Inflation: latest CPI and PCE readings, trend direction\n"
+        "3. Economic growth: recent GDP print, unemployment rate, consumer sentiment\n"
+        "4. Trade/tariff policy: major active tariffs, recently affected sectors\n"
+        "5. Sector outlook: tailwinds and headwinds for premium selling strategies\n"
+        "6. Key macro risks that could spike implied volatility\n\n"
+        "Search for the latest data, then call synthesize_macro_context with a structured synthesis."
+    )
+
+    messages = [{"role": "user", "content": prompt}]
+
+    for _ in range(10):
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=2048,
+            tools=[WEB_SEARCH_TOOL, MACRO_SYNTHESIZE_TOOL],
+            messages=messages,
+        )
+
+        # Check if Claude called our synthesis tool
+        for block in response.content:
+            if getattr(block, "type", "") == "tool_use" and block.name == "synthesize_macro_context":
+                logger.info("Dynamic macro context synthesized via web search")
+                return block.input
+
+        if response.stop_reason == "end_turn":
+            break
+
+        # Add assistant turn (includes web_search_tool_use + web_search_tool_result blocks — server-side)
+        messages.append({"role": "assistant", "content": response.content})
+
+        # Return tool_result only for our custom tool (web_search is handled server-side)
+        tool_results = []
+        for block in response.content:
+            if getattr(block, "type", "") == "tool_use" and block.name == "synthesize_macro_context":
+                tool_results.append({
+                    "type":        "tool_result",
+                    "tool_use_id": block.id,
+                    "content":     "Context recorded.",
+                })
+
+        if tool_results:
+            messages.append({"role": "user", "content": tool_results})
+
+    logger.warning("Macro context synthesis failed — stock scoring will proceed without live macro context")
+    return None
+
+
 # ── Claude agentic loop ────────────────────────────────────────
 
-def run_claude_analysis(stocks_with_options, fund_scores):
+def run_claude_analysis(stocks_with_options, fund_scores, macro_context=None):
     """
     Call Claude with stock data to get:
     - Macro adjustment scores per stock
@@ -148,6 +247,16 @@ def run_claude_analysis(stocks_with_options, fund_scores):
         })
 
     today = datetime.date.today().isoformat()
+
+    # Build the macro context block from dynamic synthesis (or fallback note)
+    if macro_context and macro_context.get("summary_bullets"):
+        macro_lines = "\n".join(f"- {b}" for b in macro_context["summary_bullets"])
+    else:
+        macro_lines = (
+            "- Macro context unavailable for this run; apply general market knowledge.\n"
+            "- Treat uncertainty as a moderate headwind; prefer defensive sectors."
+        )
+
     prompt = f"""You are a Wheel Strategy research analyst. Today is {today}.
 
 I have pre-screened {len(stock_summaries)} stocks that passed fundamental hard filters.
@@ -155,13 +264,8 @@ Your job is to:
 1. Apply macro/geopolitical adjustment scores to each stock (tool: apply_macro_scores)
 2. Write trade theses and assign PROCEED/WATCH/SKIP recommendations (tool: write_trade_theses)
 
-Current macro context to consider:
-- Fed policy: rates elevated, data-dependent, pivot expectations for late 2026
-- Tariff regime: broad tariffs in effect since April 2025; domestic-focused companies favored
-- Inflation: cooling but sticky services inflation
-- Growth cycle: moderate expansion, consumer spending resilient
-- Leading sectors: Financials (rate sensitivity improving), Healthcare (defensive), Tech (AI tailwind), Industrials (reshoring)
-- Key risks: trade war escalation, recession risk if consumer cracks, geopolitical tensions
+Current macro context (researched as of {today}):
+{macro_lines}
 
 Stock data:
 {json.dumps(stock_summaries, indent=2)}
@@ -224,7 +328,7 @@ Use the tools provided. First call apply_macro_scores for all stocks, then call 
 
 # ── Report builder ─────────────────────────────────────────────
 
-def build_report(stocks_with_options, fund_scores, macro_data, thesis_data, scan_id, started_at):
+def build_report(stocks_with_options, fund_scores, macro_data, thesis_data, scan_id, started_at, macro_context=None):
     """Assemble the final JSON report."""
     stocks_out = []
     for s in stocks_with_options:
@@ -275,10 +379,12 @@ def build_report(stocks_with_options, fund_scores, macro_data, thesis_data, scan
         "watch_count":   len(watch),
         "skip_count":    len(skip),
         "macro_context": {
-            "fed_policy":     "Rates elevated, data-dependent. Late-2026 pivot expected.",
-            "tariff_regime":  "Broad tariffs in effect since April 2025. Domestic-focused companies favored.",
-            "inflation":      "Cooling but sticky. Services inflation remains above target.",
-            "leading_sectors": ["Financials", "Healthcare", "Technology", "Industrials"],
+            "fed_policy":      (macro_context or {}).get("fed_policy", ""),
+            "tariff_regime":   (macro_context or {}).get("tariff_regime", ""),
+            "inflation":       (macro_context or {}).get("inflation", ""),
+            "growth_cycle":    (macro_context or {}).get("growth_cycle", ""),
+            "leading_sectors": (macro_context or {}).get("leading_sectors", []),
+            "key_risks":       (macro_context or {}).get("key_risks", []),
         },
         "stocks": stocks_out,
     }
@@ -375,13 +481,17 @@ def handler(event, context):
     # Build fund_scores map
     fund_scores = {s["ticker"]: s["_fund_score"] for s in (stocks_with_options + top_candidates)}
 
-    # 6. Claude analysis (macro + thesis) — pass top 50 with options to keep context manageable
+    # 6a. Synthesize live macro context via Claude + web search
+    logger.info("Synthesizing macro context via web search...")
+    macro_context = get_dynamic_macro_context()
+
+    # 6b. Claude analysis (macro + thesis) — pass top 50 with options to keep context manageable
     analysis_set = stocks_with_options[:50]
     logger.info(f"Running Claude analysis on {len(analysis_set)} stocks...")
-    macro_data, thesis_data = run_claude_analysis(analysis_set, fund_scores)
+    macro_data, thesis_data = run_claude_analysis(analysis_set, fund_scores, macro_context)
 
     # 7. Build and write report
-    report = build_report(analysis_set, fund_scores, macro_data, thesis_data, scan_id, started_at)
+    report = build_report(analysis_set, fund_scores, macro_data, thesis_data, scan_id, started_at, macro_context)
 
     daily_key  = prefix + f"{scan_id}.json"
     latest_key = prefix + "latest.json"
