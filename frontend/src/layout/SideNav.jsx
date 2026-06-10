@@ -117,7 +117,7 @@ function NavItem({ to, label, iconD, badge, sideCollapsed }) {
           display: "flex",
           alignItems: "center",
           gap: sideCollapsed ? 0 : 9,
-          padding: sideCollapsed ? "6px 0" : "5px 14px",
+          padding: sideCollapsed ? "5px 0" : "4px 14px",
           justifyContent: sideCollapsed ? "center" : "flex-start",
           borderRadius: 10,
           border: "none",
@@ -175,7 +175,7 @@ function SectionLabel({ label, sideCollapsed, open, onToggle }) {
         background: "transparent",
         border: "none",
         cursor: "pointer",
-        padding: "12px 16px 4px",
+        padding: "8px 16px 3px",
         gap: 6,
         fontFamily: "'Manrope', sans-serif",
       }}
@@ -252,6 +252,7 @@ const d = {
   assetHub:     "M19 11H5m14 0a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2m14 0V9a2 2 0 0 0-2-2M5 11V9a2 2 0 0 1 2-2m0 0V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2M7 7h10",
   compass:      "M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm3.5 6.5-2 6-6 2 2-6 6-2z",
   paperTrading: "M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-6 9l2 2 4-4",
+  taxReturn:    "M9 14l2 2 4-4M7 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2M9 3h6a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z",
   accounts:     "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
 };
 
@@ -348,6 +349,7 @@ export default function SideNav({ activeAccount }) {
   const showAssets     = has("stocks") || has("crypto") || has("bullion") || has("futures") || has("options") || has("fixedIncome") || has("otherAssets");
   const showProtection = has("liabilities") || has("insurance");
   const showResearch   = has("wheelScan") || has("assetHub") || has("advisor") || has("paperTrading");
+  const showTax        = has("taxReturn");
   const isOwner        = !activeAccount || activeAccount.role === "owner";
 
   const W = sc ? 56 : 226;
@@ -370,11 +372,11 @@ export default function SideNav({ activeAccount }) {
       {showPortfolio && (
         <div style={{ marginBottom: 2 }}>
           {sc ? (
-            <div style={{ display: "flex", justifyContent: "center", padding: "10px 0 4px" }}>
+            <div style={{ display: "flex", justifyContent: "center", padding: "8px 0 2px" }}>
               <CollapseBtn collapsed={sc} onToggle={toggleSide} />
             </div>
           ) : (
-            <div style={{ display: "flex", alignItems: "center", padding: "10px 12px 2px", gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", padding: "8px 12px 2px", gap: 4 }}>
               <button
                 onClick={() => toggleSection("portfolio")}
                 style={{ flex: 1, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", cursor: "pointer", padding: "2px 4px", fontFamily: "'Manrope', sans-serif" }}
@@ -452,6 +454,18 @@ export default function SideNav({ activeAccount }) {
               {has("assetHub")     && <NavItem sideCollapsed={sc} to="/research/asset-hub"     label="Asset Hub"     iconD={d.assetHub} />}
               {has("advisor")      && <NavItem sideCollapsed={sc} to="/research/compass"       label="Compass AI"    iconD={d.compass} badge="AI" />}
               {has("paperTrading") && <NavItem sideCollapsed={sc} to="/research/paper-trading" label="Paper Trading" iconD={d.paperTrading} />}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── TAX ── */}
+      {showTax && (
+        <div style={{ marginBottom: 2 }}>
+          <SectionLabel label="Tax" sideCollapsed={sc} open={isOpen("tax")} onToggle={() => toggleSection("tax")} />
+          {(sc || isOpen("tax")) && (
+            <>
+              {has("taxReturn") && <NavItem sideCollapsed={sc} to="/tax/return" label="Tax Return" iconD={d.taxReturn} />}
             </>
           )}
         </div>

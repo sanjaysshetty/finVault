@@ -1,0 +1,10 @@
+{
+  "name": "tax-return-extractor",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "description": "S3-triggered Lambda — extracts structured data from tax document PDFs/images via Claude",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@aws-sdk/client-s3": "^3.0.0"
+  }
+}
