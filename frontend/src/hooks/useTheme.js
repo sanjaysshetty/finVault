@@ -28,7 +28,7 @@ function getAutoTheme() {
     const totalMins = h * 60 + m;
     // Dark between 18:30 (1110) and 06:30 (390) next morning
     return totalMins >= 18 * 60 + 30 || totalMins < 6 * 60 + 30 ? "dark" : "light";
-  } catch (_) {
+  } catch {
     return "dark"; // fallback if Intl unavailable
   }
 }
@@ -37,7 +37,7 @@ function getSavedPreference() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved === "light" || saved === "dark") return saved;
-  } catch (_) {}
+  } catch { /* localStorage unavailable */ }
   return null; // null = auto
 }
 
@@ -94,7 +94,7 @@ export function useTheme() {
   const toggle = useCallback(() => {
     setTheme((t) => {
       const next = t === "dark" ? "light" : "dark";
-      try { localStorage.setItem(STORAGE_KEY, next); } catch (_) {}
+      try { localStorage.setItem(STORAGE_KEY, next); } catch { /* localStorage unavailable */ }
       setIsManual(true);
       return next;
     });
@@ -102,7 +102,7 @@ export function useTheme() {
 
   /** Reset to automatic time-based switching. */
   const resetToAuto = useCallback(() => {
-    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* localStorage unavailable */ }
     setIsManual(false);
     setTheme(getAutoTheme());
   }, []);

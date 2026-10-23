@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard } from "../components/ui/MetricCard.jsx";
@@ -223,9 +223,15 @@ export default function FixedIncome() {
     ? formatPct((summary.dailyAccrual / summary.current) * 100)
     : null;
 
-  // Page filter uses "INDIA" but form dropdown uses "India" — map between them
+  // Page filter uses "INDIA" but form dropdown uses "India" — map between them.
+  // Adjusted during render (React's recommended pattern) instead of a
+  // useEffect, which would cause an extra render+commit pass.
   const formCountry = country === "INDIA" ? "India" : "USA";
-  useEffect(() => { setForm((f) => ({ ...f, country: formCountry })); }, [formCountry]);
+  const [prevFormCountry, setPrevFormCountry] = useState(formCountry);
+  if (formCountry !== prevFormCountry) {
+    setPrevFormCountry(formCountry);
+    setForm((f) => ({ ...f, country: formCountry }));
+  }
 
   function resetForm({ hide } = {}) {
     setForm({ ...DEFAULT_FORM, country: formCountry });

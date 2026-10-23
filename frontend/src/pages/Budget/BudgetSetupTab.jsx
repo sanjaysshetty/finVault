@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../../api/client.js";
 
@@ -265,12 +265,12 @@ function LineItemTable({ rows, onChange, onAdd, onRemove, addLabel }) {
 
 export default function BudgetSetupTab({ year }) {
   const qc = useQueryClient();
-  const currentMonth = new Date().getMonth() + 1;
 
   const [sections, setSections]   = useState(defaultSections);
   const [isDirty,  setIsDirty]    = useState(false);
   const [saveMsg,  setSaveMsg]    = useState("");
   const [collapsed, setCollapsed] = useState({ fixed: false, loans: false, investments: false, cc: false });
+  const [syncedData, setSyncedData] = useState(null);
 
   const defQ = useQuery({
     queryKey: queryKeys.budgetDefinition(year),
@@ -284,9 +284,13 @@ export default function BudgetSetupTab({ year }) {
     staleTime: 60_000,
   });
 
-  useEffect(() => {
-    if (defQ.data && !isDirty) setSections(apiToSections(defQ.data));
-  }, [defQ.data]);
+  // Adjust state during render (React's recommended pattern for syncing an
+  // async query result into local editable state) instead of a useEffect —
+  // avoids an extra render+commit pass and the stale-`isDirty`-closure risk.
+  if (defQ.data && defQ.data !== syncedData && !isDirty) {
+    setSyncedData(defQ.data);
+    setSections(apiToSections(defQ.data));
+  }
 
   const saveMutation = useMutation({
     mutationFn: (payload) => api.put(`/budget/definition/${year}`, payload),

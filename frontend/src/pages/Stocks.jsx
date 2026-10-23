@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
@@ -41,27 +41,64 @@ function normalizeTx(item) {
 // coveredCallCaps: { [symbol]: lowestOpenCCStrike } — passed in from options data
 function computeStockMetrics(transactions, quoteMap, coveredCallCaps = {}) {
   const bySymbol = {};
-  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const lots = {}; // FIFO lots per symbol: [{ date, qty, costPerUnit }]
+  let ytdShortTerm = 0, ytdLongTerm = 0;
+  const yearStart = `${new Date().getFullYear()}-01-01`;
+
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const txs = [...transactions].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
 
   for (const t of txs) {
     const symbol = String(t.symbol || "").toUpperCase(); if (!symbol) continue;
     const type = String(t.type || "BUY").toUpperCase();
     const shares = safeNum(t.shares, 0), price = safeNum(t.price, 0), fees = safeNum(t.fees, 0);
+    if (shares <= 0) continue;
     if (!bySymbol[symbol]) bySymbol[symbol] = { shares: 0, cost: 0, avg: 0, realized: 0, buys: 0, sells: 0 };
+    if (!lots[symbol]) lots[symbol] = [];
     const s = bySymbol[symbol];
+
     if (type === "BUY") {
-      s.shares += shares; s.cost += shares * price + fees; s.buys++; s.avg = s.shares > 0 ? s.cost / s.shares : 0;
+      const costPerUnit = (shares * price + fees) / shares;
+      lots[symbol].push({ date: t.date || "", qty: shares, costPerUnit });
+      s.shares += shares; s.cost += shares * costPerUnit; s.buys++;
+      s.avg = s.shares > 0 ? s.cost / s.shares : 0;
     } else if (type === "SELL") {
-      const ss = Math.min(shares, s.shares);
-      s.realized += ss * price - fees - ss * (s.avg || 0);
-      s.shares -= ss; s.cost -= ss * (s.avg || 0); s.sells++; s.avg = s.shares > 0 ? s.cost / s.shares : 0;
+      const netPerUnit = (shares * price - fees) / shares;
+      let rem = shares;
+      while (rem > 0 && lots[symbol].length > 0) {
+        const lot = lots[symbol][0];
+        const used = Math.min(rem, lot.qty);
+        const gain = used * (netPerUnit - lot.costPerUnit);
+        const days = lot.date ? (new Date(t.date) - new Date(lot.date)) / 86400000 : 0;
+        s.realized += gain;
+        if (t.date && t.date >= yearStart) {
+          if (days > 365) ytdLongTerm += gain; else ytdShortTerm += gain;
+        }
+        lot.qty -= used; rem -= used;
+        if (lot.qty <= 0) lots[symbol].shift();
+      }
+      s.shares = lots[symbol].reduce((sum, l) => sum + l.qty, 0);
+      s.cost   = lots[symbol].reduce((sum, l) => sum + l.qty * l.costPerUnit, 0);
+      s.avg    = s.shares > 0 ? s.cost / s.shares : 0;
+      s.sells++;
     }
   }
+
+  // Realized totals from ALL symbols (including fully-sold) before filtering
+  const totalRealized = Object.values(bySymbol).reduce((sum, s) => sum + s.realized, 0);
+  const ytdRealized = {
+    shortTerm: round2(ytdShortTerm),
+    longTerm:  round2(ytdLongTerm),
+    total:     round2(ytdShortTerm + ytdLongTerm),
+  };
 
   const holdings = Object.entries(bySymbol).map(([symbol, s]) => {
     const q = quoteMap[symbol];
     const spot = safeNum(q?.price, 0), prevClose = safeNum(q?.prevClose, 0);
-    // Apply covered call cap: if spot > CC strike, clamp effective price to strike
     const ccStrike = coveredCallCaps[symbol] ?? null;
     const ccActive = ccStrike !== null && spot > ccStrike;
     const effectiveSpot = ccActive ? ccStrike : spot;
@@ -78,7 +115,7 @@ function computeStockMetrics(transactions, quoteMap, coveredCallCaps = {}) {
   }).filter(h => h.shares > 0).sort((a, b) => b.marketValue - a.marketValue);
 
   const totals = holdings.reduce((acc, h) => {
-    acc.holdingValue += h.marketValue; acc.unrealized += h.unrealized; acc.realized += h.realized;
+    acc.holdingValue += h.marketValue; acc.unrealized += h.unrealized;
     acc.totalCost += h.shares * (h.avgCost || 0);
     const effPrev = h.effectivePrevClose;
     if (effPrev > 0) {
@@ -87,54 +124,17 @@ function computeStockMetrics(transactions, quoteMap, coveredCallCaps = {}) {
       acc.prevDayValue += h.shares * effPrev;
     }
     return acc;
-  }, { holdingValue: 0, unrealized: 0, realized: 0, dayGL: 0, hasDayGL: false, totalCost: 0, prevDayValue: 0 });
+  }, { holdingValue: 0, unrealized: 0, dayGL: 0, hasDayGL: false, totalCost: 0, prevDayValue: 0 });
 
   return {
     holdings,
+    ytdRealized,
     totals: {
       holdingValue: round2(totals.holdingValue), unrealized: round2(totals.unrealized),
-      realized: round2(totals.realized), dayGL: totals.hasDayGL ? round2(totals.dayGL) : null,
+      realized: round2(totalRealized), dayGL: totals.hasDayGL ? round2(totals.dayGL) : null,
       totalCost: round2(totals.totalCost), prevDayValue: round2(totals.prevDayValue),
     },
   };
-}
-
-/* FIFO lot tracker — YTD realized gains split into short / long term */
-function computeStockYTDRealized(transactions) {
-  const year = new Date().getFullYear();
-  const yearStart = `${year}-01-01`;
-  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
-  const lots = {}; // symbol -> [{date, qty, costPerUnit}]
-  let shortTerm = 0, longTerm = 0;
-
-  for (const t of txs) {
-    const sym = String(t.symbol || "").toUpperCase().trim();
-    if (!sym) continue;
-    const type = String(t.type || "BUY").toUpperCase();
-    const qty = safeNum(t.shares, 0), price = safeNum(t.price, 0), fees = safeNum(t.fees, 0);
-    if (qty <= 0) continue;
-    if (!lots[sym]) lots[sym] = [];
-
-    if (type === "BUY") {
-      lots[sym].push({ date: t.date || "", qty, costPerUnit: (qty * price + fees) / qty });
-    } else if (type === "SELL") {
-      const netPerUnit = (qty * price - fees) / qty;
-      let rem = qty;
-      const isCY = t.date && t.date >= yearStart;
-      while (rem > 0 && lots[sym].length > 0) {
-        const lot = lots[sym][0];
-        const used = Math.min(rem, lot.qty);
-        if (isCY) {
-          const gain = used * (netPerUnit - lot.costPerUnit);
-          const days = lot.date ? (new Date(t.date) - new Date(lot.date)) / 86400000 : 0;
-          if (days > 365) longTerm += gain; else shortTerm += gain;
-        }
-        lot.qty -= used; rem -= used;
-        if (lot.qty <= 0) lots[sym].shift();
-      }
-    }
-  }
-  return { shortTerm: round2(shortTerm), longTerm: round2(longTerm), total: round2(shortTerm + longTerm) };
 }
 
 /* ── Component ───────────────────────────────────────────── */
@@ -147,8 +147,14 @@ export default function Stocks() {
   const [form, setForm]           = useState(DEFAULT_FORM);
   const [editingId, setEditingId] = useState(null);
 
-  // Sync page-level country filter → new transaction default country
-  useEffect(() => { setForm((f) => ({ ...f, country })); }, [country]);
+  // Sync page-level country filter → new transaction default country.
+  // Adjusted during render (React's recommended pattern) instead of a
+  // useEffect, which would cause an extra render+commit pass.
+  const [prevCountry, setPrevCountry] = useState(country);
+  if (country !== prevCountry) {
+    setPrevCountry(country);
+    setForm((f) => ({ ...f, country }));
+  }
   const [showForm, setShowForm]   = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [error, setError]         = useState("");
@@ -279,8 +285,6 @@ export default function Stocks() {
   );
 
   const metrics = useMemo(() => computeStockMetrics(txByCountry, quotes, coveredCallCaps), [txByCountry, quotes, coveredCallCaps]);
-  const ytd = useMemo(() => computeStockYTDRealized(txByCountry), [txByCountry]);
-  const currentYear = String(new Date().getFullYear());
 
   const filteredSortedTx = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -380,7 +384,7 @@ export default function Stocks() {
                 <MetricCard label="Total Holding Value"    value={formatMoney(metrics.totals.holdingValue)} sub="Based on latest quotes" accent />
                 <MetricCard label="Unrealized Gain / Loss" value={formatMoney(metrics.totals.unrealized)}   pct={unrealizedPct} sub="Spot vs avg cost"       valueClass={plClass(metrics.totals.unrealized)} />
                 <MetricCard label="Day's Gain / Loss"      value={metrics.totals.dayGL != null ? formatMoney(metrics.totals.dayGL) : "—"} pct={dayGLPct} sub="vs. yesterday's close" valueClass={metrics.totals.dayGL != null ? plClass(metrics.totals.dayGL) : "text-slate-500"} />
-                <RealizedGainCard total={ytd.total} shortTerm={ytd.shortTerm} longTerm={ytd.longTerm} year={currentYear} currency={currency} />
+                <RealizedGainCard total={metrics.ytdRealized.total} shortTerm={metrics.ytdRealized.shortTerm} longTerm={metrics.ytdRealized.longTerm} currency={currency} />
               </div>
             );
           })()}

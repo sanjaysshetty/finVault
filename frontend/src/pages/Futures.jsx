@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
@@ -233,8 +233,14 @@ export default function Futures() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(BLANK_FORM);
 
-  // Sync page-level country filter → new transaction default country
-  useEffect(() => { setForm((f) => ({ ...f, country })); }, [country]);
+  // Sync page-level country filter → new transaction default country.
+  // Adjusted during render (React's recommended pattern) instead of a
+  // useEffect, which would cause an extra render+commit pass.
+  const [prevCountry, setPrevCountry] = useState(country);
+  if (country !== prevCountry) {
+    setPrevCountry(country);
+    setForm((f) => ({ ...f, country }));
+  }
 
   const [search, setSearch] = useState("");
   const [tickerFilter, setTickerFilter] = useState("");

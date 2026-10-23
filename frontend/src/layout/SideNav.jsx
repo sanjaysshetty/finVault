@@ -325,7 +325,7 @@ export default function SideNav({ activeAccount }) {
   function toggleSide() {
     setSideCollapsed(prev => {
       const next = !prev;
-      try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch {}
+      try { localStorage.setItem(COLLAPSED_KEY, String(next)); } catch { /* localStorage unavailable */ }
       return next;
     });
   }
@@ -333,7 +333,7 @@ export default function SideNav({ activeAccount }) {
   function toggleSection(key) {
     setSections(prev => {
       const next = { ...prev, [key]: !(prev[key] ?? true) };
-      try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(next)); } catch {}
+      try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(next)); } catch { /* localStorage unavailable */ }
       return next;
     });
   }

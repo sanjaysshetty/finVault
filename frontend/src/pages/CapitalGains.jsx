@@ -364,7 +364,7 @@ export default function CapitalGains() {
     const futures = calcFutures(fTx, year);
     const schedD  = computeScheduleD(stocks, crypto, bullion, options, futures);
     return { stocks, crypto, bullion, options, futures, schedD };
-  }, [results, year, isLoading, isError]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [results, year, isLoading, isError]);
 
   const tax = gains ? estimateTax(gains.schedD, bracket) : null;
 

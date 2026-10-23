@@ -65,7 +65,7 @@ export async function apiFetch(path, { method = "GET", body, accountId: accountI
   if (!res.ok) {
     const err = new Error(`API ${method} ${path} → ${res.status}`);
     err.status = res.status;
-    try { err.detail = await res.json(); } catch (_) {}
+    try { err.detail = await res.json(); } catch { /* response body not JSON */ }
     throw err;
   }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
@@ -126,7 +126,12 @@ function computeCryptoMetrics(transactions, spotMap, prevSpotMap = {}) {
 function computeCryptoYTDRealized(transactions) {
   const year = new Date().getFullYear();
   const yearStart = `${year}-01-01`;
-  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const txs = [...transactions].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
   const lots = {}; // symbol -> [{date, qty, costPerUnit}]
   let shortTerm = 0, longTerm = 0;
 
@@ -178,8 +183,14 @@ export default function Crypto() {
   const [sortDir, setSortDir]     = useState("desc");
   const [holdingsTab, setHoldingsTab] = useState("my"); // "my" | "rh" | "diff"
 
-  // Sync page-level country filter → new transaction default country
-  useEffect(() => { setForm((f) => ({ ...f, country })); }, [country]);
+  // Sync page-level country filter → new transaction default country.
+  // Adjusted during render (React's recommended pattern) instead of a
+  // useEffect, which would cause an extra render+commit pass.
+  const [prevCountry, setPrevCountry] = useState(country);
+  if (country !== prevCountry) {
+    setPrevCountry(country);
+    setForm((f) => ({ ...f, country }));
+  }
 
   const queryClient = useQueryClient();
 
@@ -660,7 +671,6 @@ export default function Crypto() {
                         const isMatch   = d.status === "match";
                         const isMissRH  = d.status === "missing_rh";
                         const isMissEnt = d.status === "missing_entry";
-                        const isQtyDiff = d.status === "qty_diff";
 
                         const statusCls = isMatch   ? "bg-green-500/10 text-green-400 border-green-500/20"
                                         : isMissEnt ? "bg-blue-500/10  text-blue-300  border-blue-500/20"

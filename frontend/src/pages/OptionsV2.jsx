@@ -366,7 +366,6 @@ function PositionRow({ pos, metrics, formatMoney, canWrite, onClose, onRoll, onD
     : legacyClosed ? (legs[0].closeDate || "—") : "—";
 
   const plValue = metrics.realizedPL !== null ? metrics.realizedPL : metrics.unrealizedPL;
-  const isUnrealized = metrics.realizedPL === null;
 
   // Table display: cap at 2 decimals, strip trailing zeros
   const fmt2 = (v) => {
@@ -514,8 +513,13 @@ export default function OptionsV2() {
   // Live marks
   const [marks, setMarks] = useState({});
 
-  // Sync country → open draft
-  useEffect(() => { setOpenDraft(d => ({ ...d, country })); }, [country]);
+  // Sync country → open draft. Adjusted during render (React's recommended
+  // pattern) instead of a useEffect, which would cause an extra render+commit pass.
+  const [prevCountry, setPrevCountry] = useState(country);
+  if (country !== prevCountry) {
+    setPrevCountry(country);
+    setOpenDraft(d => ({ ...d, country }));
+  }
 
   const queryClient = useQueryClient();
 

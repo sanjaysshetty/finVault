@@ -340,7 +340,7 @@ export default function Options() {
       });
     }
     return out;
-  }, [computedBase, showOpenOnly, tickerFilter, sortMode]);
+  }, [computedBase, showOpenOnly, tickerFilter, sortMode, sortSpec]);
 
   /* ---------- Actions ---------- */
 

@@ -106,7 +106,12 @@ function computeBullion(transactions, spot, pricesData) {
 // coveredCallCaps: { [symbol]: lowestOpenCCStrike } — caps unrealized + day G/L when spot > strike
 function computeStocks(transactions, quoteMap, coveredCallCaps = {}) {
   const bySym = {};
-  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const txs = [...transactions].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
   for (const t of txs) {
     const sym = String(t.symbol || "").toUpperCase().trim(); if (!sym) continue;
     const type = String(t.type || "BUY").toUpperCase();
