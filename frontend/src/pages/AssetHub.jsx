@@ -1,22 +1,11 @@
 import { useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, queryKeys } from "../api/client.js";
+import { api } from "../api/client.js";
 import { PageHeader } from "../components/ui/PageHeader.jsx";
 import { PageIcons } from "../components/ui/PageIcons.jsx";
 import { formatMoney, safeNum } from "../utils/format.js";
 import puppySvg from "../assets/puppy.svg";
 
-/* ── helpers ─────────────────────────────────────────────────── */
-
-function pct(v, decimals = 1) {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  return `${(Number(v) * 100).toFixed(decimals)}%`;
-}
-
-function num(v, decimals = 1) {
-  if (v == null || !Number.isFinite(Number(v))) return "—";
-  return Number(v).toFixed(decimals);
-}
 
 function dollar(v) {
   if (v == null || !Number.isFinite(Number(v))) return "—";

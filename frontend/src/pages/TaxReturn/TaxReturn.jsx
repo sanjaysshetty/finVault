@@ -439,7 +439,7 @@ function FileAttach({ file, onFileChange, hasExisting }) {
 }
 
 /* ─── Modals ─────────────────────────────────────────────────── */
-function PayslipModal({ period, person, existing, doc, isBonus: initialIsBonus, onSave, onClose }) {
+function PayslipModal({ period, existing, doc, isBonus: initialIsBonus, onSave, onClose }) {
   const [file, setFile] = useState(null);
   const [form, setForm] = useState({
     employer:         existing?.employer         ?? "",
@@ -672,7 +672,24 @@ function ConfigModal({ config, year, onSave, onClose }) {
   );
 }
 
-function CreditsModal({ config, selfName, spouseName, year, onSave, onClose }) {
+function HRow({ label, note, prefix, value, onChange, type = "number" }) {
+  return (
+    <div className="grid grid-cols-[200px_1fr] items-start gap-3">
+      <div className="pt-2">
+        <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide leading-tight">{label}</div>
+        {note && <div className="text-[10px] text-slate-600 mt-1 leading-snug">{note}</div>}
+      </div>
+      <div className="relative">
+        {prefix && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">{prefix}</span>}
+        <input type={type} value={value ?? ""} onChange={e => onChange(e.target.value)}
+          className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
+          style={{ paddingLeft: prefix ? 24 : 12, paddingRight: 8 }} />
+      </div>
+    </div>
+  );
+}
+
+function CreditsModal({ config, selfName, spouseName, onSave, onClose }) {
   const [form, setForm] = useState({
     numChildrenUnder17:    config?.numChildrenUnder17    ?? "",
     numOtherDependents:    config?.numOtherDependents    ?? "",
@@ -685,23 +702,6 @@ function CreditsModal({ config, selfName, spouseName, year, onSave, onClose }) {
     dependentCareExpenses: config?.dependentCareExpenses ?? "",
   });
   const set = k => v => setForm(f => ({ ...f, [k]: v }));
-
-  function HRow({ label, note, prefix, value, onChange, type = "number" }) {
-    return (
-      <div className="grid grid-cols-[200px_1fr] items-start gap-3">
-        <div className="pt-2">
-          <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide leading-tight">{label}</div>
-          {note && <div className="text-[10px] text-slate-600 mt-1 leading-snug">{note}</div>}
-        </div>
-        <div className="relative">
-          {prefix && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm">{prefix}</span>}
-          <input type={type} value={value ?? ""} onChange={e => onChange(e.target.value)}
-            className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500/50"
-            style={{ paddingLeft: prefix ? 24 : 12, paddingRight: 8 }} />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <FormModal title="Credits & Deductions" onClose={onClose} wide>
@@ -955,7 +955,7 @@ export default function TaxReturn() {
       calcOptions(oTx, year),
       calcFutures(fTx, year),
     );
-  }, [txLoading, txResults, year]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [txLoading, txResults, year]);
 
   const summary = useMemo(() => computeTaxSummary(docs, config, schedD, year), [docs, config, schedD, year]);
 

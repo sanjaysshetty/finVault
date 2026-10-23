@@ -1,4 +1,5 @@
 /* PageIcons — same paths as SideNav, rendered at w-5 h-5 for page headers */
+// eslint-disable-next-line react-refresh/only-export-components -- static icon map, not meant to hot-reload as a component
 function Icon({ d }) {
   return (
     <svg

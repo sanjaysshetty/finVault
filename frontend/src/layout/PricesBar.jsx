@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
-import { safeNum } from "../utils/format.js";
 
 /* ──────────────────────────────────────────────────────────────
    Helper: extract array from various API response shapes
@@ -84,93 +83,6 @@ function midFromBidAsk(bid, ask) {
   return (b + a) / 2;
 }
 
-function extractCryptoSpots(crypto) {
-  const out = {};
-  // Phase 3 dict format
-  if (crypto && !Array.isArray(crypto) && typeof crypto === "object") {
-    for (const [sym, v] of Object.entries(crypto)) {
-      const price = safeNum(v?.price, 0);
-      if (price > 0) out[sym.toUpperCase()] = price;
-    }
-    return out;
-  }
-  // Legacy Robinhood array format
-  const list = extractList(crypto);
-  if (!list) return out;
-  for (const row of list) {
-    const sym = String(row?.symbol || "").toUpperCase().trim();
-    if (!sym) continue;
-    const { bid, ask } = pickBidAsk(row);
-    const mid = midFromBidAsk(bid, ask);
-    const spot = Number.isFinite(mid) ? mid : safeNum(row?.price, 0);
-    if (spot > 0) out[sym] = spot;
-  }
-  return out;
-}
-
-/* ──────────────────────────────────────────────────────────────
-   Portfolio value computation
-   ────────────────────────────────────────────────────────────── */
-function isPropertyOtherAsset(it) {
-  const cat = String(it?.category    || "").trim().toUpperCase();
-  const key = String(it?.categoryKey || "").trim().toUpperCase();
-  return cat === "PROPERTY" || key === "PROPERTY";
-}
-
-function computePortfolioValue({ fiItems, bullionTx, stockTx, cryptoTx, otherItems, pricesData }) {
-  if (!pricesData) return null;
-
-  const spot = {
-    GOLD:   safeNum(pricesData.gold?.price,   0),
-    SILVER: safeNum(pricesData.silver?.price, 0),
-  };
-  const stockQuotes = pricesData.stocks     || {};
-  const cryptoSpots = extractCryptoSpots(pricesData.crypto);
-
-  // Fixed Income
-  let total = 0;
-  for (const it of fiItems)   total += safeNum(it.currentValue, 0);
-
-  // Bullion
-  const metalState = { GOLD: 0, SILVER: 0 };
-  for (const t of [...bullionTx].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))) {
-    const m = String(t.metal || "").toUpperCase();
-    const qty = safeNum(t.quantityOz, 0);
-    if (String(t.type || "").toUpperCase() === "BUY")  metalState[m] = (metalState[m] || 0) + qty;
-    if (String(t.type || "").toUpperCase() === "SELL") metalState[m] = Math.max(0, (metalState[m] || 0) - qty);
-  }
-  total += metalState.GOLD * spot.GOLD + metalState.SILVER * spot.SILVER;
-
-  // Stocks
-  const stockShares = {};
-  for (const t of [...stockTx].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))) {
-    const sym = String(t.symbol || "").toUpperCase().trim();
-    if (!sym) continue;
-    const shares = safeNum(t.shares, 0);
-    stockShares[sym] = (stockShares[sym] || 0) + (String(t.type || "BUY").toUpperCase() === "BUY" ? shares : -Math.min(shares, stockShares[sym] || 0));
-  }
-  for (const [sym, shares] of Object.entries(stockShares)) total += shares * safeNum(stockQuotes[sym]?.price, 0);
-
-  // Crypto
-  const cryptoQty = {};
-  for (const t of [...cryptoTx].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))) {
-    let sym = String(t.symbol || "").toUpperCase().trim();
-    if (!sym) continue;
-    if (!sym.includes("-")) sym = `${sym}-USD`;
-    const qty = safeNum(t.quantity, 0);
-    cryptoQty[sym] = (cryptoQty[sym] || 0) + (String(t.type || "BUY").toUpperCase() === "BUY" ? qty : -Math.min(qty, cryptoQty[sym] || 0));
-  }
-  for (const [sym, qty] of Object.entries(cryptoQty)) total += qty * safeNum(cryptoSpots[sym], 0);
-
-  // Other Assets (exclude Property)
-  for (const it of otherItems) {
-    if (isPropertyOtherAsset(it)) continue;
-    total += safeNum(it?.value ?? it?.assetValue, 0);
-  }
-
-  return Number.isFinite(total) ? total : null;
-}
-
 /* ──────────────────────────────────────────────────────────────
    MiniCard UI
    ────────────────────────────────────────────────────────────── */
@@ -190,17 +102,18 @@ function MiniCard({ label, value, accent, title }) {
    ────────────────────────────────────────────────────────────── */
 export default function PricesBar() {
   // ── Asset queries (shared cache with Portfolio + individual pages)
-  const { data: fiRes }      = useQuery({ queryKey: queryKeys.fixedIncome(),  queryFn: () => api.get("/assets/fixedincome") });
-  const { data: bullRes }    = useQuery({ queryKey: queryKeys.bullionTx(),    queryFn: () => api.get("/assets/bullion/transactions") });
-  const { data: stockRes }   = useQuery({ queryKey: queryKeys.stocksTx(),     queryFn: () => api.get("/assets/stocks/transactions") });
-  const { data: cryptoRes }  = useQuery({ queryKey: queryKeys.cryptoTx(),     queryFn: () => api.get("/assets/crypto/transactions") });
-  const { data: otherRes }   = useQuery({ queryKey: queryKeys.otherAssets(),  queryFn: () => api.get("/assets/otherassets") });
+  // Fixed income / bullion / other-assets are fetched here purely to warm the
+  // shared React Query cache for Portfolio and friends (see queryKeys) — not
+  // consumed locally, so their results aren't bound to a variable.
+  useQuery({ queryKey: queryKeys.fixedIncome(), queryFn: () => api.get("/assets/fixedincome") });
+  useQuery({ queryKey: queryKeys.bullionTx(),   queryFn: () => api.get("/assets/bullion/transactions") });
+  useQuery({ queryKey: queryKeys.otherAssets(), queryFn: () => api.get("/assets/otherassets") });
 
-  const fiItems    = useMemo(() => extractItems(fiRes),     [fiRes]);
-  const bullionTx  = useMemo(() => extractItems(bullRes),   [bullRes]);
-  const stockTx    = useMemo(() => extractItems(stockRes),  [stockRes]);
-  const cryptoTx   = useMemo(() => extractItems(cryptoRes), [cryptoRes]);
-  const otherItems = useMemo(() => extractItems(otherRes),  [otherRes]);
+  const { data: stockRes }   = useQuery({ queryKey: queryKeys.stocksTx(),  queryFn: () => api.get("/assets/stocks/transactions") });
+  const { data: cryptoRes }  = useQuery({ queryKey: queryKeys.cryptoTx(),  queryFn: () => api.get("/assets/crypto/transactions") });
+
+  const stockTx  = useMemo(() => extractItems(stockRes),  [stockRes]);
+  const cryptoTx = useMemo(() => extractItems(cryptoRes), [cryptoRes]);
 
   // ── Derive symbols for the /prices call
   const stockSymbols = useMemo(() => {

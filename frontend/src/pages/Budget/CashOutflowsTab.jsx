@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../../api/client.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -102,8 +102,8 @@ export default function CashOutflowsTab({ year }) {
     staleTime: 30_000,
   });
 
-  const planned = data?.planned || [];
-  const cc      = data?.cc      || [];
+  const planned = useMemo(() => data?.planned || [], [data]);
+  const cc      = useMemo(() => data?.cc      || [], [data]);
   const summary = data?.summary || {};
 
   // Baseline (server-loaded) values — recomputes whenever data changes

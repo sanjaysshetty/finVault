@@ -276,7 +276,7 @@ export default function MobileDrawer({ open, onClose, activeAccount }) {
                 textDecoration: "none",
               })}
             >
-              {({ isActive }) => (
+              {() => (
                 <>
                   <UserAvatar />
                   <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const { resolveContext, assertWrite } = require("finvault-shared/resolveContext");
 
 const s3 = new S3Client({});
 
@@ -42,21 +43,15 @@ function extFromContentType(ct, fallbackName) {
   return m ? m[1].toLowerCase() : "";
 }
 
-function getUserIdFromJwt(event) {
-  // HTTP API JWT authorizer
-  const claims = event?.requestContext?.authorizer?.jwt?.claims || {};
-  // Prefer sub; fallback to username
-  return claims.sub || claims["cognito:username"] || "";
-}
-
 exports.handler = async (event) => {
   if (event?.requestContext?.http?.method === "OPTIONS") {
     return json(200, { ok: true });
   }
 
   try {
-    const userId = getUserIdFromJwt(event);
-    if (!userId) return json(401, { error: "Unauthorized" });
+    const ctx = await resolveContext(event);
+    assertWrite(ctx, "receiptsLedger");
+    const { accountId, userId } = ctx;
 
     const bucket = process.env.RECEIPTS_BUCKET || "finvault-receipts-sandbox";
     const prefix = process.env.RECEIPTS_PREFIX || "receipts/";
@@ -77,17 +72,21 @@ exports.handler = async (event) => {
     const rand = crypto.randomBytes(6).toString("hex");
     const ext = extFromContentType(contentType, filename) || "";
 
-    // ✅ Put userId into key path (easiest + efficient)
-    // receipts/<userId>/<timestamp>-<rand>.<ext>
-    const key = `${prefix}${userId}/${ts}-${rand}${ext}`;
+    // Scope uploads by accountId so shared-account members land in the same
+    // ledger prefix as the owner (not the per-user Cognito sub).
+    // receipts/<accountId>/<timestamp>-<rand>.<ext>
+    const key = `${prefix}${accountId}/${ts}-${rand}${ext}`;
 
     const cmd = new PutObjectCommand({
       Bucket: bucket,
       Key: key,
       ContentType: contentType,
-      // ✅ userId metadata (also useful if you later change key scheme)
       Metadata: {
-        userid: userId,
+        // receipt-extractor reads "userid" as the ledger owner key — it must be
+        // accountId to match the shim pattern used everywhere else (DDB "userId"
+        // attribute actually stores accountId).
+        userid: accountId,
+        uploaderid: userId,
       },
     });
 
@@ -95,6 +94,8 @@ exports.handler = async (event) => {
 
     return json(200, { uploadUrl, key, bucket, expiresIn, contentType });
   } catch (err) {
+    if (err?.statusCode === 401) return json(401, { error: "Unauthorized" });
+    if (err?.statusCode === 403) return json(403, { error: err.message || "Forbidden" });
     console.error("upload-url error:", err);
     return json(500, { error: "Failed to create presigned url", detail: String(err?.message || err) });
   }

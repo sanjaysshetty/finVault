@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { MetricCard, RealizedGainCard } from "../components/ui/MetricCard.jsx";
@@ -79,7 +79,12 @@ function computeBullionMetrics(transactions, spot, prevSpot = {}) {
 function computeBullionYTDRealized(transactions) {
   const year = new Date().getFullYear();
   const yearStart = `${year}-01-01`;
-  const txs = [...transactions].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const txs = [...transactions].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
   const lots = {}; // metal -> [{date, qty, costPerUnit}]
   let shortTerm = 0, longTerm = 0;
 
@@ -127,8 +132,14 @@ export default function Bullion() {
   const [sortKey, setSortKey]     = useState("date");
   const [sortDir, setSortDir]     = useState("desc");
 
-  // Sync page-level country filter → new transaction default country
-  useEffect(() => { setForm((f) => ({ ...f, country })); }, [country]);
+  // Sync page-level country filter → new transaction default country.
+  // Adjusted during render (React's recommended pattern) instead of a
+  // useEffect, which would cause an extra render+commit pass.
+  const [prevCountry, setPrevCountry] = useState(country);
+  if (country !== prevCountry) {
+    setPrevCountry(country);
+    setForm((f) => ({ ...f, country }));
+  }
 
   const queryClient = useQueryClient();
 

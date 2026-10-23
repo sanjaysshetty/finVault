@@ -34,6 +34,7 @@ function Field({ label, children, hint, hintWarn }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars -- deliberately drops caller className so our fixed styling always wins
 function Input({ className: _cls, ...props }) {
   return (
     <input
@@ -65,6 +66,10 @@ export default function PaperStageOrderModal({ rec, onConfirm, onCancel, isPendi
 
   useEffect(() => {
     if (!rec?.ticker) return;
+    // Resetting loading/price state before kicking off the fetch is the
+    // correct pattern here (not derived-state-from-prop) — it's the start
+    // of an external data fetch tied to this effect's own cleanup/rerun.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPriceLoading(true);
     setLivePrice(null);
     api.get(`/paper-trade/quote/${encodeURIComponent(rec.ticker)}`)

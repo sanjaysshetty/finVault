@@ -287,7 +287,7 @@ function loadAccepted() {
   catch { return new Set(); }
 }
 function saveAccepted(s) {
-  try { localStorage.setItem(ACCEPTED_LS, JSON.stringify([...s])); } catch {}
+  try { localStorage.setItem(ACCEPTED_LS, JSON.stringify([...s])); } catch { /* localStorage unavailable */ }
 }
 
 /* ================================================================
@@ -375,8 +375,6 @@ export default function Spending() {
       category: catMap[item.storeName] || "",
     }));
 
-    const dates = categorizedItems.map(i => i.date).filter(Boolean).sort();
-    const latestDate = dates[dates.length - 1];
     let done = 0;
     const BATCH = 10;
     for (let i = 0; i < categorizedItems.length; i += BATCH) {
@@ -794,7 +792,7 @@ export default function Spending() {
                           </button>
                         </div>
                         {isDirty && (
-                          <button onClick={() => saveReceiptDate(g.receipt, pendingDate)} disabled={receiptDateSaving[g.receipt]} className={saveBtnCls(receiptDateSaving[g.receipt])}>
+                          <button onClick={() => saveReceiptDate(g.receipt, pendingDate)} disabled={receiptDateSaving[g.receipt]} className={SAVE_BTN_CLS}>
                             {receiptDateSaving[g.receipt] ? "…" : "Apply"}
                           </button>
                         )}
@@ -881,10 +879,10 @@ export default function Spending() {
                                   <input value={amt} onChange={(e) => setEdit(rowKey, "amount", e.target.value)} style={{ ...inlineInput, textAlign: "right" }} />
                                 </td>
                                 <td className="px-2 py-2.5 align-top text-right whitespace-nowrap">
-                                  <button onClick={() => saveRow(row)} disabled={!hasEdits(rowKey) || saving[rowKey]} className={saveBtnCls(!hasEdits(rowKey) || saving[rowKey])}>
+                                  <button onClick={() => saveRow(row)} disabled={!hasEdits(rowKey) || saving[rowKey]} className={SAVE_BTN_CLS}>
                                     {saving[rowKey] ? "Saving…" : "Save"}
                                   </button>
-                                  {canWrite && <button onClick={() => setDeleteModal({ title: "Delete Item", message: `Delete "${row.productDescription || row.sk}"?`, onConfirm: () => deleteRow(row) })} disabled={deleting[rowKey]} className={delBtnCls(deleting[rowKey])}>
+                                  {canWrite && <button onClick={() => setDeleteModal({ title: "Delete Item", message: `Delete "${row.productDescription || row.sk}"?`, onConfirm: () => deleteRow(row) })} disabled={deleting[rowKey]} className={DEL_BTN_CLS}>
                                     {deleting[rowKey] ? "Deleting…" : "Delete"}
                                   </button>}
                                 </td>
@@ -942,9 +940,7 @@ function btnCls(disabled) {
       : "border-white/[0.08] bg-[#0F1729] text-slate-200 hover:bg-white/[0.06] cursor-pointer",
   ].join(" ");
 }
-function saveBtnCls(disabled) {
-  return "mr-2 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-secondary";
-}
-function delBtnCls(disabled) {
-  return "px-2.5 py-1.5 rounded-lg text-xs font-bold border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap";
-}
+// Actual disabled state comes from the <button disabled> attribute (Tailwind's
+// disabled: variants key off that) — these classes are the same regardless of input.
+const SAVE_BTN_CLS = "mr-2 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap fv-btn-secondary";
+const DEL_BTN_CLS = "px-2.5 py-1.5 rounded-lg text-xs font-bold border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap";

@@ -65,7 +65,7 @@ function _plCls(v) { return (Number(v) || 0) >= 0 ? "text-green-400" : "text-red
  *   year       {string}  e.g. "2026"
  *   className  {string?} extra wrapper classes
  */
-export function RealizedGainCard({ total = 0, shortTerm = 0, longTerm = 0, year = "", currency = "USD", className = "" }) {
+export function RealizedGainCard({ total = 0, shortTerm = 0, longTerm = 0, currency = "USD", className = "" }) {
   const [expanded, setExpanded] = useState(false);
 
   return (

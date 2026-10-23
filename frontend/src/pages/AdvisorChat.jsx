@@ -186,7 +186,7 @@ function IframeAutoHeight({ srcDoc, onError }) {
       iframe.removeEventListener("load", attach);
       observer?.disconnect();
     };
-  }, [srcDoc]);
+  }, [srcDoc, onError]);
 
   return (
     <iframe
@@ -208,6 +208,7 @@ function AssistantBubble({ content, cacheKey }) {
   const [renderErr, setRenderErr] = useState(false);
   const [retrying,  setRetrying]  = useState(false);
   const [html,      setHtml]      = useState(content);
+  const handleIframeError = useCallback(() => setRenderErr(true), []);
 
   const iframeSrc = `<!DOCTYPE html>
 <html>
@@ -281,7 +282,7 @@ function AssistantBubble({ content, cacheKey }) {
         ) : (
           <IframeAutoHeight
             srcDoc={iframeSrc}
-            onError={() => setRenderErr(true)}
+            onError={handleIframeError}
           />
         )}
       </div>

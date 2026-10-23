@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys }       from "../../api/client.js";
 import { PageHeader }           from "../../components/ui/PageHeader.jsx";
@@ -78,7 +78,7 @@ export default function PaperTradingDesk() {
     return null;
   }, [period, customTo]);
 
-  function filterByDate(orders, getDate) {
+  const filterByDate = useCallback((orders, getDate) => {
     return orders.filter((o) => {
       const d = getDate(o) ? new Date(getDate(o)) : null;
       if (!d) return true;
@@ -86,7 +86,7 @@ export default function PaperTradingDesk() {
       if (pEnd   && d > pEnd)   return false;
       return true;
     });
-  }
+  }, [pStart, pEnd]);
 
   const submittedOrders = useMemo(
     () => allOrders.filter((o) => o.status === "SUBMITTED"),
@@ -94,14 +94,14 @@ export default function PaperTradingDesk() {
   );
   const filledOrders = useMemo(
     () => filterByDate(allOrders.filter((o) => o.status === "FILLED"), (o) => o.filledAt),
-    [allOrders, pStart, pEnd]  // eslint-disable-line
+    [allOrders, filterByDate]
   );
   const closedOrders = useMemo(
     () => filterByDate(
       allOrders.filter((o) => ["CLOSED", "EXPIRED", "CANCELLED"].includes(o.status)),
       historyDate
     ),
-    [allOrders, pStart, pEnd]  // eslint-disable-line
+    [allOrders, filterByDate]
   );
 
   // Metrics are always all-time — independent of the period filter

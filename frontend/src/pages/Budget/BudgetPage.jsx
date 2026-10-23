@@ -32,8 +32,7 @@ export default function BudgetPage() {
   const [copying,  setCopying] = useState(false);
   const [copyMsg,  setCopyMsg] = useState("");
 
-  const isPastYear   = year < CURRENT_YEAR;
-  const isFutureYear = year > CURRENT_YEAR;
+  const isPastYear = year < CURRENT_YEAR;
 
   function changeYear(delta) {
     setYear(y => y + delta);

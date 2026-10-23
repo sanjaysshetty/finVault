@@ -12,7 +12,12 @@ export function toArr(data) {
 
 export function calcStocks(txs, year) {
   const [yS, yE] = [`${year}-01-01`, `${year}-12-31`];
-  const sorted = [...txs].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const sorted = [...txs].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
   const lots = {};
   let st = 0, lt = 0;
   const details = [];
@@ -50,7 +55,12 @@ export function calcStocks(txs, year) {
 
 export function calcCrypto(txs, year) {
   const [yS, yE] = [`${year}-01-01`, `${year}-12-31`];
-  const sorted = [...txs].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const sorted = [...txs].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
   const lots = {};
   let st = 0, lt = 0;
   const details = [];
@@ -88,7 +98,12 @@ export function calcCrypto(txs, year) {
 
 export function calcBullion(txs, year) {
   const [yS, yE] = [`${year}-01-01`, `${year}-12-31`];
-  const sorted = [...txs].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const sorted = [...txs].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
   const lots = {};
   let st = 0, lt = 0;
   const details = [];

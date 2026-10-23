@@ -17,9 +17,11 @@ Triggers:
 import json
 import logging
 import os
+import time
 import datetime
 import boto3
 import anthropic
+from anthropic import RateLimitError
 
 from tools import (
     get_full_universe,
@@ -39,6 +41,22 @@ MODEL        = "claude-sonnet-4-6"
 WHEEL_PREFIX = "WheelReports/"
 
 s3 = boto3.client("s3")
+
+RATE_LIMIT_WINDOW_SECS = 65   # wait this long after a 429 to let the 1-min window reset
+RATE_LIMIT_MAX_RETRIES = 4    # 4 retries × 65 s = ~4 min max wait per call
+
+
+def claude_create(client, **kwargs):
+    """Wrapper around client.messages.create that retries on 429 rate limit errors."""
+    for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+        try:
+            return client.messages.create(**kwargs)
+        except RateLimitError:
+            if attempt == RATE_LIMIT_MAX_RETRIES:
+                raise
+            wait = RATE_LIMIT_WINDOW_SECS * (attempt + 1)
+            logger.warning(f"Rate limit hit (attempt {attempt + 1}), waiting {wait}s before retry...")
+            time.sleep(wait)
 
 
 # ── Claude tool definitions ────────────────────────────────────
@@ -166,7 +184,8 @@ def get_dynamic_macro_context():
     messages = [{"role": "user", "content": prompt}]
 
     for _ in range(10):
-        response = client.messages.create(
+        response = claude_create(
+            client,
             model=MODEL,
             max_tokens=2048,
             tools=[WEB_SEARCH_TOOL, MACRO_SYNTHESIZE_TOOL],
@@ -277,7 +296,8 @@ Use the tools provided. First call apply_macro_scores for all stocks, then call 
     thesis_data = {}
 
     for _ in range(10):  # max iterations
-        response = client.messages.create(
+        response = claude_create(
+            client,
             model=MODEL,
             max_tokens=8192,
             tools=CLAUDE_TOOLS,
@@ -484,6 +504,10 @@ def handler(event, context):
     # 6a. Synthesize live macro context via Claude + web search
     logger.info("Synthesizing macro context via web search...")
     macro_context = get_dynamic_macro_context()
+
+    # Wait for rate limit window to reset before the analysis pass (which sends a much larger payload)
+    logger.info(f"Macro pass complete. Waiting {RATE_LIMIT_WINDOW_SECS}s for rate limit window to reset...")
+    time.sleep(RATE_LIMIT_WINDOW_SECS)
 
     # 6b. Claude analysis (macro + thesis) — pass top 50 with options to keep context manageable
     analysis_set = stocks_with_options[:50]

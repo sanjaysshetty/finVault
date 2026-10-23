@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
 import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
@@ -112,10 +112,16 @@ export default function Insurance() {
     return list;
   }, [rows, search, country, sortKey, sortDir]);
 
-  // Sync page-level country filter → new record default country
-  // Insurance form uses "India" (mixed case) while page filter uses "INDIA"
+  // Sync page-level country filter → new record default country.
+  // Insurance form uses "India" (mixed case) while page filter uses "INDIA".
+  // Adjusted during render (React's recommended pattern) instead of a
+  // useEffect, which would cause an extra render+commit pass.
   const formCountry = country === "INDIA" ? "India" : "USA";
-  useEffect(() => { setForm((f) => ({ ...f, country: formCountry })); }, [formCountry]);
+  const [prevFormCountry, setPrevFormCountry] = useState(formCountry);
+  if (formCountry !== prevFormCountry) {
+    setPrevFormCountry(formCountry);
+    setForm((f) => ({ ...f, country: formCountry }));
+  }
 
   function openCreateForm() {
     setEditingId(null); setForm({ ...DEFAULT_FORM, country: formCountry }); setError(""); setShowForm(true);

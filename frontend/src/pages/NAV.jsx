@@ -35,6 +35,23 @@ function formatCompact(n, currency = "USD") {
 
 const INR_TO_USD_FALLBACK = 84;
 
+/* filter pill button */
+function FilterBtn({ label, value, filter, onSelect }) {
+  const active = filter === value;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(value)}
+      className="px-4 py-1.5 rounded-full text-sm font-bold transition-all cursor-pointer"
+      style={active
+        ? { background: "#0e6c4a", color: "#ffffff", border: "1px solid #1a9e65" }
+        : { background: "transparent", color: "var(--fv-muted)", border: "1px solid var(--fv-border)" }}
+    >
+      {label}
+    </button>
+  );
+}
+
 /* ── extractors ── */
 function extractItems(res) {
   if (!res) return [];
@@ -111,9 +128,14 @@ function computeBullionHolding(transactions, spot) {
   return round2(state.GOLD.qty * safeNum(spot?.GOLD, 0) + state.SILVER.qty * safeNum(spot?.SILVER, 0));
 }
 
-function computeStocksHolding(transactions, quoteMap) {
+function computeStocksHolding(transactions, quoteMap, coveredCallCaps = {}) {
   const bySymbol = {};
-  const txs = [...(transactions || [])].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  const TYPE_ORDER = { BUY: 0, SELL: 1 };
+  const txs = [...(transactions || [])].sort((a, b) => {
+    const dateCmp = String(a.date || "").localeCompare(String(b.date || ""));
+    if (dateCmp !== 0) return dateCmp;
+    return (TYPE_ORDER[String(a.type || "").toUpperCase()] ?? 0) - (TYPE_ORDER[String(b.type || "").toUpperCase()] ?? 0);
+  });
   for (const t of txs) {
     const sym = String(t.symbol || "").toUpperCase().trim();
     if (!sym) continue;
@@ -124,7 +146,12 @@ function computeStocksHolding(transactions, quoteMap) {
     if (type === "BUY") { s.shares += shares; s.cost += shares * price + fees; s.avg = s.shares > 0 ? s.cost / s.shares : 0; }
     else if (type === "SELL") { const ss = Math.min(shares, s.shares); s.shares -= ss; s.cost -= ss * (s.avg || 0); s.avg = s.shares > 0 ? s.cost / s.shares : 0; }
   }
-  return round2(Object.entries(bySymbol).reduce((sum, [sym, s]) => sum + s.shares * safeNum(quoteMap?.[sym]?.price, 0), 0));
+  return round2(Object.entries(bySymbol).reduce((sum, [sym, s]) => {
+    const spot = safeNum(quoteMap?.[sym]?.price, 0);
+    const ccStrike = coveredCallCaps[sym] ?? null;
+    const effectiveSpot = (ccStrike !== null && spot > ccStrike) ? ccStrike : spot;
+    return sum + s.shares * effectiveSpot;
+  }, 0));
 }
 
 function computeCryptoHolding(transactions, spotMap) {
@@ -438,6 +465,7 @@ export default function NAV() {
   const { data: stocksData, isLoading: stocksLoading } = useQuery({ queryKey: queryKeys.stocksTx(), queryFn: () => api.get("/assets/stocks/transactions") });
   const { data: bullionData, isLoading: bullionLoading } = useQuery({ queryKey: queryKeys.bullionTx(), queryFn: () => api.get("/assets/bullion/transactions") });
   const { data: cryptoTxData, isLoading: cryptoLoading } = useQuery({ queryKey: queryKeys.cryptoTx(), queryFn: () => api.get("/assets/crypto/transactions") });
+  const { data: optionsData } = useQuery({ queryKey: queryKeys.optionsTx(), queryFn: () => api.get("/assets/options/transactions") });
 
   const stockTx = useMemo(() => extractItems(stocksData), [stocksData]);
   const bullTx = useMemo(() => extractItems(bullionData), [bullionData]);
@@ -490,7 +518,36 @@ export default function NAV() {
     return rate && rate > 50 ? rate : INR_TO_USD_FALLBACK;
   }, [pricesData]);
 
-  const stocksTotal = useMemo(() => computeStocksHolding(stockTx, quoteMap), [stockTx, quoteMap]);
+  const stockTxUSA = useMemo(() => stockTx.filter(t => String(t.country || "USA").toUpperCase() === "USA"), [stockTx]);
+
+  const coveredCallCaps = useMemo(() => {
+    const CLOSE_LEGS = new Set(["CLOSE", "ROLL_CLOSE", "ASSIGN"]);
+    const OPEN_LEGS  = new Set(["OPEN", "ROLL_OPEN"]);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const optionsTxUSA = extractItems(optionsData).filter(r => String(r.country || "USA").toUpperCase() === "USA");
+    const byPos = {};
+    for (const r of optionsTxUSA) {
+      const pid = String(r.positionId || r.txId || r.assetId || r.id || "");
+      if (!byPos[pid]) byPos[pid] = [];
+      byPos[pid].push(r);
+    }
+    const caps = {};
+    for (const legs of Object.values(byPos)) {
+      const openLeg  = legs.find(l => OPEN_LEGS.has(String(l.leg || "OPEN").toUpperCase()));
+      const closeLeg = legs.find(l => CLOSE_LEGS.has(String(l.leg || "").toUpperCase()));
+      if (!openLeg || closeLeg) continue;
+      if (String(openLeg.event || "").toLowerCase() !== "call") continue;
+      if (String(openLeg.type  || "").toUpperCase() !== "SELL") continue;
+      if (openLeg.expiry && new Date(`${openLeg.expiry}T00:00:00`) < today) continue;
+      const ticker = String(openLeg.ticker || "").toUpperCase();
+      const strike = safeNum(openLeg.strikes, 0);
+      if (!ticker || strike <= 0) continue;
+      if (caps[ticker] === undefined || strike < caps[ticker]) caps[ticker] = strike;
+    }
+    return caps;
+  }, [optionsData]);
+
+  const stocksTotal = useMemo(() => computeStocksHolding(stockTxUSA, quoteMap, coveredCallCaps), [stockTxUSA, quoteMap, coveredCallCaps]);
   const bullionTotal = useMemo(() => computeBullionHolding(bullTx, spot), [bullTx, spot]);
   const cryptoTotal = useMemo(() => computeCryptoHolding(cryptoTx, cryptoSpots), [cryptoTx, cryptoSpots]);
 
@@ -518,23 +575,6 @@ export default function NAV() {
   const loading = liabsLoading || fiLoading || oaLoading || stocksLoading || bullionLoading || cryptoLoading || pricesLoading;
   const fetchError = liabsError || pricesError;
 
-  /* filter pill button */
-  const FilterBtn = ({ label, value }) => {
-    const active = filter === value;
-    return (
-      <button
-        type="button"
-        onClick={() => setFilter(value)}
-        className="px-4 py-1.5 rounded-full text-sm font-bold transition-all cursor-pointer"
-        style={active
-          ? { background: "#0e6c4a", color: "#ffffff", border: "1px solid #1a9e65" }
-          : { background: "transparent", color: "var(--fv-muted)", border: "1px solid var(--fv-border)" }}
-      >
-        {label}
-      </button>
-    );
-  };
-
   const printDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
   return (
@@ -556,9 +596,9 @@ export default function NAV() {
       <div className="mb-5">
         <PageHeader title="Net Asset Value" icon={PageIcons.nav} subtitle="Combined wealth across all jurisdictions">
           <div className="nav-no-print flex items-center gap-1.5">
-            <FilterBtn label="ALL" value="ALL" />
-            <FilterBtn label="USA" value="USA" />
-            <FilterBtn label="INDIA" value="INDIA" />
+            <FilterBtn label="ALL" value="ALL" filter={filter} onSelect={setFilter} />
+            <FilterBtn label="USA" value="USA" filter={filter} onSelect={setFilter} />
+            <FilterBtn label="INDIA" value="INDIA" filter={filter} onSelect={setFilter} />
           </div>
           <button
             type="button"
