@@ -1,0 +1,189 @@
+name: Backend Rollback
+
+# Mirrors backend-deploy.yml's steps closely on purpose — keep them in sync if
+# you change one. The only real difference: this checks out an explicit past
+# commit instead of the dispatch ref, and tags the Deployments row as a
+# rollback so lineage stays honest about what actually happened.
+#
+# This handles CODE + INFRA rollback only. Database restore is deliberately
+# NOT automated here — see CLAUDE.md for the manual restore-from-backup
+# procedure. Rolling back data is a judgment call every time (anything
+# written after the backup is lost the moment you restore it), not something
+# that should happen as a side effect of a code rollback.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment to roll back"
+        type: choice
+        options: [dev, sandbox]
+        required: true
+      target_sha:
+        description: "Commit SHA to roll back to — check the Deployments-<stack> table (envComponent=<env>#backend) or past 'Backend Deploy' run summaries for valid SHAs"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Confirm checked-out commit
+        run: |
+          actual=$(git rev-parse --short HEAD)
+          echo "Checked out: $actual (requested: ${{ inputs.target_sha }})"
+
+      - name: Resolve environment-specific settings
+        id: env
+        run: |
+          if [ "${{ inputs.environment }}" = "sandbox" ]; then
+            echo "config_env_flag=--config-env sb" >> "$GITHUB_OUTPUT"
+            echo "stack_name=finVault-sb" >> "$GITHUB_OUTPUT"
+          else
+            echo "config_env_flag=" >> "$GITHUB_OUTPUT"
+            echo "stack_name=finVault" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "backup_ts=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BACKEND_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Look up what's currently live, before we roll it back
+        id: current
+        env:
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PK: "${{ inputs.environment }}#backend"
+        run: |
+          set -euo pipefail
+          ITEM=$(aws dynamodb query \
+            --table-name "$TABLE_NAME" \
+            --key-condition-expression "envComponent = :pk" \
+            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+            --no-scan-index-forward \
+            --limit 1 \
+            --query "Items[0]" --output json)
+          echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
+
+      - name: Look up the most recent frontend deploy, to cross-link lineage
+        id: paired
+        env:
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PK: "${{ inputs.environment }}#frontend"
+        run: |
+          set -euo pipefail
+          ITEM=$(aws dynamodb query \
+            --table-name "$TABLE_NAME" \
+            --key-condition-expression "envComponent = :pk" \
+            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+            --no-scan-index-forward \
+            --limit 1 \
+            --query "Items[0]" --output json)
+          echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(echo "$ITEM" | jq -r '.deployedAt.S // "none"')" >> "$GITHUB_OUTPUT"
+
+      - name: Back up every durable DynamoDB table before rolling back (safety snapshot)
+        id: backups
+        run: |
+          set -euo pipefail
+          TABLES="finAssets StoreReceiptLedger FinAccounts FinAccountMembers FinAccountInvitesV2 PaperTrades"
+          ARNS="[]"
+          for t in $TABLES; do
+            NAME="${t}-${{ inputs.environment }}-rollback-${{ steps.env.outputs.sha }}-${{ steps.env.outputs.backup_ts }}"
+            ARN=$(aws dynamodb create-backup --table-name "$t" --backup-name "$NAME" --query "BackupDetails.BackupArn" --output text)
+            echo "Backed up $t -> $ARN"
+            ARNS=$(echo "$ARNS" | jq -c --arg t "$t" --arg a "$ARN" '. + [{table: $t, backupArn: $a}]')
+          done
+          echo "backup_arns<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$ARNS" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: sam build
+        working-directory: backend
+        run: sam build
+
+      - name: sam deploy
+        working-directory: backend
+        run: |
+          sam deploy ${{ steps.env.outputs.config_env_flag }} \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides "${{ secrets.PARAM_OVERRIDES }}" \
+            --tags \
+              DeploySha=${{ steps.env.outputs.sha }} \
+              DeployedBy=${{ github.actor }} \
+              DeployedAt=${{ steps.env.outputs.deployed_at }} \
+              IsRollback=true \
+              RolledBackFrom=${{ steps.current.outputs.sha }}
+
+      - name: Record this rollback
+        env:
+          ENV_COMPONENT: "${{ inputs.environment }}#backend"
+          DEPLOYED_AT: ${{ steps.env.outputs.deployed_at }}
+          SHA: ${{ steps.env.outputs.sha }}
+          COMMIT_MSG: "rollback to ${{ steps.env.outputs.sha }}"
+          DEPLOYED_BY: ${{ github.actor }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BACKUPS_JSON: ${{ steps.backups.outputs.backup_arns }}
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          ROLLED_BACK_FROM: ${{ steps.current.outputs.sha }}
+          PAIRED_FRONTEND_SHA: ${{ steps.paired.outputs.sha }}
+          PAIRED_FRONTEND_AT: ${{ steps.paired.outputs.deployed_at }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg envComponent "$ENV_COMPONENT" \
+            --arg deployedAt "$DEPLOYED_AT" \
+            --arg sha "$SHA" \
+            --arg commitMessage "$COMMIT_MSG" \
+            --arg deployedBy "$DEPLOYED_BY" \
+            --arg workflowRunUrl "$RUN_URL" \
+            --arg backups "$BACKUPS_JSON" \
+            --arg rolledBackFrom "$ROLLED_BACK_FROM" \
+            --arg pairedFrontendSha "$PAIRED_FRONTEND_SHA" \
+            --arg pairedFrontendAt "$PAIRED_FRONTEND_AT" \
+            '{
+              envComponent:      {S: $envComponent},
+              deployedAt:        {S: $deployedAt},
+              sha:               {S: $sha},
+              commitMessage:     {S: $commitMessage},
+              deployedBy:        {S: $deployedBy},
+              workflowRunUrl:    {S: $workflowRunUrl},
+              backups:           {S: $backups},
+              isRollback:        {BOOL: true},
+              rolledBackFrom:    {S: $rolledBackFrom},
+              verified:          {BOOL: false},
+              pairedFrontendSha: {S: $pairedFrontendSha},
+              pairedFrontendAt:  {S: $pairedFrontendAt}
+            }' > item.json
+          aws dynamodb put-item --table-name "$TABLE_NAME" --item file://item.json
+
+      - name: Summary
+        run: |
+          {
+            echo "## Backend ROLLBACK — ${{ inputs.environment }}"
+            echo "- Rolled back from \`${{ steps.current.outputs.sha }}\` to \`${{ steps.env.outputs.sha }}\`"
+            echo "- Pre-rollback safety backups taken: $(echo '${{ steps.backups.outputs.backup_arns }}' | jq length)"
+            echo "- Paired frontend (most recent at time of this rollback): \`${{ steps.paired.outputs.sha }}\` @ ${{ steps.paired.outputs.deployed_at }}"
+            echo ""
+            echo "Database was NOT restored — only code + infra rolled back. See CLAUDE.md if the data also needs restoring from one of the backups above."
+          } >> "$GITHUB_STEP_SUMMARY"

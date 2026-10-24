@@ -1,0 +1,92 @@
+name: Mark Deployment Verified
+
+# Deploy success and "the app actually works" are different facts — a
+# deploy can complete cleanly and still be broken at runtime (this
+# happened: the very first automated backend deploy "succeeded" and
+# shipped a broken Lambda layer). Run this manually, only after you've
+# actually checked the app, to flag a specific deploy as a known-good
+# rollback target. Always uses the backend role regardless of component,
+# since it's the one with broad-enough DynamoDB access (Query + UpdateItem)
+# and marking verification is purely a DynamoDB admin action, not an S3 one.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [dev, sandbox]
+        required: true
+      component:
+        type: choice
+        options: [backend, frontend]
+        required: true
+      sha:
+        description: "The commit SHA of the deploy you've manually confirmed works"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  mark-verified:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Resolve environment-specific settings
+        id: env
+        run: |
+          if [ "${{ inputs.environment }}" = "sandbox" ]; then
+            echo "stack_name=finVault-sb" >> "$GITHUB_OUTPUT"
+          else
+            echo "stack_name=finVault" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BACKEND_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Find the most recent deploy matching this SHA
+        id: find
+        env:
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PK: "${{ inputs.environment }}#${{ inputs.component }}"
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          ITEMS=$(aws dynamodb query \
+            --table-name "$TABLE_NAME" \
+            --key-condition-expression "envComponent = :pk" \
+            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+            --no-scan-index-forward \
+            --query "Items" --output json)
+          MATCH=$(echo "$ITEMS" | jq --arg sha "$TARGET_SHA" '[.[] | select(.sha.S == $sha)] | first')
+          if [ "$MATCH" = "null" ] || [ -z "$MATCH" ]; then
+            echo "No deploy found for $PK with sha=$TARGET_SHA" >&2
+            exit 1
+          fi
+          echo "deployed_at=$(echo "$MATCH" | jq -r '.deployedAt.S')" >> "$GITHUB_OUTPUT"
+
+      - name: Mark it verified
+        env:
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PK: "${{ inputs.environment }}#${{ inputs.component }}"
+          SK: ${{ steps.find.outputs.deployed_at }}
+          VERIFIED_BY: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          aws dynamodb update-item \
+            --table-name "$TABLE_NAME" \
+            --key "{\"envComponent\":{\"S\":\"$PK\"},\"deployedAt\":{\"S\":\"$SK\"}}" \
+            --update-expression "SET verified = :v, verifiedBy = :by, verifiedAt = :at" \
+            --expression-attribute-values "{\":v\":{\"BOOL\":true},\":by\":{\"S\":\"$VERIFIED_BY\"},\":at\":{\"S\":\"$NOW\"}}"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Marked verified — ${{ inputs.environment }} / ${{ inputs.component }}"
+            echo "- SHA: \`${{ inputs.sha }}\`"
+            echo "- Deploy timestamp: ${{ steps.find.outputs.deployed_at }}"
+            echo "- Verified by: ${{ github.actor }}"
+          } >> "$GITHUB_STEP_SUMMARY"

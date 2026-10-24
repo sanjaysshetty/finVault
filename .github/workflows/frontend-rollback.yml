@@ -1,0 +1,156 @@
+name: Frontend Rollback
+
+# Mirrors frontend-deploy.yml's steps closely on purpose — keep them in sync
+# if you change one. The only real difference: this checks out an explicit
+# past commit instead of the dispatch ref, and tags the Deployments row as
+# a rollback.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment to roll back"
+        type: choice
+        options: [dev, sandbox]
+        required: true
+      target_sha:
+        description: "Commit SHA to roll back to — check the Deployments-<stack> table (envComponent=<env>#frontend) or past 'Frontend Deploy' run summaries for valid SHAs"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_sha }}
+          fetch-depth: 0
+
+      - name: Confirm checked-out commit
+        run: |
+          actual=$(git rev-parse --short HEAD)
+          echo "Checked out: $actual (requested: ${{ inputs.target_sha }})"
+
+      - name: Resolve environment-specific settings
+        id: env
+        run: |
+          if [ "${{ inputs.environment }}" = "sandbox" ]; then
+            echo "stack_name=finVault-sb" >> "$GITHUB_OUTPUT"
+          else
+            echo "stack_name=finVault" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: build
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_APP_ENV: ${{ inputs.environment }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_COGNITO_DOMAIN: ${{ secrets.VITE_COGNITO_DOMAIN }}
+          VITE_COGNITO_CLIENT_ID: ${{ secrets.VITE_COGNITO_CLIENT_ID }}
+          VITE_COGNITO_REDIRECT_URI: ${{ secrets.VITE_COGNITO_REDIRECT_URI }}
+          VITE_COGNITO_LOGOUT_URI: ${{ secrets.VITE_COGNITO_LOGOUT_URI }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_FRONTEND_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Look up what's currently live, before we roll it back
+        id: current
+        env:
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PK: "${{ inputs.environment }}#frontend"
+        run: |
+          set -euo pipefail
+          ITEM=$(aws dynamodb query \
+            --table-name "$TABLE_NAME" \
+            --key-condition-expression "envComponent = :pk" \
+            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+            --no-scan-index-forward \
+            --limit 1 \
+            --query "Items[0]" --output json)
+          echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
+
+      - name: Look up the most recent backend deploy, to cross-link lineage
+        id: paired
+        env:
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PK: "${{ inputs.environment }}#backend"
+        run: |
+          set -euo pipefail
+          ITEM=$(aws dynamodb query \
+            --table-name "$TABLE_NAME" \
+            --key-condition-expression "envComponent = :pk" \
+            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+            --no-scan-index-forward \
+            --limit 1 \
+            --query "Items[0]" --output json)
+          echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(echo "$ITEM" | jq -r '.deployedAt.S // "none"')" >> "$GITHUB_OUTPUT"
+
+      - name: sync to S3
+        run: aws s3 sync frontend/dist/ "s3://${{ secrets.FRONTEND_BUCKET }}/app/" --delete
+
+      - name: Record this rollback
+        env:
+          ENV_COMPONENT: "${{ inputs.environment }}#frontend"
+          DEPLOYED_AT: ${{ steps.env.outputs.deployed_at }}
+          SHA: ${{ steps.env.outputs.sha }}
+          COMMIT_MSG: "rollback to ${{ steps.env.outputs.sha }}"
+          DEPLOYED_BY: ${{ github.actor }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          ROLLED_BACK_FROM: ${{ steps.current.outputs.sha }}
+          PAIRED_BACKEND_SHA: ${{ steps.paired.outputs.sha }}
+          PAIRED_BACKEND_AT: ${{ steps.paired.outputs.deployed_at }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg envComponent "$ENV_COMPONENT" \
+            --arg deployedAt "$DEPLOYED_AT" \
+            --arg sha "$SHA" \
+            --arg commitMessage "$COMMIT_MSG" \
+            --arg deployedBy "$DEPLOYED_BY" \
+            --arg workflowRunUrl "$RUN_URL" \
+            --arg rolledBackFrom "$ROLLED_BACK_FROM" \
+            --arg pairedBackendSha "$PAIRED_BACKEND_SHA" \
+            --arg pairedBackendAt "$PAIRED_BACKEND_AT" \
+            '{
+              envComponent:     {S: $envComponent},
+              deployedAt:       {S: $deployedAt},
+              sha:              {S: $sha},
+              commitMessage:    {S: $commitMessage},
+              deployedBy:       {S: $deployedBy},
+              workflowRunUrl:   {S: $workflowRunUrl},
+              isRollback:       {BOOL: true},
+              rolledBackFrom:   {S: $rolledBackFrom},
+              verified:         {BOOL: false},
+              pairedBackendSha: {S: $pairedBackendSha},
+              pairedBackendAt:  {S: $pairedBackendAt}
+            }' > item.json
+          aws dynamodb put-item --table-name "$TABLE_NAME" --item file://item.json
+
+      - name: Summary
+        run: |
+          {
+            echo "## Frontend ROLLBACK — ${{ inputs.environment }}"
+            echo "- Rolled back from \`${{ steps.current.outputs.sha }}\` to \`${{ steps.env.outputs.sha }}\`"
+            echo "- Paired backend (most recent at time of this rollback): \`${{ steps.paired.outputs.sha }}\` @ ${{ steps.paired.outputs.deployed_at }}"
+          } >> "$GITHUB_STEP_SUMMARY"
