@@ -30,11 +30,6 @@ dist-ssr
 
 # Build output
 .aws-sam/
-# local deploy config (do not commit)
-template.yaml
-
-# SAM local deployment config
-samconfig.toml
 
 # dependencies
 node_modules/
@@ -42,6 +37,9 @@ node_modules/
 
 # Scripts folder (local use only)
 backend/scripts/
+
+# Local deploy parameter overrides — real bucket/table/domain names, kept out of git
+backend/.deploy-params.*.sh
 
 # Secrets and sensitive data
 backend/keys.json

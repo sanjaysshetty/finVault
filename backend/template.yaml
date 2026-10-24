@@ -1,0 +1,2005 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: FinVault API (Prices + Spending + Receipt Processing + Curation + Analytics Export)
+
+Parameters:
+  WheelScanAccountId:
+    Type: String
+    Default: ""
+    Description: userId (= accountId) whose account receives the weekly scheduled Wheel Scan report
+
+  # Existing buckets (NOT created by this stack)
+  # No Default — real bucket/table/domain names are resource-identifying info,
+  # supplied only via a local, gitignored parameter-overrides file (see CLAUDE.md).
+  ReceiptsBucketName:
+    Type: String
+    Description: "S3 bucket for receipt uploads (not created by this stack)."
+
+  ReceiptsPrefix:
+    Type: String
+    Default: "receipts/"
+
+  FrontendBucketName:
+    Type: String
+    Description: "S3 bucket serving the built frontend (not created by this stack)."
+
+  FrontendPrefix:
+    Type: String
+    Default: "app/"
+
+  # Cognito domains (must be unique in region)
+  CognitoDomainPrefixV3:
+    Type: String
+    Description: "V3 Cognito hosted UI domain prefix (must be unique per region)."
+
+  # Frontend URLs
+  FrontendBaseUrlDev:
+    Type: String
+    Default: "http://localhost:5173/"
+    Description: "Dev base URL (used for Cognito logout URL)"
+
+  FrontendBaseUrlProd:
+    Type: String
+    Default: "https://example.com/app/"
+    Description: "Prod base URL (used for Cognito logout URL)"
+
+  FrontendCallbackUrlDev:
+    Type: String
+    Default: "http://localhost:5173/auth/callback"
+    Description: "Dev callback URL (must exactly match Cognito callback URL)"
+
+  FrontendCallbackUrlProd:
+    Type: String
+    Default: "https://example.com/app/auth/callback"
+    Description: "Prod callback URL (must exactly match Cognito callback URL)"
+
+  FinAssetsTableName:
+    Type: String
+    Description: "Existing DynamoDB table name for Assets module (this stack will not manage it)."
+
+  ReceiptLedgerV2TableName:
+    Type: String
+    Description: "Stack-managed raw receipt ledger (v2) with DynamoDB Streams enabled."
+
+  MetalsBucketName:
+    Type: String
+    Description: "S3 bucket containing metal price JSON files (metals/XAU and metals/XAG)"
+
+  StocksSnapshotBucketName:
+    Type: String
+    Description: "S3 bucket for daily stocks holdings snapshot (stocks-snapshot.json). Private — access via AWS CLI with your finvault-dev credentials."
+
+  SnapshotUserId:
+    Type: String
+    NoEcho: true
+    Description: "Cognito sub (userId) of the account to snapshot daily. Find it in Cognito console → Users → your user → sub attribute."
+
+
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  FinVaultUserPoolV3:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "finvault-userpool-v3-${AWS::StackName}"
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+
+      # Production-leaning (safe) settings:
+      UserPoolAddOns:
+        AdvancedSecurityMode: ENFORCED
+
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 10
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+      # Standard attributes: email + given_name + family_name
+      # Note: making given_name/family_name Required=true means signup MUST provide them.
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: given_name
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: family_name
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+      LambdaConfig:
+        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
+
+  FinVaultUserPoolClientV3:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub "finvault-spa-${AWS::StackName}-v3"
+      UserPoolId: !Ref FinVaultUserPoolV3
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - !Ref FrontendCallbackUrlDev
+        - !Ref FrontendCallbackUrlProd
+      LogoutURLs:
+        - !Ref FrontendBaseUrlDev
+        - !Ref FrontendBaseUrlProd
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+      PreventUserExistenceErrors: ENABLED
+
+  FinVaultUserPoolDomainV3:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref CognitoDomainPrefixV3
+      UserPoolId: !Ref FinVaultUserPoolV3
+
+  # -----------------------------
+  # HTTP API (JWT-secured by default) - NOW POINTS TO V3
+  # -----------------------------
+  MetalsHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - content-type
+          - authorization
+          - x-account-id
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+      RouteSettings:
+        "$default":
+          ThrottlingRateLimit: 10
+          ThrottlingBurstLimit: 1
+      Auth:
+        DefaultAuthorizer: CognitoJwtAuthorizer
+        Authorizers:
+          CognitoJwtAuthorizer:
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${FinVaultUserPoolV3}"
+              audience:
+                - !Ref FinVaultUserPoolClientV3
+            IdentitySource: "$request.header.Authorization"
+
+  # -----------------------------
+  # DynamoDB tables
+  # -----------------------------
+  FinAccountsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: FinAccounts
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: accountId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: accountId
+          KeyType: HASH
+
+  FinAccountMembersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: FinAccountMembers
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: accountId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: gsi1pk
+          AttributeType: S
+        - AttributeName: gsi1sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: accountId
+          KeyType: HASH
+        - AttributeName: userId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: gsi1pk
+              KeyType: HASH
+            - AttributeName: gsi1sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  FinAccountInvitesTableV2:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: FinAccountInvitesV2
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: emailLower
+          AttributeType: S
+        - AttributeName: accountId
+          AttributeType: S
+        - AttributeName: inviteId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: emailLower
+          KeyType: HASH
+        - AttributeName: accountId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: accountId-index
+          KeySchema:
+            - AttributeName: accountId
+              KeyType: HASH
+            - AttributeName: emailLower
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: inviteId-index
+          KeySchema:
+            - AttributeName: inviteId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+
+  FinAssetsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Ref FinAssetsTableName
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: assetId
+          AttributeType: S
+        - AttributeName: gsi1pk
+          AttributeType: S
+        - AttributeName: gsi1sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: assetId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: gsi1pk
+              KeyType: HASH
+            - AttributeName: gsi1sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  ReceiptLedgerV2TableNew:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Ref ReceiptLedgerV2TableName
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: curationKey
+          AttributeType: S
+        - AttributeName: curationSort
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: curationKey
+              KeyType: HASH
+            - AttributeName: curationSort
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        # UserDateIndex: fixes the silent full-table SCAN on date-range queries.
+        # SpendingApi queries this with pk=userId, sk BETWEEN startDate AND endDate.
+        - IndexName: UserDateIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # ── Advisor Response Cache ─────────────────────────────────────────────────
+  # Short-lived DDB table (TTL 30 min) — stores Claude raw HTML reply keyed by
+  # SHA-256(request). Allows frontend to recover the reply on render error without
+  # re-invoking the Anthropic API. DeletionPolicy: Delete — ephemeral data only.
+  AdvisorCacheTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    Properties:
+      TableName: !Sub "AdvisorCache-${AWS::StackName}"
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: cacheKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cacheKey
+          KeyType: HASH
+
+  # ── Paper Trading ──────────────────────────────────────────────────────────
+  # PaperTradesTable: stores all paper trade records (staged, submitted, filled, etc.)
+  # Intentionally separate from any future LiveTradesTable — different table, different Lambda,
+  # different routes. The `mode` field is always "PAPER" here.
+  #
+  # ModeStatusIndex GSI design:
+  #   PK = modeStatus (e.g. "PAPER#STAGED") — allows efficient queries by trade lifecycle state
+  #   SK = createdAt — supports time-ordered results without a full scan
+  #
+  PaperTradesTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: PaperTrades
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: accountId
+          AttributeType: S
+        - AttributeName: tradeId
+          AttributeType: S
+        - AttributeName: modeStatus
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: accountId
+          KeyType: HASH
+        - AttributeName: tradeId
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: ModeStatusIndex
+          KeySchema:
+            - AttributeName: modeStatus
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # PriceCacheTable: stores the last /prices response with a 60-second application-level TTL.
+  # Eliminates duplicate external API calls when multiple page components fetch prices simultaneously.
+  # DynamoDB TTL (1 hour) handles cleanup of stale items automatically.
+  PriceCacheTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    Properties:
+      TableName: !Sub "PriceCache-${AWS::StackName}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: cacheKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cacheKey
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  AnalyticsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: archive-asset-hub-reports
+            Status: Enabled
+            Prefix: AssetHubReports/
+            Transitions:
+              - TransitionInDays: 7
+                StorageClass: GLACIER
+
+  # Private bucket for daily stocks holdings snapshot.
+  # Access via: aws s3 cp s3://<bucket>/stocks-snapshot.json - --profile finvault-dev
+  StocksSnapshotBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref StocksSnapshotBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  PricesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/src/
+      Handler: handler.handler
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          METALS_BUCKET: !Ref MetalsBucketName
+          PRICE_CACHE_TABLE: !Ref PriceCacheTable
+          NODE_PATH: /opt/nodejs
+      Events:
+        Prices:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /prices
+            Method: GET
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref MetalsBucketName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PriceCacheTable
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/finnhub/api-key"
+
+  SpendingApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/spending-api/
+      Handler: app.handler
+      Timeout: 30
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ReceiptLedgerV2TableName
+          DATE_INDEX_NAME: UserDateIndex
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          NODE_PATH: /opt/nodejs
+          ANTHROPIC_MODEL: "claude-haiku-4-5-20251001"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReceiptLedgerV2TableName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountsTable
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+      Events:
+        SpendingListGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending
+            Method: GET
+        SpendingCreatePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending
+            Method: POST
+        SpendingReceiptGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/receipt/{receipt}
+            Method: GET
+        SpendingItemPatch:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/item/{pk}/{sk}
+            Method: PATCH
+        SpendingItemDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/item/{pk}/{sk}
+            Method: DELETE
+        SpendingReceiptDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/receipt/{receipt}
+            Method: DELETE
+        SpendingReceiptDatePatch:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/receipt/{receipt}/date
+            Method: PATCH
+        SpendingDashboardGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/dashboard
+            Method: GET
+        SpendingDashboardDetailsGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/dashboard/details
+            Method: GET
+        SpendingCategorizePost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /spending/categorize
+            Method: POST
+
+  MetalsSnapshotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs20.x
+      CodeUri: crud/metals-prices/
+      Handler: metals-snapshot.handler
+      Timeout: 60
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          METALS_BUCKET: !Ref MetalsBucketName
+          NODE_PATH: /opt/nodejs
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref MetalsBucketName
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/goldapi/key"
+      Events:
+        DailyMetalsSnapshot:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "cron(0 5 * * ? *)"
+            ScheduleExpressionTimezone: "America/Chicago"
+
+  StocksSnapshotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs20.x
+      CodeUri: crud/stocks-snapshot/
+      Handler: stocks-snapshot.handler
+      Timeout: 60
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          STOCKS_SNAPSHOT_BUCKET: !Ref StocksSnapshotBucketName
+          SNAPSHOT_USER_ID: !Ref SnapshotUserId
+          NODE_PATH: /opt/nodejs
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAssetsTableName
+        - S3WritePolicy:
+            BucketName: !Ref StocksSnapshotBucketName
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/finnhub/api-key"
+      Events:
+        DailyStocksSnapshot:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "cron(0 5 * * ? *)"
+            ScheduleExpressionTimezone: "America/Chicago"
+
+  # Dead Letter Queue for ReceiptExtractor async invocation failures.
+  # Failed receipt extraction events land here for inspection / manual replay.
+  ReceiptExtractorDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "receipt-extractor-dlq-${AWS::StackName}"
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  ReceiptExtractorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ai-services/receipt-extractor/
+      Handler: src/handler.handler
+      MemorySize: 1024
+      Timeout: 60
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt ReceiptExtractorDLQ.Arn
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          NODE_PATH: /opt/nodejs
+          RECEIPT_LEDGER_TABLE: !Ref ReceiptLedgerV2TableName
+          ANTHROPIC_MODEL: "claude-sonnet-4-6"
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3ReadPolicy:
+            BucketName: !Ref ReceiptsBucketName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReceiptLedgerV2TableName
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ReceiptExtractorDLQ.QueueName
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+
+  ReceiptUploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/receipt-upload-url/
+      Handler: src/handler.handler
+      Runtime: nodejs20.x
+      Timeout: 15
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          RECEIPTS_BUCKET: !Ref ReceiptsBucketName
+          RECEIPTS_PREFIX: !Ref ReceiptsPrefix
+          PRESIGN_EXPIRES_SECONDS: "300"
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          NODE_PATH: /opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource:
+                - !Sub "arn:aws:s3:::${ReceiptsBucketName}/${ReceiptsPrefix}*"
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountsTable
+      Events:
+        UploadUrlApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /receipts/upload-url
+            Method: POST
+
+  FrontendProxyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/frontend-proxy/
+      Handler: src/handler.handler
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          FRONTEND_BUCKET: !Ref FrontendBucketName
+          FRONTEND_PREFIX: !Ref FrontendPrefix
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3ReadPolicy:
+            BucketName: !Ref FrontendBucketName
+      Events:
+        AppRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /app
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        AppRootSlash:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /app/
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        AppProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /app/{proxy+}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  FinVaultSharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "finvault-shared-${AWS::StackName}"
+      Description: Shared utilities for FinVault Lambdas
+      ContentUri: layers/finvault-shared/
+      CompatibleRuntimes:
+        - nodejs18.x
+      RetentionPolicy: Retain
+
+  FinVaultAgentCoreLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "finvault-agent-core-${AWS::StackName}"
+      Description: Shared Python utilities for FinVault AI Lambdas (secrets access, agent harness)
+      ContentUri: layers/finvault-agent-core/
+      CompatibleRuntimes:
+        - python3.11
+      RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: python3.11
+
+  CurateBatchFunction:
+    Type: AWS::Serverless::Function
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Runtime: nodejs20.x
+      CodeUri: ai-services/category-curator/
+      Handler: curate-incremental.handler
+      MemorySize: 1024
+      Timeout: 900
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          NODE_PATH: /opt/nodejs
+          TABLE: !Ref ReceiptLedgerV2TableNew
+          MODEL: "claude-haiku-4-5-20251001"
+          CONCURRENCY: "5"
+          SCAN_LIMIT: "200"
+          STOP_BUFFER_MS: "30000"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReceiptLedgerV2TableNew
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+      Events:
+        DailyCuration:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "cron(0 5 * * ? *)"
+            ScheduleExpressionTimezone: "America/Chicago"
+
+  PostConfirmationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/post-confirmation/
+      Handler: app.handler
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          FIN_ACCOUNT_INVITES_TABLE: !Ref FinAccountInvitesTableV2
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountInvitesTableV2
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountMembersTable
+
+  # Allow Cognito to invoke the Post Confirmation Lambda.
+  PostConfirmationPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt PostConfirmationFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt FinVaultUserPoolV3.Arn
+
+  AssetsApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/assets-api/
+      Handler: app.handler
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          NODE_PATH: /opt/nodejs/node_modules:/opt/nodejs
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAssetsTableName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountsTable
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/api-key"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/private-key-b64"
+      Events:
+        FixedIncomeList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/fixedincome
+            Method: GET
+        FixedIncomeCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/fixedincome
+            Method: POST
+        FixedIncomeGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/fixedincome/{assetId}
+            Method: GET
+        FixedIncomeUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/fixedincome/{assetId}
+            Method: PATCH
+        FixedIncomeDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/fixedincome/{assetId}
+            Method: DELETE
+
+        BullionTxList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/bullion/transactions
+            Method: GET
+        BullionTxCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/bullion/transactions
+            Method: POST
+        BullionTxUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/bullion/transactions/{txId}
+            Method: PATCH
+        BullionTxDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/bullion/transactions/{txId}
+            Method: DELETE
+
+        StockTxList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/stocks/transactions
+            Method: GET
+        StockTxCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/stocks/transactions
+            Method: POST
+        StockTxUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/stocks/transactions/{txId}
+            Method: PATCH
+        StockTxDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/stocks/transactions/{txId}
+            Method: DELETE
+
+        CryptoTxList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/crypto/transactions
+            Method: GET
+        CryptoTxCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/crypto/transactions
+            Method: POST
+        CryptoTxUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/crypto/transactions/{txId}
+            Method: PATCH
+        CryptoTxDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/crypto/transactions/{txId}
+            Method: DELETE
+        CryptoRhHoldings:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/crypto/rh-holdings
+            Method: GET
+
+        OptionsTxList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/options/transactions
+            Method: GET
+        OptionsTxCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/options/transactions
+            Method: POST
+        OptionsTxUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/options/transactions/{txId}
+            Method: PATCH
+        OptionsTxDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/options/transactions/{txId}
+            Method: DELETE
+
+        FuturesTxList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/futures/transactions
+            Method: GET
+        FuturesTxCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/futures/transactions
+            Method: POST
+        FuturesTxUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/futures/transactions/{txId}
+            Method: PATCH
+        FuturesTxDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/futures/transactions/{txId}
+            Method: DELETE
+
+        OtherAssetsList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/otherassets
+            Method: GET
+        OtherAssetsCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/otherassets
+            Method: POST
+        OtherAssetsUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/otherassets/{assetId}
+            Method: PATCH
+        OtherAssetsDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/otherassets/{assetId}
+            Method: DELETE
+
+        NavGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /nav
+            Method: GET
+        NavPut:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /nav
+            Method: PUT
+        NavDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /nav
+            Method: DELETE
+
+        InsuranceList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/insurance
+            Method: GET
+        InsuranceCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/insurance
+            Method: POST
+        InsuranceGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/insurance/{assetId}
+            Method: GET
+        InsuranceUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/insurance/{assetId}
+            Method: PATCH
+        InsuranceDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/insurance/{assetId}
+            Method: DELETE
+
+  LiabilitiesApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/liabilities/
+      Handler: app.handler
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          NODE_PATH: /opt/nodejs
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAssetsTableName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountsTable
+      Events:
+        LiabilitiesList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /liabilities
+            Method: GET
+        LiabilitiesCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /liabilities
+            Method: POST
+        LiabilitiesGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /liabilities/{liabilityId}
+            Method: GET
+        LiabilitiesUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /liabilities/{liabilityId}
+            Method: PATCH
+        LiabilitiesDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /liabilities/{liabilityId}
+            Method: DELETE
+
+  AccountsApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/accounts-api/
+      Handler: app.handler
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          FIN_ACCOUNT_INVITES_TABLE: !Ref FinAccountInvitesTableV2
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          SPENDING_TABLE: !Ref ReceiptLedgerV2TableName
+          USER_POOL_ID: !Ref FinVaultUserPoolV3
+          NODE_PATH: /opt/nodejs/node_modules:/opt/nodejs
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAccountInvitesTableV2
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAssetsTableName
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReceiptLedgerV2TableName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:ListUsers
+              Resource: !GetAtt FinVaultUserPoolV3.Arn
+      Events:
+        AccountsList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts
+            Method: GET
+        AccountsCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts
+            Method: POST
+        AccountsUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}
+            Method: PATCH
+        AccountsDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}
+            Method: DELETE
+        AccountsMembersList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}/members
+            Method: GET
+        AccountsMembersUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}/members/{memberId}
+            Method: PATCH
+        AccountsMembersDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}/members/{memberId}
+            Method: DELETE
+        AccountsInvitesList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}/invites
+            Method: GET
+        AccountsInvitesCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}/invites
+            Method: POST
+        AccountsInvitesDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /accounts/{accountId}/invites/{emailEncoded}
+            Method: DELETE
+        AccountsInviteAccept:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /invites/{inviteId}/accept
+            Method: POST
+
+  # ── Option Marks — Python Lambda (current mid price via yfinance) ────────────
+  OptionMarksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      CodeUri: crud/option-marks/
+      Handler: handler.handler
+      Timeout: 30
+      MemorySize: 256
+      Events:
+        OptionMarksPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/options/marks
+            Method: POST
+
+  # ── Asset Hub — async job pattern (Claude + yfinance, self-invocation) ────────
+  AssetHubFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      CodeUri: ai-services/asset-hub/
+      Handler: handler.handler
+      Timeout: 120
+      MemorySize: 512
+      Layers:
+        - !Ref FinVaultAgentCoreLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          REPORTS_BUCKET: !Ref AnalyticsBucket
+          REPORTS_PREFIX: AssetHubReports/
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAssetsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-AssetHubFunction-*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+                - s3:ListBucket
+              Resource:
+                - !Sub "arn:aws:s3:::${AnalyticsBucket}"
+                - !Sub "arn:aws:s3:::${AnalyticsBucket}/AssetHubReports/*"
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+      Events:
+        AssetHubAnalyze:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/hub/analyze
+            Method: POST
+        AssetHubResult:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/hub/result/{jobId}
+            Method: GET
+        AssetHubReports:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /assets/hub/reports
+            Method: GET
+
+  # ── Wheel Scan — Python Lambda (Claude agentic loop + yfinance) ──────────────
+  WheelScanFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      CodeUri: ai-services/wheel-scan/
+      Handler: handler.handler
+      Timeout: 600
+      MemorySize: 1024
+      Layers:
+        - !Ref FinVaultAgentCoreLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          ANALYTICS_BUCKET: !Ref AnalyticsBucket
+          WHEEL_PREFIX: WheelReports/
+          WHEEL_SCAN_ACCOUNT_ID: !Ref WheelScanAccountId
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3CrudPolicy:
+            BucketName: !Ref AnalyticsBucket
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+      Events:
+        WeeklyWheelScan:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "cron(0 6 ? * SAT *)"
+            ScheduleExpressionTimezone: "America/New_York"
+            Description: "Weekly Wheel Strategy scan at 6:00am ET, Saturdays"
+            State: DISABLED
+
+  # ── Wheel Scan Read — Node.js Lambda (serves reports from S3) ────────────────
+  WheelScanReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/wheel-scan-read/
+      Handler: app.handler
+      Timeout: 30
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          ANALYTICS_BUCKET: !Ref AnalyticsBucket
+          WHEEL_PREFIX: WheelReports/
+          WHEEL_SCAN_FUNCTION: !GetAtt WheelScanFunction.Arn
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          NODE_PATH: /opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3ReadPolicy:
+            BucketName: !Ref AnalyticsBucket
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !GetAtt WheelScanFunction.Arn
+      Events:
+        WheelScanHistory:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /wheel/scan/history
+            Method: GET
+        WheelScanLatest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /wheel/scan/latest
+            Method: GET
+        WheelScanById:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /wheel/scan/{scanId}
+            Method: GET
+        WheelScanTrigger:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /wheel/scan/trigger
+            Method: POST
+
+  # ── Advisor Worker — runs the actual Anthropic call asynchronously ───────────
+  # Invoked as InvocationType: Event (fire-and-forget) by AdvisorApi.
+  # No API Gateway — no 29s timeout. Up to 5 min for Anthropic to respond.
+  # Writes reply (or error) to AdvisorCacheTable so the frontend can poll.
+  AdvisorWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ai-services/advisor-api/
+      Handler: app.workerHandler
+      Timeout: 300
+      MemorySize: 512
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          ANALYTICS_BUCKET: !Ref AnalyticsBucket
+          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
+          NODE_PATH: /opt/nodejs/node_modules:/opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAssetsTableName
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdvisorCacheTable
+        - S3ReadPolicy:
+            BucketName: !Ref AnalyticsBucket
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+
+  # ── Advisor API — handles auth, cache lookup, async dispatch ─────────────────
+  # POST /advisor/chat  → checks DDB cache; on miss fires AdvisorWorkerFunction
+  #   async and returns 202 { jobId, status: "pending" } within ~200ms.
+  # GET  /advisor/cache/:key → returns cached reply; 404 = still pending.
+  AdvisorApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ai-services/advisor-api/
+      Handler: app.handler
+      Timeout: 15
+      MemorySize: 512
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          ANALYTICS_BUCKET: !Ref AnalyticsBucket
+          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
+          ADVISOR_WORKER_FUNCTION: !GetAtt AdvisorWorkerFunction.Arn
+          NODE_PATH: /opt/nodejs/node_modules:/opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAssetsTableName
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdvisorCacheTable
+        - S3ReadPolicy:
+            BucketName: !Ref AnalyticsBucket
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AdvisorWorkerFunction
+      Events:
+        AdvisorChat:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /advisor/chat
+            Method: POST
+        AdvisorCacheGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /advisor/cache/{cacheKey}
+            Method: GET
+
+  # ── Paper Trade API ───────────────────────────────────────────────────────
+  # Fully internal paper trading engine — no broker integration.
+  # Fills and mark-to-market use Black-Scholes with 30-day historical volatility
+  # from Finnhub candles. Supports stocks and options (SELL_PUT, BUY_CALL, etc.).
+  # Auto-fill scheduler runs every 15 minutes via EventBridge.
+  PaperTradeApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/paper-trade-api/
+      Handler: app.handler
+      Timeout: 60
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          PAPER_TRADES_TABLE:           !Ref PaperTradesTable
+          FIN_ACCOUNT_MEMBERS_TABLE:    !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE:           !Ref FinAccountsTable
+          NODE_PATH:                    /opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PaperTradesTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource: !Sub "${PaperTradesTable.Arn}/index/ModeStatusIndex"
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/finnhub/api-key"
+      Events:
+        PaperTradeListStaged:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/staged
+            Method: GET
+        PaperTradeStage:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/staged
+            Method: POST
+        PaperTradeDiscard:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/staged/{tradeId}
+            Method: DELETE
+        PaperTradeUpdateLimit:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/staged/{tradeId}
+            Method: PATCH
+        PaperTradeSubmit:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/submit/{tradeId}
+            Method: POST
+        PaperTradeOrders:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/orders
+            Method: GET
+        PaperTradeCheckFill:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/status/{tradeId}
+            Method: POST
+        PaperTradeClose:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/close/{tradeId}
+            Method: POST
+        PaperTradeSnapshot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/snapshot/{tradeId}
+            Method: GET
+        PaperTradeQuote:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /paper-trade/quote/{ticker}
+            Method: GET
+        PaperTradeAutoFill:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(15 minutes)"
+            ScheduleExpressionTimezone: "America/New_York"
+
+  # ── Budget & Goals API ────────────────────────────────────────────────────
+  BudgetApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/budget-api/
+      Handler: app.handler
+      Runtime: nodejs20.x
+      Timeout: 15
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE:             !Ref FinAssetsTableName
+          SPENDING_TABLE:               !Ref ReceiptLedgerV2TableName
+          DATE_INDEX_NAME:              UserDateIndex
+          FIN_ACCOUNT_MEMBERS_TABLE:    !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE:           !Ref FinAccountsTable
+          NODE_PATH:                    /opt/nodejs/node_modules:/opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReceiptLedgerV2TableNew
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+      Events:
+        BudgetCCActualsGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/cc-actuals/{year}/{month}
+            Method: GET
+        BudgetSpendActualsGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/spend-actuals/{year}
+            Method: GET
+        BudgetOutflowOverridePut:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/outflow-override/{itemId}/{year}/{month}
+            Method: PUT
+        BudgetOutflowOverrideDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/outflow-override/{itemId}/{year}/{month}
+            Method: DELETE
+        BudgetDefinitionYearGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/definition/{year}
+            Method: GET
+        BudgetDefinitionYearPut:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/definition/{year}
+            Method: PUT
+        BudgetDefinitionMonthGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/definition/{year}/{month}
+            Method: GET
+        BudgetDefinitionMonthPut:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/definition/{year}/{month}
+            Method: PUT
+        BudgetDefinitionMonthDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/definition/{year}/{month}
+            Method: DELETE
+        BudgetIncomeGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/income/{year}
+            Method: GET
+        BudgetIncomePut:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/income/{year}
+            Method: PUT
+        BudgetGoalsListGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/goals/{year}
+            Method: GET
+        BudgetGoalsListPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/goals/{year}
+            Method: POST
+        BudgetGoalsItemPatch:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/goals/{year}/{goalId}
+            Method: PATCH
+        BudgetGoalsItemDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/goals/{year}/{goalId}
+            Method: DELETE
+        BudgetOutflowsList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /budget/outflows/{year}/{month}
+            Method: GET
+
+  TaxReturnApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/tax-return-api/
+      Handler: app.handler
+      Runtime: nodejs20.x
+      Timeout: 15
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE:           !Ref FinAssetsTableName
+          FIN_ACCOUNT_MEMBERS_TABLE:  !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE:         !Ref FinAccountsTable
+          TAX_DOCS_BUCKET:            !Ref TaxDocsBucket
+          NODE_PATH:                  /opt/nodejs/node_modules:/opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAssetsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - S3CrudPolicy:
+            BucketName: !Ref TaxDocsBucket
+      Events:
+        TaxReturnList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /tax-return
+            Method: GET
+        TaxReturnConfigSave:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /tax-return/config
+            Method: POST
+        TaxReturnDocCreate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /tax-return/documents
+            Method: POST
+        TaxReturnDocUploadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /tax-return/documents/upload-url
+            Method: POST
+        TaxReturnDocUpdate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /tax-return/documents/{docId}
+            Method: PUT
+        TaxReturnDocDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /tax-return/documents/{docId}
+            Method: DELETE
+        TaxReturnDocDownloadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /tax-return/documents/{docId}/download-url
+            Method: GET
+
+  # Dead Letter Queue — captures failed S3-async Lambda invocations for inspection/retry
+  TaxDocExtractorDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "tax-doc-extractor-dlq-${AWS::StackName}"
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  TaxDocExtractorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ai-services/tax-return-extractor/
+      Handler: app.handler
+      Runtime: nodejs20.x
+      Timeout: 60
+      MemorySize: 1024
+      Layers:
+        - !Ref FinVaultSharedLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt TaxDocExtractorDLQ.Arn
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE:          !Ref FinAssetsTableName
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE:        !Ref FinAccountsTable
+          ANTHROPIC_MODEL:           "claude-sonnet-4-6"
+          NODE_PATH:                 /opt/nodejs/node_modules:/opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        # Use !Sub ARN (not !Ref TaxDocsBucket) so there is no CloudFormation dependency
+        # from this Lambda back to TaxDocsBucket — breaking the circular dep.
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:HeadObject
+              Resource: !Sub "arn:aws:s3:::finvault-tax-docs-${AWS::AccountId}/*"
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FinAssetsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt TaxDocExtractorDLQ.QueueName
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+      # No Events: block — S3 notification is wired directly on TaxDocsBucket below.
+      # SAM's Type:S3 event on a same-stack bucket creates a circular dependency
+      # (Lambda policy → !Ref Bucket, Bucket notification → Lambda Arn → circular).
+      # Instead: explicit Lambda::Permission + DependsOn + NotificationConfiguration.
+
+  # Allow S3 to invoke the extractor. SourceArn uses !Sub (not !GetAtt TaxDocsBucket.Arn)
+  # so this permission has no CloudFormation dep on TaxDocsBucket.
+  TaxDocExtractorLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt TaxDocExtractorFunction.Arn
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:aws:s3:::finvault-tax-docs-${AWS::AccountId}"
+
+  # Bucket defined AFTER the Lambda permission so the notification config can be set
+  # atomically with the bucket creation. DependsOn ensures the Lambda permission exists
+  # before S3 tries to validate it during bucket creation.
+  TaxDocsBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: TaxDocExtractorLambdaPermission
+    Properties:
+      BucketName: !Sub "finvault-tax-docs-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [PUT, GET]
+            AllowedOrigins: ["*"]
+            MaxAge: 3600
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt TaxDocExtractorFunction.Arn
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 4 — Item 5: S3 Lifecycle for metals price snapshots
+#
+# The MetalsBucket (daily-metal-prices-1152) is a pre-existing bucket not managed
+# by this stack, so lifecycle rules cannot be set via CloudFormation without
+# importing the bucket.
+#
+# Run this ONE-TIME AWS CLI command after deployment to expire snapshots > 365 days:
+#
+#   aws s3api put-bucket-lifecycle-configuration \
+#     --bucket daily-metal-prices-1152 \
+#     --lifecycle-configuration '{
+#       "Rules": [{
+#         "ID": "expire-old-metal-prices",
+#         "Status": "Enabled",
+#         "Filter": { "Prefix": "metals/" },
+#         "Expiration": { "Days": 365 }
+#       }]
+#     }' \
+#     --profile finvault-sb
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+Outputs:
+  ApiBaseUrl:
+    Description: "HTTP API base URL"
+    Value: !Sub "https://${MetalsHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+
+  # V3 Cognito outputs (use these in your frontend .env)
+  CognitoUserPoolIdV3:
+    Value: !Ref FinVaultUserPoolV3
+
+  CognitoUserPoolClientIdV3:
+    Value: !Ref FinVaultUserPoolClientV3
+
+  CognitoDomainPrefixV3Out:
+    Value: !Ref CognitoDomainPrefixV3
+
+  AnalyticsBucketName:
+    Description: "S3 analytics bucket"
+    Value: !Ref AnalyticsBucket
+
+  ReceiptLedgerV2TableNameOut:
+    Description: "ReceiptLedgerV2 table name"
+    Value: !Ref ReceiptLedgerV2TableNew
+
+  ReceiptLedgerV2StreamArnOut:
+    Description: "ReceiptLedgerV2 stream ARN"
+    Value: !GetAtt ReceiptLedgerV2TableNew.StreamArn
+
+  FinAccountsTableName:
+    Value: !Ref FinAccountsTable
+
+  FinAccountMembersTableName:
+    Value: !Ref FinAccountMembersTable
+
+  FinAccountInvitesTableV2Name:
+    Value: !Ref FinAccountInvitesTableV2
+
+  StocksSnapshotBucketNameOut:
+    Description: "Private S3 bucket for daily stocks snapshot. Read via: aws s3 cp s3://<bucket>/stocks-snapshot.json - --profile finvault-dev"
+    Value: !Ref StocksSnapshotBucket
