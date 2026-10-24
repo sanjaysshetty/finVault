@@ -36,6 +36,9 @@ jobs:
           fi
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          # DynamoDB backup names only allow [a-zA-Z0-9_.-] — no colons, so a
+          # separate timestamp variant for backup names only.
+          echo "backup_ts=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -49,7 +52,7 @@ jobs:
           TABLES="finAssets StoreReceiptLedger FinAccounts FinAccountMembers FinAccountInvitesV2 PaperTrades"
           ARNS="[]"
           for t in $TABLES; do
-            NAME="${t}-${{ inputs.environment }}-${{ steps.env.outputs.sha }}-${{ steps.env.outputs.deployed_at }}"
+            NAME="${t}-${{ inputs.environment }}-${{ steps.env.outputs.sha }}-${{ steps.env.outputs.backup_ts }}"
             ARN=$(aws dynamodb create-backup --table-name "$t" --backup-name "$NAME" --query "BackupDetails.BackupArn" --output text)
             echo "Backed up $t -> $ARN"
             ARNS=$(echo "$ARNS" | jq --arg t "$t" --arg a "$ARN" '. + [{table: $t, backupArn: $a}]')
