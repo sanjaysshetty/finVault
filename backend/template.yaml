@@ -879,10 +879,13 @@ Resources:
       Handler: app.handler
       Timeout: 15
       MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
       Environment:
         Variables:
           FIN_ACCOUNT_INVITES_TABLE: !Ref FinAccountInvitesTableV2
           FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          NODE_PATH: /opt/nodejs/node_modules:/opt/nodejs
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref FinAccountInvitesTableV2

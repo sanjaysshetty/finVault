@@ -13,17 +13,12 @@
  * All errors are caught and logged; the event is always returned.
  */
 
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const {
-  DynamoDBDocumentClient,
   QueryCommand,
   PutCommand,
   UpdateCommand,
 } = require("@aws-sdk/lib-dynamodb");
-
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
+const { doc } = require("finvault-shared/db/client");
 
 const INVITES_TABLE = process.env.FIN_ACCOUNT_INVITES_TABLE || "FinAccountInvitesV2";
 const MEMBERS_TABLE = process.env.FIN_ACCOUNT_MEMBERS_TABLE || "FinAccountMembers";

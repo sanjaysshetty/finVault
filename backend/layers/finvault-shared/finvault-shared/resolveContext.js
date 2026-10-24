@@ -15,19 +15,7 @@
  * Throws:  401 if JWT is missing, 403 if not a member of the requested account.
  */
 
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const {
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-} = require("@aws-sdk/lib-dynamodb");
-
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
-
-const MEMBERS_TABLE  = process.env.FIN_ACCOUNT_MEMBERS_TABLE || "FinAccountMembers";
-const ACCOUNTS_TABLE = process.env.FIN_ACCOUNTS_TABLE        || "FinAccounts";
+const { getMember, getAccount, putMember, putAccount } = require("./db/accountsRepo");
 
 /** Default pages object granted to the account owner. */
 const ALL_PAGES_WRITE = {
@@ -59,36 +47,27 @@ const ALL_PAGES_WRITE = {
 async function bootstrapPrimaryAccount(userId) {
   const now = new Date().toISOString();
 
-  await doc.send(new PutCommand({
-    TableName: ACCOUNTS_TABLE,
-    Item: {
-      accountId:   userId,
-      ownerId:     userId,
-      accountName: "My Account",
-      isPrimary:   true,
-      status:      "ACTIVE",
-      createdAt:   now,
-    },
-    ConditionExpression: "attribute_not_exists(accountId)",
-  })).catch(e => {
+  await putAccount({
+    accountId:   userId,
+    ownerId:     userId,
+    accountName: "My Account",
+    isPrimary:   true,
+    status:      "ACTIVE",
+    createdAt:   now,
+  }, "attribute_not_exists(accountId)").catch(e => {
     if (e.name !== "ConditionalCheckFailedException") throw e;
   });
 
-  await doc.send(new PutCommand({
-    TableName: MEMBERS_TABLE,
-    Item: {
-      accountId: userId,
-      userId,
-      role:      "owner",
-      pages:     ALL_PAGES_WRITE,
-      gsi1pk:    userId,          // GSI1 PK — userId → all accounts for this user
-      gsi1sk:    `ACCOUNT#${userId}`,
-      isPrimary: true,
-      joinedAt:  now,
-    },
-    ConditionExpression:
-      "attribute_not_exists(accountId) AND attribute_not_exists(userId)",
-  })).catch(e => {
+  await putMember({
+    accountId: userId,
+    userId,
+    role:      "owner",
+    pages:     ALL_PAGES_WRITE,
+    gsi1pk:    userId,          // GSI1 PK — userId → all accounts for this user
+    gsi1sk:    `ACCOUNT#${userId}`,
+    isPrimary: true,
+    joinedAt:  now,
+  }, "attribute_not_exists(accountId) AND attribute_not_exists(userId)").catch(e => {
     if (e.name !== "ConditionalCheckFailedException") throw e;
   });
 }
@@ -115,12 +94,7 @@ async function resolveContext(event) {
   const accountId = headerAccountId || userId;
 
   // Look up membership record.
-  const result = await doc.send(new GetCommand({
-    TableName: MEMBERS_TABLE,
-    Key: { accountId, userId },
-  }));
-
-  let member = result.Item;
+  let member = await getMember(accountId, userId);
 
   if (!member) {
     if (accountId === userId) {
@@ -140,13 +114,8 @@ async function resolveContext(event) {
     }
   } else if (accountId !== userId) {
     // Non-primary account: verify the account itself is not soft-deleted.
-    const acctRes = await doc.send(new GetCommand({
-      TableName: ACCOUNTS_TABLE,
-      Key: { accountId },
-      ProjectionExpression: "#s",
-      ExpressionAttributeNames: { "#s": "status" },
-    }));
-    if (!acctRes.Item || acctRes.Item.status === "DELETED") {
+    const acct = await getAccount(accountId, "#s", { "#s": "status" });
+    if (!acct || acct.status === "DELETED") {
       const err = new Error("Forbidden: account not found or has been deleted");
       err.statusCode = 403;
       throw err;
