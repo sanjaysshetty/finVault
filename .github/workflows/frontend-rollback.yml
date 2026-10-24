@@ -27,8 +27,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.target_sha }}
           fetch-depth: 0
+
+      # actions/checkout's own `ref:` input resolves branch/tag names, not
+      # arbitrary commit SHAs — it fails outright on a short SHA ("could not
+      # be found"). Checking out normally first (full history via
+      # fetch-depth: 0), then plain `git checkout` as a separate step, uses
+      # git's own native short-SHA resolution against the local object
+      # database instead.
+      - name: Checkout target commit
+        run: git checkout ${{ inputs.target_sha }}
 
       - name: Confirm checked-out commit
         run: |
