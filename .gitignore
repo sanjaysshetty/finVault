@@ -30,11 +30,6 @@ dist-ssr
 
 # Build output
 .aws-sam/
-# local deploy config (do not commit)
-template.yaml
-
-# SAM local deployment config
-samconfig.toml
 
 # dependencies
 node_modules/

@@ -1,0 +1,31 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "finVault"
+resolve_s3 = true
+s3_prefix = "finVault"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+parameter_overrides = "ReceiptsBucketName=\"finapp-receipts-1152\" ReceiptsPrefix=\"receipts/\" FrontendBucketName=\"metals-prices-sanjay-1152\" FrontendPrefix=\"app/\" CognitoDomainPrefixV3=\"finvault-v3-20260221\" FrontendBaseUrlDev=\"http://localhost:5173/\" FrontendBaseUrlProd=\"https://example.com/app/\" FrontendCallbackUrlDev=\"http://localhost:5173/auth/callback\" FrontendCallbackUrlProd=\"https://bljq4vrg3d.execute-api.us-east-1.amazonaws.com/app/auth/callback\" FinAssetsTableName=\"finAssets\" ReceiptLedgerV2TableName=\"StoreReceiptLedger\" StocksSnapshotBucketName=\"finvault-stocks-snapshot-1152\" SnapshotUserId=\"REPLACE\""
+
+[default.global.parameters]
+region = "us-east-1"
+
+# ── Sandbox environment ────────────────────────────────────────────────────────
+# Deploy with: sam deploy --config-env sb
+# Uses AWS profile "finvault-sb" — set via: export AWS_PROFILE=finvault-sb
+
+[sb.deploy.parameters]
+stack_name = "finVault-sb"
+resolve_s3 = true
+s3_prefix = "finVault-sb"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+parameter_overrides = "ReceiptsBucketName=\"finvault-receipts-sandbox\" ReceiptsPrefix=\"receipts/\" FrontendBucketName=\"finvault-frontend-sandbox-1152\" FrontendPrefix=\"app/\" MetalsBucketName=\"finvault-metal-prices-sandbox-1152\" CognitoDomainPrefixV3=\"finvault-sandbox-1152-v3\" FrontendBaseUrlDev=\"http://localhost:5173/\" FrontendBaseUrlProd=\"https://zdxkosnz8j.execute-api.us-east-1.amazonaws.com/app/\" FrontendCallbackUrlDev=\"http://localhost:5173/auth/callback\" FrontendCallbackUrlProd=\"https://zdxkosnz8j.execute-api.us-east-1.amazonaws.com/app/auth/callback\" FinAssetsTableName=\"finAssets\" ReceiptLedgerV2TableName=\"StoreReceiptLedger\" StocksSnapshotBucketName=\"finvault-stocks-snapshot-sb-1152\" SnapshotUserId=\"REPLACE\" WheelScanAccountId=\"d4c8d4c8-40f1-704f-4fbe-7fd97fec4688\""
+
+[sb.global.parameters]
+region = "us-east-1"
