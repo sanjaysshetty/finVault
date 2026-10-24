@@ -820,8 +820,10 @@ Resources:
       Description: Shared utilities for FinVault Lambdas
       ContentUri: layers/finvault-shared/
       CompatibleRuntimes:
-        - nodejs18.x
+        - nodejs20.x
       RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: nodejs20.x
 
   FinVaultAgentCoreLayer:
     Type: AWS::Serverless::LayerVersion
