@@ -61,6 +61,23 @@ jobs:
           role-to-assume: ${{ secrets.AWS_FRONTEND_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
+      - name: Look up the most recent backend deploy, to cross-link lineage
+        id: paired
+        env:
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PK: "${{ inputs.environment }}#backend"
+        run: |
+          set -euo pipefail
+          ITEM=$(aws dynamodb query \
+            --table-name "$TABLE_NAME" \
+            --key-condition-expression "envComponent = :pk" \
+            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+            --no-scan-index-forward \
+            --limit 1 \
+            --query "Items[0]" --output json)
+          echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(echo "$ITEM" | jq -r '.deployedAt.S // "none"')" >> "$GITHUB_OUTPUT"
+
       - name: sync to S3
         run: aws s3 sync frontend/dist/ "s3://${{ secrets.FRONTEND_BUCKET }}/app/" --delete
 
@@ -73,6 +90,8 @@ jobs:
           DEPLOYED_BY: ${{ github.actor }}
           RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
+          PAIRED_BACKEND_SHA: ${{ steps.paired.outputs.sha }}
+          PAIRED_BACKEND_AT: ${{ steps.paired.outputs.deployed_at }}
         run: |
           set -euo pipefail
           jq -n \
@@ -82,13 +101,19 @@ jobs:
             --arg commitMessage "$COMMIT_MSG" \
             --arg deployedBy "$DEPLOYED_BY" \
             --arg workflowRunUrl "$RUN_URL" \
+            --arg pairedBackendSha "$PAIRED_BACKEND_SHA" \
+            --arg pairedBackendAt "$PAIRED_BACKEND_AT" \
             '{
-              envComponent:   {S: $envComponent},
-              deployedAt:     {S: $deployedAt},
-              sha:            {S: $sha},
-              commitMessage:  {S: $commitMessage},
-              deployedBy:     {S: $deployedBy},
-              workflowRunUrl: {S: $workflowRunUrl}
+              envComponent:     {S: $envComponent},
+              deployedAt:       {S: $deployedAt},
+              sha:              {S: $sha},
+              commitMessage:    {S: $commitMessage},
+              deployedBy:       {S: $deployedBy},
+              workflowRunUrl:   {S: $workflowRunUrl},
+              isRollback:       {BOOL: false},
+              verified:         {BOOL: false},
+              pairedBackendSha: {S: $pairedBackendSha},
+              pairedBackendAt:  {S: $pairedBackendAt}
             }' > item.json
           aws dynamodb put-item --table-name "$TABLE_NAME" --item file://item.json
 
@@ -98,4 +123,7 @@ jobs:
             echo "## Frontend deploy — ${{ inputs.environment }}"
             echo "- SHA: \`${{ steps.env.outputs.sha }}\`"
             echo "- Deployed at: ${{ steps.env.outputs.deployed_at }}"
+            echo "- Paired backend (most recent at time of this deploy): \`${{ steps.paired.outputs.sha }}\` @ ${{ steps.paired.outputs.deployed_at }}"
+            echo ""
+            echo "**This is not yet marked verified.** After you've confirmed the app actually works, run \"Mark Deployment Verified\" (environment=${{ inputs.environment }}, component=frontend, sha=${{ steps.env.outputs.sha }})."
           } >> "$GITHUB_STEP_SUMMARY"
