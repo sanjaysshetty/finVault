@@ -55,7 +55,7 @@ jobs:
             NAME="${t}-${{ inputs.environment }}-${{ steps.env.outputs.sha }}-${{ steps.env.outputs.backup_ts }}"
             ARN=$(aws dynamodb create-backup --table-name "$t" --backup-name "$NAME" --query "BackupDetails.BackupArn" --output text)
             echo "Backed up $t -> $ARN"
-            ARNS=$(echo "$ARNS" | jq --arg t "$t" --arg a "$ARN" '. + [{table: $t, backupArn: $a}]')
+            ARNS=$(echo "$ARNS" | jq -c --arg t "$t" --arg a "$ARN" '. + [{table: $t, backupArn: $a}]')
           done
           echo "backup_arns<<EOF" >> "$GITHUB_OUTPUT"
           echo "$ARNS" >> "$GITHUB_OUTPUT"
@@ -86,18 +86,39 @@ jobs:
               DeployedAt=${{ steps.env.outputs.deployed_at }}
 
       - name: Record this deployment
+        env:
+          ENV_COMPONENT: "${{ inputs.environment }}#backend"
+          DEPLOYED_AT: ${{ steps.env.outputs.deployed_at }}
+          SHA: ${{ steps.env.outputs.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message || 'manual dispatch' }}
+          DEPLOYED_BY: ${{ github.actor }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BACKUPS_JSON: ${{ steps.backups.outputs.backup_arns }}
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
         run: |
-          aws dynamodb put-item \
-            --table-name "Deployments-${{ steps.env.outputs.stack_name }}" \
-            --item "{
-              \"envComponent\": {\"S\": \"${{ inputs.environment }}#backend\"},
-              \"deployedAt\": {\"S\": \"${{ steps.env.outputs.deployed_at }}\"},
-              \"sha\": {\"S\": \"${{ steps.env.outputs.sha }}\"},
-              \"commitMessage\": {\"S\": ${{ toJSON(github.event.head_commit.message || 'manual dispatch') }}},
-              \"deployedBy\": {\"S\": \"${{ github.actor }}\"},
-              \"workflowRunUrl\": {\"S\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"},
-              \"backups\": {\"S\": ${{ toJSON(steps.backups.outputs.backup_arns) }}}
-            }"
+          set -euo pipefail
+          # Build the item via jq (safe JSON-string encoding of every field,
+          # regardless of quotes/newlines/special chars) instead of hand-
+          # interpolating template expressions into a literal JSON string —
+          # that approach broke on the multi-line backups array.
+          jq -n \
+            --arg envComponent "$ENV_COMPONENT" \
+            --arg deployedAt "$DEPLOYED_AT" \
+            --arg sha "$SHA" \
+            --arg commitMessage "$COMMIT_MSG" \
+            --arg deployedBy "$DEPLOYED_BY" \
+            --arg workflowRunUrl "$RUN_URL" \
+            --arg backups "$BACKUPS_JSON" \
+            '{
+              envComponent:   {S: $envComponent},
+              deployedAt:     {S: $deployedAt},
+              sha:            {S: $sha},
+              commitMessage:  {S: $commitMessage},
+              deployedBy:     {S: $deployedBy},
+              workflowRunUrl: {S: $workflowRunUrl},
+              backups:        {S: $backups}
+            }' > item.json
+          aws dynamodb put-item --table-name "$TABLE_NAME" --item file://item.json
 
       - name: Summary
         run: |
