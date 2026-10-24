@@ -65,17 +65,32 @@ jobs:
         run: aws s3 sync frontend/dist/ "s3://${{ secrets.FRONTEND_BUCKET }}/app/" --delete
 
       - name: Record this deployment
+        env:
+          ENV_COMPONENT: "${{ inputs.environment }}#frontend"
+          DEPLOYED_AT: ${{ steps.env.outputs.deployed_at }}
+          SHA: ${{ steps.env.outputs.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message || 'manual dispatch' }}
+          DEPLOYED_BY: ${{ github.actor }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TABLE_NAME: "Deployments-${{ steps.env.outputs.stack_name }}"
         run: |
-          aws dynamodb put-item \
-            --table-name "Deployments-${{ steps.env.outputs.stack_name }}" \
-            --item "{
-              \"envComponent\": {\"S\": \"${{ inputs.environment }}#frontend\"},
-              \"deployedAt\": {\"S\": \"${{ steps.env.outputs.deployed_at }}\"},
-              \"sha\": {\"S\": \"${{ steps.env.outputs.sha }}\"},
-              \"commitMessage\": {\"S\": ${{ toJSON(github.event.head_commit.message || 'manual dispatch') }}},
-              \"deployedBy\": {\"S\": \"${{ github.actor }}\"},
-              \"workflowRunUrl\": {\"S\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}
-            }"
+          set -euo pipefail
+          jq -n \
+            --arg envComponent "$ENV_COMPONENT" \
+            --arg deployedAt "$DEPLOYED_AT" \
+            --arg sha "$SHA" \
+            --arg commitMessage "$COMMIT_MSG" \
+            --arg deployedBy "$DEPLOYED_BY" \
+            --arg workflowRunUrl "$RUN_URL" \
+            '{
+              envComponent:   {S: $envComponent},
+              deployedAt:     {S: $deployedAt},
+              sha:            {S: $sha},
+              commitMessage:  {S: $commitMessage},
+              deployedBy:     {S: $deployedBy},
+              workflowRunUrl: {S: $workflowRunUrl}
+            }' > item.json
+          aws dynamodb put-item --table-name "$TABLE_NAME" --item file://item.json
 
       - name: Summary
         run: |
