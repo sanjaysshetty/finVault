@@ -1,7 +1,6 @@
 const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, GetCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
 const { getSecret } = require("finvault-shared/getSecret");
+const { getCachedPrices, setCachedPrices } = require("finvault-shared/db/priceCacheRepo");
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
 const YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 
@@ -41,51 +40,11 @@ function parseCsvSymbols(s) {
     .slice(0, 25);
 }
 
-/* -------------------- S3 + DynamoDB clients -------------------- */
+/* -------------------- S3 client -------------------- */
 const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
 const METALS_BUCKET = process.env.METALS_BUCKET || "finvault-metal-prices-sandbox-1152";
-const PRICE_CACHE_TABLE = process.env.PRICE_CACHE_TABLE;
-const PRICE_CACHE_TTL_MS = 60_000; // 60 seconds application-level TTL
 
 const s3 = new S3Client({ region: REGION });
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
-  marshallOptions: { removeUndefinedValues: true },
-});
-
-/* -------------------- Price cache (DynamoDB) -------------------- */
-async function getCachedPrices(cacheKey) {
-  if (!PRICE_CACHE_TABLE) return null;
-  try {
-    const resp = await ddb.send(new GetCommand({
-      TableName: PRICE_CACHE_TABLE,
-      Key: { cacheKey },
-    }));
-    const item = resp.Item;
-    if (!item?.cachedAt) return null;
-    const age = Date.now() - new Date(item.cachedAt).getTime();
-    return age < PRICE_CACHE_TTL_MS ? item.data : null;
-  } catch {
-    return null;
-  }
-}
-
-async function setCachedPrices(cacheKey, data) {
-  if (!PRICE_CACHE_TABLE) return;
-  try {
-    const now = new Date();
-    await ddb.send(new PutCommand({
-      TableName: PRICE_CACHE_TABLE,
-      Item: {
-        cacheKey,
-        data,
-        cachedAt: now.toISOString(),
-        ttl: Math.floor(now.getTime() / 1000) + 3600, // DynamoDB TTL: clean up after 1 hour
-      },
-    }));
-  } catch {
-    // Cache write failures are non-fatal
-  }
-}
 
 function isoDateUTC(d = new Date()) {
   return d.toISOString().slice(0, 10);

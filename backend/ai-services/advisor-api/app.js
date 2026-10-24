@@ -3,23 +3,20 @@
 const https = require("https");
 const crypto = require("crypto");
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, GetCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
 const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
 const { json, badRequest } = require("finvault-shared/http");
 const { queryByGSI1 } = require("finvault-shared/db/finAssetsRepo");
 const { resolveContext, assertRead } = require("finvault-shared/resolveContext");
 const { getSecret } = require("finvault-shared/getSecret");
+const { readCache, writeCache } = require("finvault-shared/db/advisorCacheRepo");
 
 const ANALYTICS_BUCKET        = process.env.ANALYTICS_BUCKET        || "";
-const ADVISOR_CACHE_TABLE     = process.env.ADVISOR_CACHE_TABLE     || "";
 const ADVISOR_WORKER_FUNCTION = process.env.ADVISOR_WORKER_FUNCTION || "";
 const MODEL = "claude-sonnet-4-6";
 const FRAMEWORK_S3_KEY = "config/trade_framework.md";
 
 /* ── AWS clients ─────────────────────────────────────────────── */
 const s3     = new S3Client({});
-const ddb    = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const lambda = new LambdaClient({});
 
 /* ── In-memory framework cache (5-minute TTL) ───────────────── */
@@ -182,29 +179,6 @@ function buildCacheKey(accountId, message, history, images) {
     imageFingerprint: (images || []).map(img => `${img.media_type}:${(img.data || "").length}`),
   });
   return crypto.createHash("sha256").update(payload).digest("hex");
-}
-
-/* ── DDB cache read ──────────────────────────────────────────── */
-async function readCache(cacheKey) {
-  if (!ADVISOR_CACHE_TABLE) return null;
-  try {
-    const res = await ddb.send(new GetCommand({ TableName: ADVISOR_CACHE_TABLE, Key: { cacheKey } }));
-    return res.Item || null;
-  } catch { return null; }
-}
-
-/* ── DDB cache write — stores reply or error ─────────────────── */
-async function writeCache(cacheKey, data) {
-  if (!ADVISOR_CACHE_TABLE) return;
-  const expiresAt = Math.floor(Date.now() / 1000) + 30 * 60; // 30 min TTL
-  try {
-    await ddb.send(new PutCommand({
-      TableName: ADVISOR_CACHE_TABLE,
-      Item: { cacheKey, ...data, expiresAt, updatedAt: new Date().toISOString() },
-    }));
-  } catch (e) {
-    console.error(JSON.stringify({ level: "WARN", event: "cache_write_failed", error: e.message }));
-  }
 }
 
 /* ── Build system prompt parts ───────────────────────────────── */
