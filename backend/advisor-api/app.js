@@ -9,8 +9,8 @@ const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
 const { json, badRequest } = require("finvault-shared/http");
 const { queryByGSI1 } = require("finvault-shared/ddb");
 const { resolveContext, assertRead } = require("finvault-shared/resolveContext");
+const { getSecret } = require("finvault-shared/getSecret");
 
-const ANTHROPIC_API_KEY       = process.env.ANTHROPIC_API_KEY       || "";
 const ANALYTICS_BUCKET        = process.env.ANALYTICS_BUCKET        || "";
 const ADVISOR_CACHE_TABLE     = process.env.ADVISOR_CACHE_TABLE     || "";
 const ADVISOR_WORKER_FUNCTION = process.env.ADVISOR_WORKER_FUNCTION || "";
@@ -248,7 +248,8 @@ function buildUserContent(message, images) {
 }
 
 /* ── Call Anthropic API ──────────────────────────────────────── */
-function callAnthropic(frameworkPart, dynamicPart, messages) {
+async function callAnthropic(frameworkPart, dynamicPart, messages) {
+  const apiKey = await getSecret("/finvault/anthropic/api-key");
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       model: MODEL,
@@ -267,7 +268,7 @@ function callAnthropic(frameworkPart, dynamicPart, messages) {
         method: "POST",
         headers: {
           "Content-Type":      "application/json",
-          "x-api-key":         ANTHROPIC_API_KEY,
+          "x-api-key":         apiKey,
           "anthropic-version": "2023-06-01",
           "anthropic-beta":    "prompt-caching-2024-07-31",
           "Content-Length":    Buffer.byteLength(body),
@@ -406,10 +407,6 @@ exports.handler = async (event) => {
 
       const { message, history = [], marginData, images = [] } = body;
       if (!message || !String(message).trim()) return badRequest("message is required");
-
-      if (!ANTHROPIC_API_KEY || ANTHROPIC_API_KEY === "REPLACE") {
-        return json(500, { error: true, stage: "config", message: "Advisor service not configured (missing API key)" });
-      }
 
       const cacheKey = buildCacheKey(ctx.accountId, message, history, images);
 

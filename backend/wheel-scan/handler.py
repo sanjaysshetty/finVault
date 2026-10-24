@@ -22,6 +22,7 @@ import datetime
 import boto3
 import anthropic
 from anthropic import RateLimitError
+from finvault_agent_core import get_secret
 
 from tools import (
     get_full_universe,
@@ -35,7 +36,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 ANALYTICS_BUCKET      = os.environ.get("ANALYTICS_BUCKET", "")
-ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
 WHEEL_SCAN_ACCOUNT_ID = os.environ.get("WHEEL_SCAN_ACCOUNT_ID", "")  # userId/accountId for scheduled runs
 MODEL        = "claude-sonnet-4-6"
 WHEEL_PREFIX = "WheelReports/"
@@ -165,7 +165,7 @@ def get_dynamic_macro_context():
     report JSON (so the UI always shows the context that actually drove this scan).
     Returns None on failure; caller falls back gracefully.
     """
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=get_secret("/finvault/anthropic/api-key"))
     today = datetime.date.today().isoformat()
 
     prompt = (
@@ -230,7 +230,7 @@ def run_claude_analysis(stocks_with_options, fund_scores, macro_context=None):
     - Trade theses and PROCEED/WATCH/SKIP recommendations
     Returns dict keyed by ticker with macro + thesis data.
     """
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=get_secret("/finvault/anthropic/api-key"))
 
     # Build compact summary for Claude context (avoid huge payloads)
     stock_summaries = []
