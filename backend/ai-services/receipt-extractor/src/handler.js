@@ -17,13 +17,11 @@
 import crypto from "crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { getSecret } from "finvault-shared/getSecret.js";
+import { putItem, batchWriteItems } from "finvault-shared/db/receiptLedgerRepo.js";
 
 // AWS clients
 const s3 = new S3Client({});
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
 /* -------------------- Category taxonomy -------------------- */
 
@@ -308,48 +306,25 @@ function normalizeSummaryLines(summaryLines) {
   return ["SUBTOTAL", "TAX", "TOTAL"].map((t) => map.get(t));
 }
 
-async function batchWriteAll(table, requests) {
-  // BatchWrite max 25; also handle UnprocessedItems with retries
-  for (let i = 0; i < requests.length; i += 25) {
-    let chunk = requests.slice(i, i + 25);
-
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const resp = await ddb.send(new BatchWriteCommand({ RequestItems: { [table]: chunk } }));
-      const unprocessed = resp?.UnprocessedItems?.[table] || [];
-      if (!unprocessed.length) break;
-
-      chunk = unprocessed;
-      const backoff = 200 * Math.pow(2, attempt); // 200,400,800...
-      console.log(`BatchWrite unprocessed=${unprocessed.length}, retrying in ${backoff}ms`);
-      await new Promise((r) => setTimeout(r, backoff));
-    }
-  }
-}
-
 async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, userId }) {
-  const table = requireEnv("RECEIPT_LEDGER_TABLE");
+  requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
   const purchaseDate = resolvePurchaseDate(extracted?.receipt?.purchaseDate);
 
   // META row (NOT part of curation queue)
-  await ddb.send(
-    new PutCommand({
-      TableName: table,
-      Item: {
-        pk: `RECEIPT#${receiptId}`,
-        sk: `META#${receiptId}`,
-        receiptId,
-        userId,
-        date: purchaseDate,
-        store: extracted?.receipt?.store ?? null,
-        currency: extracted?.receipt?.currency ?? "USD",
-        s3Bucket: bucket,
-        s3Key,
-        status: "READY",
-        updatedAt: now,
-      },
-    })
-  );
+  await putItem({
+    pk: `RECEIPT#${receiptId}`,
+    sk: `META#${receiptId}`,
+    receiptId,
+    userId,
+    date: purchaseDate,
+    store: extracted?.receipt?.store ?? null,
+    currency: extracted?.receipt?.currency ?? "USD",
+    s3Bucket: bucket,
+    s3Key,
+    status: "READY",
+    updatedAt: now,
+  });
 
   const itemLines = Array.isArray(extracted?.lines) ? extracted.lines : [];
   const summaryLines = normalizeSummaryLines(extracted?.summaryLines);
@@ -406,29 +381,24 @@ async function writeToReceiptLedgerTable({ receiptId, bucket, s3Key, extracted, 
   });
 
   const putReqs = [...itemPutReqs, ...summaryPutReqs];
-  await batchWriteAll(table, putReqs);
+  await batchWriteItems(putReqs);
 }
 
 async function markFailed({ receiptId, bucket, s3Key, errorMessage, userId }) {
-  const table = requireEnv("RECEIPT_LEDGER_TABLE");
+  requireEnv("RECEIPT_LEDGER_TABLE");
   const now = new Date().toISOString();
 
-  await ddb.send(
-    new PutCommand({
-      TableName: table,
-      Item: {
-        pk: `RECEIPT#${receiptId}`,
-        sk: `META#${receiptId}`,
-        receiptId,
-        userId: userId || null,
-        s3Bucket: bucket,
-        s3Key,
-        status: "FAILED",
-        error: String(errorMessage || "Unknown error").slice(0, 1000),
-        updatedAt: now,
-      },
-    })
-  );
+  await putItem({
+    pk: `RECEIPT#${receiptId}`,
+    sk: `META#${receiptId}`,
+    receiptId,
+    userId: userId || null,
+    s3Bucket: bucket,
+    s3Key,
+    status: "FAILED",
+    error: String(errorMessage || "Unknown error").slice(0, 1000),
+    updatedAt: now,
+  });
 }
 
 /* -------------------- Handler -------------------- */

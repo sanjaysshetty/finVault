@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.535.0",
+    "@aws-sdk/lib-dynamodb": "^3.535.0",
     "@aws-sdk/util-dynamodb": "^3.535.0",
     "@anthropic-ai/sdk": "^0.39.0",
     "p-limit": "^7.2.0"

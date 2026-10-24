@@ -1,16 +1,11 @@
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const {
-  DynamoDBDocumentClient,
   QueryCommand,
   PutCommand,
   UpdateCommand,
   DeleteCommand,
   GetCommand,
 } = require("@aws-sdk/lib-dynamodb");
-
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
+const { doc: ddb } = require("finvault-shared/db/client");
 
 // ✅ default table name so GET /spending doesn't 500 if env var missing
 const TABLE_NAME = process.env.TABLE_NAME || "StoreReceiptLedger";

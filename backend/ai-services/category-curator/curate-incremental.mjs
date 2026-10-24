@@ -1,13 +1,12 @@
 // curate-incremental.mjs
 import Anthropic from "@anthropic-ai/sdk";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
-  DynamoDBDocumentClient,
   ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import pLimit from "p-limit";
 import { getSecret } from "finvault-shared/getSecret.js";
+import { doc as ddb } from "finvault-shared/db/client.js";
 
 /**
  * Incremental curation Lambda:
@@ -58,10 +57,6 @@ function getClient() {
   }
   return clientPromise;
 }
-
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
-  marshallOptions: { removeUndefinedValues: true },
-});
 
 const limit = pLimit(CONCURRENCY);
 

@@ -1,9 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const {
-  DynamoDBDocumentClient,
   PutCommand,
   GetCommand,
   DeleteCommand,
@@ -16,10 +14,9 @@ const { putItem, getItem, queryByGSI1 } = require("finvault-shared/db/finAssetsR
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
 const { BUDGET_CATEGORIES, toBudgetCategory, isExcluded } = require("./categoryMap");
 
-// Direct DDB client for StoreReceiptLedger (shared layer ddb.js is pinned to FIN_ASSETS_TABLE)
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
+// StoreReceiptLedger access — shared client, bespoke queries kept as-is
+// (finAssetsRepo above is pinned to FIN_ASSETS_TABLE, a different table)
+const { doc: ddb } = require("finvault-shared/db/client");
 const SPENDING_TABLE    = process.env.SPENDING_TABLE    || "StoreReceiptLedger";
 const DATE_INDEX_NAME   = process.env.DATE_INDEX_NAME   || "UserDateIndex";
 
