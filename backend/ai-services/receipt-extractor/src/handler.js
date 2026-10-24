@@ -1,4 +1,4 @@
-// backend/receipt-extractor/src/handler.js
+// backend/ai-services/receipt-extractor/src/handler.js
 //
 // S3-triggered receipt extractor Lambda (images only).
 // receiptId format: <StoreName>_<MM-DD-YYYY>_<UniqueID>
