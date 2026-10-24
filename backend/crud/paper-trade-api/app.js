@@ -26,24 +26,11 @@
  *   Expired option → EXPIRED with result WORTHLESS or ASSIGNED
  */
 
-const { DynamoDBClient }      = require("@aws-sdk/client-dynamodb");
-const {
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-  UpdateCommand,
-  QueryCommand,
-} = require("@aws-sdk/lib-dynamodb");
 const { resolveContext, assertWrite, assertRead } = require("finvault-shared/resolveContext");
 const { getSecret } = require("finvault-shared/getSecret");
-
-// ── DynamoDB ──────────────────────────────────────────────────────────────────
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
+const paperTradesRepo = require("finvault-shared/db/paperTradesRepo");
 
 // ── Environment ───────────────────────────────────────────────────────────────
-const PAPER_TRADES_TABLE = process.env.PAPER_TRADES_TABLE || "PaperTrades";
 const FINNHUB_BASE       = "https://finnhub.io/api/v1";
 const RISK_FREE_RATE     = 0.045; // 4.5% annualized — update once a year
 const TRADE_MODE         = "PAPER";
@@ -235,23 +222,13 @@ async function evaluateFill(order) {
   };
 }
 
-// ── DynamoDB helpers ──────────────────────────────────────────────────────────
+// ── DynamoDB helpers — thin wrappers over finvault-shared/db/paperTradesRepo ──
 async function getOrder(accountId, tradeId) {
-  const res = await ddb.send(new GetCommand({ TableName: PAPER_TRADES_TABLE, Key: { accountId, tradeId } }));
-  return res.Item || null;
+  return paperTradesRepo.getTrade(accountId, tradeId);
 }
 
 async function listOrdersByStatus(accountId, statusFilter) {
-  const res = await ddb.send(new QueryCommand({
-    TableName:                 PAPER_TRADES_TABLE,
-    IndexName:                 "ModeStatusIndex",
-    KeyConditionExpression:    "#pk = :pk",
-    FilterExpression:          "accountId = :accountId",
-    ExpressionAttributeNames:  { "#pk": "modeStatus" },
-    ExpressionAttributeValues: { ":pk": `${TRADE_MODE}#${statusFilter}`, ":accountId": accountId },
-    ScanIndexForward: false,
-  }));
-  return res.Items || [];
+  return paperTradesRepo.listOrdersByStatus(accountId, `${TRADE_MODE}#${statusFilter}`);
 }
 
 async function listOrdersByStatuses(accountId, statuses) {
@@ -261,31 +238,11 @@ async function listOrdersByStatuses(accountId, statuses) {
 
 // All SUBMITTED orders across all accounts — used by the auto-fill scheduler
 async function listAllSubmittedOrders() {
-  const res = await ddb.send(new QueryCommand({
-    TableName:                 PAPER_TRADES_TABLE,
-    IndexName:                 "ModeStatusIndex",
-    KeyConditionExpression:    "#pk = :pk",
-    ExpressionAttributeNames:  { "#pk": "modeStatus" },
-    ExpressionAttributeValues: { ":pk": `${TRADE_MODE}#SUBMITTED` },
-  }));
-  return res.Items || [];
+  return paperTradesRepo.listAllOrdersByStatus(`${TRADE_MODE}#SUBMITTED`);
 }
 
 async function updateOrder(accountId, tradeId, fields) {
-  const updates    = { updatedAt: new Date().toISOString(), ...fields };
-  const setExprs   = [], attrNames = {}, attrValues = {};
-  for (const [k, v] of Object.entries(updates)) {
-    setExprs.push(`#${k} = :${k}`);
-    attrNames[`#${k}`]  = k;
-    attrValues[`:${k}`] = v;
-  }
-  await ddb.send(new UpdateCommand({
-    TableName:                 PAPER_TRADES_TABLE,
-    Key:                       { accountId, tradeId },
-    UpdateExpression:          "SET " + setExprs.join(", "),
-    ExpressionAttributeNames:  attrNames,
-    ExpressionAttributeValues: attrValues,
-  }));
+  return paperTradesRepo.updateTrade(accountId, tradeId, fields);
 }
 
 // ── Realized P&L ─────────────────────────────────────────────────────────────
@@ -346,7 +303,7 @@ async function handleStageOrder(ctx, body) {
     notes:       notes || null,
   };
 
-  await ddb.send(new PutCommand({ TableName: PAPER_TRADES_TABLE, Item: item }));
+  await paperTradesRepo.putTrade(item);
   log("INFO", "order_staged", { accountId: ctx.accountId, tradeId, ticker: item.ticker, strategy });
   return json(201, { message: "Order staged", tradeId, order: item });
 }
@@ -512,7 +469,7 @@ async function handleClosePosition(ctx, tradeId, body) {
       fillSnapshot:  { assetType: "STOCK", stockPrice: round2(order.strike), marketPrice: round2(order.strike) },
     };
 
-    await ddb.send(new PutCommand({ TableName: PAPER_TRADES_TABLE, Item: stockItem }));
+    await paperTradesRepo.putTrade(stockItem);
     log("INFO", "assignment_stock_created", { accountId: ctx.accountId, stockTradeId, stockStrategy, stockQty, fillPrice: order.strike });
 
     return json(200, {

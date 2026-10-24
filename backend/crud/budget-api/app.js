@@ -1,9 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const {
-  DynamoDBDocumentClient,
   PutCommand,
   GetCommand,
   DeleteCommand,
@@ -12,14 +10,13 @@ const {
 } = require("@aws-sdk/lib-dynamodb");
 
 const { json, badRequest, notFound } = require("finvault-shared/http");
-const { putItem, getItem, queryByGSI1 } = require("finvault-shared/ddb");
+const { putItem, getItem, queryByGSI1 } = require("finvault-shared/db/finAssetsRepo");
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
 const { BUDGET_CATEGORIES, toBudgetCategory, isExcluded } = require("./categoryMap");
 
-// Direct DDB client for StoreReceiptLedger (shared layer ddb.js is pinned to FIN_ASSETS_TABLE)
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
+// StoreReceiptLedger access — shared client, bespoke queries kept as-is
+// (finAssetsRepo above is pinned to FIN_ASSETS_TABLE, a different table)
+const { doc: ddb } = require("finvault-shared/db/client");
 const SPENDING_TABLE    = process.env.SPENDING_TABLE    || "StoreReceiptLedger";
 const DATE_INDEX_NAME   = process.env.DATE_INDEX_NAME   || "UserDateIndex";
 
@@ -245,7 +242,7 @@ async function deleteBudgetOverride(event, year, month) {
   assertWrite(await resolveCtxCached(event), "budget");
   const { y, m } = parseYearMonth(year, month);
   const assetId = `BUDGET_DEF#${y}-${pad2(m)}`;
-  const { deleteItem } = require("finvault-shared/ddb");
+  const { deleteItem } = require("finvault-shared/db/finAssetsRepo");
   await deleteItem(userId, assetId);
   return json(200, { deleted: true });
 }
@@ -392,7 +389,7 @@ async function deleteGoal(event, year, goalId) {
   const assetId = `GOAL#${y}#${goalId}`;
   const existing = await getItem(userId, assetId);
   if (!existing) return notFound("Goal not found");
-  const { deleteItem } = require("finvault-shared/ddb");
+  const { deleteItem } = require("finvault-shared/db/finAssetsRepo");
   await deleteItem(userId, assetId);
   return json(200, { deleted: true });
 }

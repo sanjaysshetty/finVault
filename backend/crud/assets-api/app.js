@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const https  = require("https");
 
 const { json, badRequest, notFound } = require("finvault-shared/http");
-const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/ddb");
+const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/db/finAssetsRepo");
 const { addMonths, computeValue } = require("finvault-shared/financeMath");
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
 const { getSecret } = require("finvault-shared/getSecret");

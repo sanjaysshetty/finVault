@@ -3,7 +3,7 @@
 const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
-const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/ddb");
+const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/db/finAssetsRepo");
 const { json, badRequest, notFound } = require("finvault-shared/http");
 
 const TAX_DOCS_BUCKET = process.env.TAX_DOCS_BUCKET || "";

@@ -24,9 +24,7 @@
 
 const crypto = require("crypto");
 
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const {
-  DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
   QueryCommand,
@@ -42,12 +40,7 @@ const {
 
 const { json, badRequest, notFound } = require("finvault-shared/http");
 const { resolveContext, ALL_PAGES_WRITE } = require("finvault-shared/resolveContext");
-
-/* ── DynamoDB client ─────────────────────────────────────────── */
-
-const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
-  marshallOptions: { removeUndefinedValues: true },
-});
+const { doc } = require("finvault-shared/db/client");
 
 const MEMBERS_TABLE  = process.env.FIN_ACCOUNT_MEMBERS_TABLE || "FinAccountMembers";
 const ACCOUNTS_TABLE = process.env.FIN_ACCOUNTS_TABLE        || "FinAccounts";

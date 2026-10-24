@@ -4,19 +4,16 @@
 // computes holdings metrics (mirrors Stocks.jsx logic exactly),
 // and writes stocks-snapshot.json to S3 — always overwriting the same key.
 
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSecret } from "finvault-shared/getSecret.js";
+import { queryAllByGSI1 } from "finvault-shared/db/finAssetsRepo.js";
 
 const REGION = process.env.AWS_REGION || "us-east-1";
-const TABLE = process.env.FIN_ASSETS_TABLE;
 const BUCKET = process.env.STOCKS_SNAPSHOT_BUCKET;
 const SNAPSHOT_KEY = "stocks-snapshot.json";
 const USER_ID = process.env.SNAPSHOT_USER_ID; // Cognito sub of the account to snapshot
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
 const s3 = new S3Client({ region: REGION });
 
 /* ── Timezone helpers ─────────────────────────────────────────────── */
@@ -55,20 +52,7 @@ function round2(n) {
 /* ── DynamoDB ─────────────────────────────────────────────────────── */
 
 async function fetchStockTransactions(userId) {
-  const items = [];
-  let lastKey;
-  do {
-    const out = await ddb.send(new QueryCommand({
-      TableName: TABLE,
-      IndexName: "GSI1",
-      KeyConditionExpression: "gsi1pk = :pk AND begins_with(gsi1sk, :sk)",
-      ExpressionAttributeValues: { ":pk": userId, ":sk": "STOCK_TX#" },
-      ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
-    }));
-    items.push(...(out.Items || []));
-    lastKey = out.LastEvaluatedKey;
-  } while (lastKey);
-  return items;
+  return queryAllByGSI1(userId, "STOCK_TX#");
 }
 
 /* ── Finnhub quotes ───────────────────────────────────────────────── */
@@ -254,8 +238,8 @@ export const handler = async (event = {}) => {
   const snapshotDate = isoDateCentral(now);
   const weekday = weekdayCentral(now);
 
-  if (!TABLE || !BUCKET || !USER_ID) {
-    throw new Error(`Missing required env vars. TABLE=${TABLE} BUCKET=${BUCKET} USER_ID=${USER_ID}`);
+  if (!process.env.FIN_ASSETS_TABLE || !BUCKET || !USER_ID) {
+    throw new Error(`Missing required env vars. FIN_ASSETS_TABLE=${process.env.FIN_ASSETS_TABLE} BUCKET=${BUCKET} USER_ID=${USER_ID}`);
   }
 
   // Skip weekends — markets closed, Finnhub prices are stale from Friday.
