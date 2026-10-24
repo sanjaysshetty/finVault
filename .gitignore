@@ -38,6 +38,9 @@ node_modules/
 # Scripts folder (local use only)
 backend/scripts/
 
+# Local deploy parameter overrides — real bucket/table/domain names, kept out of git
+backend/.deploy-params.*.sh
+
 # Secrets and sensitive data
 backend/keys.json
 backend/options_keys.json

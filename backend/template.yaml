@@ -9,9 +9,11 @@ Parameters:
     Description: userId (= accountId) whose account receives the weekly scheduled Wheel Scan report
 
   # Existing buckets (NOT created by this stack)
+  # No Default — real bucket/table/domain names are resource-identifying info,
+  # supplied only via a local, gitignored parameter-overrides file (see CLAUDE.md).
   ReceiptsBucketName:
     Type: String
-    Default: "finapp-receipts-1152"
+    Description: "S3 bucket for receipt uploads (not created by this stack)."
 
   ReceiptsPrefix:
     Type: String
@@ -19,7 +21,7 @@ Parameters:
 
   FrontendBucketName:
     Type: String
-    Default: "metals-prices-sanjay-1152"
+    Description: "S3 bucket serving the built frontend (not created by this stack)."
 
   FrontendPrefix:
     Type: String
@@ -28,8 +30,7 @@ Parameters:
   # Cognito domains (must be unique in region)
   CognitoDomainPrefixV3:
     Type: String
-    Default: "finvault-sanjay-1152-v3"
-    Description: "V3 Cognito hosted UI domain prefix (must be unique per region). Change/override if taken."
+    Description: "V3 Cognito hosted UI domain prefix (must be unique per region)."
 
   # Frontend URLs
   FrontendBaseUrlDev:
@@ -54,22 +55,18 @@ Parameters:
 
   FinAssetsTableName:
     Type: String
-    Default: "finAssets"
     Description: "Existing DynamoDB table name for Assets module (this stack will not manage it)."
 
   ReceiptLedgerV2TableName:
     Type: String
-    Default: "StoreReceiptLedger"
     Description: "Stack-managed raw receipt ledger (v2) with DynamoDB Streams enabled."
 
   MetalsBucketName:
     Type: String
     Description: "S3 bucket containing metal price JSON files (metals/XAU and metals/XAG)"
-    Default: "daily-metal-prices-1152"
 
   StocksSnapshotBucketName:
     Type: String
-    Default: "finvault-stocks-snapshot-1152"
     Description: "S3 bucket for daily stocks holdings snapshot (stocks-snapshot.json). Private — access via AWS CLI with your finvault-dev credentials."
 
   SnapshotUserId:
