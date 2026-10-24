@@ -7,6 +7,7 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import pLimit from "p-limit";
+import { getSecret } from "finvault-shared/getSecret.js";
 
 /**
  * Incremental curation Lambda:
@@ -19,9 +20,6 @@ import pLimit from "p-limit";
 const REGION =
   process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
 const TABLE = process.env.TABLE || "StoreReceiptLedger";
-
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-if (!ANTHROPIC_API_KEY) throw new Error("Missing ANTHROPIC_API_KEY env var");
 
 const MODEL = process.env.MODEL || "claude-haiku-4-5-20251001";
 
@@ -50,7 +48,16 @@ const CATEGORIES = [
   "Miscellaneous / Other",
 ];
 
-const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+let clientPromise;
+function getClient() {
+  if (!clientPromise) {
+    clientPromise = getSecret("/finvault/anthropic/api-key").then(
+      (apiKey) => new Anthropic({ apiKey })
+    );
+    clientPromise.catch(() => { clientPromise = undefined; });
+  }
+  return clientPromise;
+}
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }), {
   marshallOptions: { removeUndefinedValues: true },
@@ -124,6 +131,7 @@ Return ONLY valid JSON with this schema:
 async function classifyOne(item) {
   const payload = normalizeItemForModel(item);
 
+  const client = await getClient();
   const res = await client.messages.create({
     model: MODEL,
     max_tokens: 256,

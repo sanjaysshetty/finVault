@@ -48,6 +48,7 @@ function parseBody(event) {
 }
 
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
+const { getSecret } = require("finvault-shared/getSecret");
 
 async function resolveCtxCached(event) {
   if (!event._ctx) event._ctx = await resolveContext(event);
@@ -815,8 +816,7 @@ async function categorizeDescriptions(event) {
   const descriptions = Array.isArray(body.descriptions) ? body.descriptions : [];
   if (!descriptions.length) return json(200, { categories: [] });
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return json(500, { error: "ANTHROPIC_API_KEY not configured" });
+  const apiKey = await getSecret("/finvault/anthropic/api-key");
 
   const model = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
   const AnthropicModule = require("@anthropic-ai/sdk");

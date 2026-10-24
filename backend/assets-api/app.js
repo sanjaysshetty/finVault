@@ -5,6 +5,7 @@ const { json, badRequest, notFound } = require("finvault-shared/http");
 const { putItem, getItem, deleteItem, queryByGSI1 } = require("finvault-shared/ddb");
 const { addMonths, computeValue } = require("finvault-shared/financeMath");
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
+const { getSecret } = require("finvault-shared/getSecret");
 
 /* ---------------- helpers ---------------- */
 
@@ -1241,16 +1242,12 @@ async function futuresDelete(event, txId) {
    ROBINHOOD CRYPTO HOLDINGS
 ========================================================= */
 
-// Trim to guard against trailing whitespace/newlines from AWS console copy-paste
-const RH_API_KEY         = (process.env.RH_API_KEY         || "").trim();
-const RH_PRIVATE_KEY_B64 = (process.env.RH_PRIVATE_KEY_B64 || "").trim();
-
 const CRYPTO_RH_HOLDINGS = "/assets/crypto/rh-holdings";
 
-function makeRhSignature(apiKey, timestamp, path, method = "GET", body = "") {
+function makeRhSignature(apiKey, privateKeyB64, timestamp, path, method = "GET", body = "") {
   const message = `${apiKey}${timestamp}${path}${method}${body}`;
   // Strip any whitespace from base64 string (line breaks from PEM-style copy-paste)
-  const rawKey  = Buffer.from(RH_PRIVATE_KEY_B64.replace(/\s/g, ""), "base64");
+  const rawKey  = Buffer.from(privateKeyB64.replace(/\s/g, ""), "base64");
   // Support both 32-byte raw seed and 64-byte nacl keypair (seed = first 32 bytes)
   const seed    = rawKey.length >= 64 ? rawKey.subarray(0, 32) : rawKey;
   if (seed.length !== 32) {
@@ -1265,17 +1262,17 @@ function makeRhSignature(apiKey, timestamp, path, method = "GET", body = "") {
   return crypto.sign(null, Buffer.from(message), privKey).toString("base64");
 }
 
-function rhHttpGet(path) {
+function rhHttpGet(path, apiKey, privateKeyB64) {
   return new Promise((resolve, reject) => {
     const timestamp = String(Math.floor(Date.now() / 1000));
-    const signature = makeRhSignature(RH_API_KEY, timestamp, path, "GET");
+    const signature = makeRhSignature(apiKey, privateKeyB64, timestamp, path, "GET");
     const req = https.request(
       {
         hostname: "trading.robinhood.com",
         path,
         method:  "GET",
         headers: {
-          "x-api-key":   RH_API_KEY,
+          "x-api-key":   apiKey,
           "x-timestamp": timestamp,
           "x-signature": signature,
         },
@@ -1302,12 +1299,24 @@ async function cryptoRhHoldings(event) {
   const ctx = await resolveCtxCached(event);
   assertRead(ctx, "crypto");
 
-  if (!RH_API_KEY || !RH_PRIVATE_KEY_B64) {
+  let apiKey, privateKeyB64;
+  try {
+    [apiKey, privateKeyB64] = await Promise.all([
+      getSecret("/finvault/robinhood/api-key"),
+      getSecret("/finvault/robinhood/private-key-b64"),
+    ]);
+  } catch (e) {
+    return json(503, { message: "Robinhood API credentials not configured" });
+  }
+  // Trim to guard against trailing whitespace/newlines from AWS console copy-paste
+  apiKey = (apiKey || "").trim();
+  privateKeyB64 = (privateKeyB64 || "").trim();
+  if (!apiKey || !privateKeyB64) {
     return json(503, { message: "Robinhood API credentials not configured" });
   }
 
   const apiPath = `/api/v1/crypto/trading/holdings/`;
-  const { status, body } = await rhHttpGet(apiPath);
+  const { status, body } = await rhHttpGet(apiPath, apiKey, privateKeyB64);
   if (status !== 200) {
     return json(502, { message: `Robinhood API returned ${status}`, detail: body });
   }

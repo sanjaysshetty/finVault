@@ -35,6 +35,7 @@ const {
   QueryCommand,
 } = require("@aws-sdk/lib-dynamodb");
 const { resolveContext, assertWrite, assertRead } = require("finvault-shared/resolveContext");
+const { getSecret } = require("finvault-shared/getSecret");
 
 // ── DynamoDB ──────────────────────────────────────────────────────────────────
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
@@ -43,7 +44,6 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 
 // ── Environment ───────────────────────────────────────────────────────────────
 const PAPER_TRADES_TABLE = process.env.PAPER_TRADES_TABLE || "PaperTrades";
-const FINNHUB_API_KEY    = process.env.FINNHUB_API_KEY    || "";
 const FINNHUB_BASE       = "https://finnhub.io/api/v1";
 const RISK_FREE_RATE     = 0.045; // 4.5% annualized — update once a year
 const TRADE_MODE         = "PAPER";
@@ -132,10 +132,8 @@ function timeToExpiry(expiryDateStr) {
 
 // ── Finnhub ───────────────────────────────────────────────────────────────────
 async function finnhubGet(path) {
-  if (!FINNHUB_API_KEY) {
-    throw Object.assign(new Error("FINNHUB_API_KEY not configured"), { statusCode: 503 });
-  }
-  const res = await fetch(`${FINNHUB_BASE}${path}&token=${FINNHUB_API_KEY}`);
+  const finnhubApiKey = await getSecret("/finvault/finnhub/api-key");
+  const res = await fetch(`${FINNHUB_BASE}${path}&token=${finnhubApiKey}`);
   if (!res.ok) {
     throw Object.assign(new Error(`Finnhub error: HTTP ${res.status} for ${path}`), { statusCode: 502 });
   }

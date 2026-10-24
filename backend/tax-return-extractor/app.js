@@ -14,21 +14,29 @@
 //
 // Required env vars:
 //   FIN_ASSETS_TABLE      — finAssets DynamoDB table name
-//   ANTHROPIC_API_KEY     — from SSM /finvault/anthropic/api-key
 //   ANTHROPIC_MODEL       — defaults to claude-sonnet-4-6
+//
+// Secrets (fetched at runtime via getSecret, not baked into env vars):
+//   /finvault/anthropic/api-key
 
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 const Anthropic = require("@anthropic-ai/sdk");
 const { getItem, putItem } = require("finvault-shared/ddb");
+const { getSecret } = require("finvault-shared/getSecret");
 
 const s3     = new S3Client({});
 const MODEL  = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
-// Lazy-init Anthropic client (API key resolved from env at runtime)
-let _anthropic;
+// Lazy-init Anthropic client (API key fetched once per cold start)
+let _anthropicPromise;
 function anthropic() {
-  if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  return _anthropic;
+  if (!_anthropicPromise) {
+    _anthropicPromise = getSecret("/finvault/anthropic/api-key").then(
+      (apiKey) => new Anthropic({ apiKey })
+    );
+    _anthropicPromise.catch(() => { _anthropicPromise = undefined; });
+  }
+  return _anthropicPromise;
 }
 
 /* ─── Extraction schemas per docType ───────────────────────── */
@@ -148,7 +156,8 @@ async function extractWithClaude({ bytes, mimeType, docType, schema }) {
     required: schema.required,
   };
 
-  const response = await anthropic().messages.create({
+  const client = await anthropic();
+  const response = await client.messages.create({
     model:      MODEL,
     max_tokens: 1024,
     system: `You extract structured data from US tax documents for a personal finance application.
