@@ -1,13 +1,11 @@
 // metals-snapshot.mjs
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSecret } from "finvault-shared/getSecret.js";
 
 const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
 const BUCKET = process.env.METALS_BUCKET || "daily-metal-prices-1152";
 
 const GOLDAPI_BASE = "https://www.goldapi.io/api";
-const GOLDAPI_KEY = process.env.GOLDAPI_KEY;
-
-if (!GOLDAPI_KEY) throw new Error("Missing GOLDAPI_KEY env var");
 
 const s3 = new S3Client({ region: REGION });
 
@@ -51,12 +49,13 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
 }
 
 async function fetchGoldApiMetal(metal, currency = "USD") {
+  const goldApiKey = await getSecret("/finvault/goldapi/key");
   const url = `${GOLDAPI_BASE}/${metal}/${currency}`;
   const resp = await fetchWithTimeout(
     url,
     {
       headers: {
-        "x-access-token": GOLDAPI_KEY,
+        "x-access-token": goldApiKey,
         "Content-Type": "application/json",
       },
     },

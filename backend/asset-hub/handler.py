@@ -10,11 +10,11 @@ from concurrent.futures import ThreadPoolExecutor
 import boto3
 import anthropic
 from boto3.dynamodb.conditions import Key
+from finvault_agent_core import get_secret
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-ANTHROPIC_API_KEY         = os.environ.get("ANTHROPIC_API_KEY", "")
 FIN_ASSETS_TABLE          = os.environ.get("FIN_ASSETS_TABLE", "")
 FIN_ACCOUNT_MEMBERS_TABLE = os.environ.get("FIN_ACCOUNT_MEMBERS_TABLE", "")
 FIN_ACCOUNTS_TABLE        = os.environ.get("FIN_ACCOUNTS_TABLE", "")
@@ -628,7 +628,7 @@ ANALYSIS_TOOL = {
 
 
 def run_claude_analysis(market_data, portfolio, asset_type):
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=get_secret("/finvault/anthropic/api-key"))
     today  = datetime.date.today().isoformat()
     ticker = market_data["ticker"]
 
