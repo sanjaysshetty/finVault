@@ -1,0 +1,86 @@
+name: Frontend Deploy
+
+# Manual-trigger only, same philosophy as backend-deploy.yml. Builds the SPA,
+# syncs it to the environment's S3 bucket, and writes a row to the same
+# Deployments table the backend workflow uses (component="frontend") so you
+# can see "what frontend SHA is live" right next to "what backend SHA is live."
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment to deploy"
+        type: choice
+        options: [dev, sandbox]
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve environment-specific settings
+        id: env
+        run: |
+          if [ "${{ inputs.environment }}" = "sandbox" ]; then
+            echo "stack_name=finVault-sb" >> "$GITHUB_OUTPUT"
+          else
+            echo "stack_name=finVault" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: build
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_APP_ENV: ${{ inputs.environment }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_COGNITO_DOMAIN: ${{ secrets.VITE_COGNITO_DOMAIN }}
+          VITE_COGNITO_CLIENT_ID: ${{ secrets.VITE_COGNITO_CLIENT_ID }}
+          VITE_COGNITO_REDIRECT_URI: ${{ secrets.VITE_COGNITO_REDIRECT_URI }}
+          VITE_COGNITO_LOGOUT_URI: ${{ secrets.VITE_COGNITO_LOGOUT_URI }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_FRONTEND_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: sync to S3
+        run: aws s3 sync frontend/dist/ "s3://${{ secrets.FRONTEND_BUCKET }}/app/" --delete
+
+      - name: Record this deployment
+        run: |
+          aws dynamodb put-item \
+            --table-name "Deployments-${{ steps.env.outputs.stack_name }}" \
+            --item "{
+              \"envComponent\": {\"S\": \"${{ inputs.environment }}#frontend\"},
+              \"deployedAt\": {\"S\": \"${{ steps.env.outputs.deployed_at }}\"},
+              \"sha\": {\"S\": \"${{ steps.env.outputs.sha }}\"},
+              \"commitMessage\": {\"S\": ${{ toJSON(github.event.head_commit.message || 'manual dispatch') }}},
+              \"deployedBy\": {\"S\": \"${{ github.actor }}\"},
+              \"workflowRunUrl\": {\"S\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}
+            }"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Frontend deploy — ${{ inputs.environment }}"
+            echo "- SHA: \`${{ steps.env.outputs.sha }}\`"
+            echo "- Deployed at: ${{ steps.env.outputs.deployed_at }}"
+          } >> "$GITHUB_STEP_SUMMARY"

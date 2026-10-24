@@ -452,6 +452,31 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  # ── Deployment traceability log ─────────────────────────────────────────────
+  # One row per deploy, written by the GitHub Actions deploy workflows (backend
+  # and frontend). Ties together: which commit SHA, which environment, which
+  # DynamoDB backups (backend only) were taken right before this deploy, and who
+  # ran it. Not stack-scoped by environment on purpose — dev and sandbox are
+  # separate AWS accounts/stacks, each gets its own Deployments table instance,
+  # but the shape is identical so querying either is the same code path.
+  DeploymentsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "Deployments-${AWS::StackName}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: envComponent
+          AttributeType: S
+        - AttributeName: deployedAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: envComponent
+          KeyType: HASH
+        - AttributeName: deployedAt
+          KeyType: RANGE
+
   AnalyticsBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
