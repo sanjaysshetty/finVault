@@ -1,0 +1,41 @@
+name: Frontend CI
+
+# Safety net only — no AWS credentials, no deploy. Lint + build check
+# before a PR can merge into dev or sandbox.
+on:
+  pull_request:
+    branches: [dev, sandbox]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-ci.yml"
+
+jobs:
+  lint-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: build (dev mode, no real env vars needed to prove it compiles)
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_APP_ENV: ci
+          VITE_API_BASE_URL: https://ci-placeholder.invalid
+          VITE_COGNITO_DOMAIN: https://ci-placeholder.invalid
+          VITE_COGNITO_CLIENT_ID: ci-placeholder
+          VITE_COGNITO_REDIRECT_URI: http://localhost:5173/auth/callback
+          VITE_COGNITO_LOGOUT_URI: http://localhost:5173/
