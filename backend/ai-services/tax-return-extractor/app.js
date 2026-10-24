@@ -21,7 +21,7 @@
 
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 const Anthropic = require("@anthropic-ai/sdk");
-const { getItem, putItem } = require("finvault-shared/ddb");
+const { getItem, putItem } = require("finvault-shared/db/finAssetsRepo");
 const { getSecret } = require("finvault-shared/getSecret");
 
 const s3     = new S3Client({});

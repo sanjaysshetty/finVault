@@ -56,4 +56,29 @@ async function queryByGSI1(userId, beginsWithSk) {
   return out.Items || [];
 }
 
-module.exports = { putItem, getItem, deleteItem, queryByGSI1 };
+/**
+ * Same query as queryByGSI1, but follows LastEvaluatedKey until exhausted.
+ * Needed by stocks-snapshot, which already paginated this exact query itself —
+ * preserved as a separate function rather than changing queryByGSI1's existing
+ * (non-paginated) behavior for its other callers.
+ */
+async function queryAllByGSI1(userId, beginsWithSk) {
+  const items = [];
+  let lastKey;
+  do {
+    const out = await doc.send(
+      new QueryCommand({
+        TableName: tableName(),
+        IndexName: "GSI1",
+        KeyConditionExpression: "gsi1pk = :pk AND begins_with(gsi1sk, :sk)",
+        ExpressionAttributeValues: { ":pk": userId, ":sk": beginsWithSk },
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      })
+    );
+    items.push(...(out.Items || []));
+    lastKey = out.LastEvaluatedKey;
+  } while (lastKey);
+  return items;
+}
+
+module.exports = { putItem, getItem, deleteItem, queryByGSI1, queryAllByGSI1 };

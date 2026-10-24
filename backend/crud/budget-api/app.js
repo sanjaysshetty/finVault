@@ -12,7 +12,7 @@ const {
 } = require("@aws-sdk/lib-dynamodb");
 
 const { json, badRequest, notFound } = require("finvault-shared/http");
-const { putItem, getItem, queryByGSI1 } = require("finvault-shared/ddb");
+const { putItem, getItem, queryByGSI1 } = require("finvault-shared/db/finAssetsRepo");
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
 const { BUDGET_CATEGORIES, toBudgetCategory, isExcluded } = require("./categoryMap");
 
@@ -245,7 +245,7 @@ async function deleteBudgetOverride(event, year, month) {
   assertWrite(await resolveCtxCached(event), "budget");
   const { y, m } = parseYearMonth(year, month);
   const assetId = `BUDGET_DEF#${y}-${pad2(m)}`;
-  const { deleteItem } = require("finvault-shared/ddb");
+  const { deleteItem } = require("finvault-shared/db/finAssetsRepo");
   await deleteItem(userId, assetId);
   return json(200, { deleted: true });
 }
@@ -392,7 +392,7 @@ async function deleteGoal(event, year, goalId) {
   const assetId = `GOAL#${y}#${goalId}`;
   const existing = await getItem(userId, assetId);
   if (!existing) return notFound("Goal not found");
-  const { deleteItem } = require("finvault-shared/ddb");
+  const { deleteItem } = require("finvault-shared/db/finAssetsRepo");
   await deleteItem(userId, assetId);
   return json(200, { deleted: true });
 }

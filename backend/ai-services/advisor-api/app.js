@@ -7,7 +7,7 @@ const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, GetCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
 const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
 const { json, badRequest } = require("finvault-shared/http");
-const { queryByGSI1 } = require("finvault-shared/ddb");
+const { queryByGSI1 } = require("finvault-shared/db/finAssetsRepo");
 const { resolveContext, assertRead } = require("finvault-shared/resolveContext");
 const { getSecret } = require("finvault-shared/getSecret");
 
