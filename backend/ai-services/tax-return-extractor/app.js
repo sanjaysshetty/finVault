@@ -1,6 +1,6 @@
 "use strict";
 //
-// tax-return-extractor/app.js
+// ai-services/tax-return-extractor/app.js
 //
 // S3-triggered Lambda. Fires when a user uploads a tax document to TaxDocsBucket.
 // Key format: {accountId}/{year}/{docId}/{filename}
