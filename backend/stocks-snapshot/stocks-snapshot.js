@@ -7,12 +7,12 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSecret } from "finvault-shared/getSecret.js";
 
 const REGION = process.env.AWS_REGION || "us-east-1";
 const TABLE = process.env.FIN_ASSETS_TABLE;
 const BUCKET = process.env.STOCKS_SNAPSHOT_BUCKET;
 const SNAPSHOT_KEY = "stocks-snapshot.json";
-const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const USER_ID = process.env.SNAPSHOT_USER_ID; // Cognito sub of the account to snapshot
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
 
@@ -84,7 +84,8 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
 }
 
 async function fetchFinnhubQuote(symbol) {
-  const url = `${FINNHUB_BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(FINNHUB_API_KEY)}`;
+  const finnhubApiKey = await getSecret("/finvault/finnhub/api-key");
+  const url = `${FINNHUB_BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(finnhubApiKey)}`;
   const resp = await fetchWithTimeout(url, {}, 4000);
   if (!resp.ok) throw new Error(`Finnhub ${symbol} HTTP ${resp.status}`);
   const data = await resp.json();
@@ -253,10 +254,8 @@ export const handler = async (event = {}) => {
   const snapshotDate = isoDateCentral(now);
   const weekday = weekdayCentral(now);
 
-  if (!TABLE || !BUCKET || !FINNHUB_API_KEY || !USER_ID) {
-    throw new Error(
-      `Missing required env vars. TABLE=${TABLE} BUCKET=${BUCKET} USER_ID=${USER_ID} FINNHUB_KEY=${!!FINNHUB_API_KEY}`
-    );
+  if (!TABLE || !BUCKET || !USER_ID) {
+    throw new Error(`Missing required env vars. TABLE=${TABLE} BUCKET=${BUCKET} USER_ID=${USER_ID}`);
   }
 
   // Skip weekends — markets closed, Finnhub prices are stale from Friday.

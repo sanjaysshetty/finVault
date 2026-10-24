@@ -1,6 +1,7 @@
 const { S3Client, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
 const { DynamoDBDocumentClient, GetCommand, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const { getSecret } = require("finvault-shared/getSecret");
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
 const YAHOO_CHART_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
 
@@ -386,17 +387,13 @@ exports.handler = async (event) => {
 
   /* ---- Stocks (optional) ---- */
   if (stockSymbols.length) {
-    const finnhubKey = process.env.FINNHUB_API_KEY;
-    if (!finnhubKey) {
-      errors.stocks = "Missing FINNHUB_API_KEY env var";
-    } else {
-      try {
-        const { results, errors: stockErrors } = await fetchFinnhubQuotes(stockSymbols, finnhubKey);
-        stocks = results;
-        if (stockErrors) errors.stocks = stockErrors;
-      } catch (e) {
-        errors.stocks = String(e?.message || e);
-      }
+    try {
+      const finnhubKey = await getSecret("/finvault/finnhub/api-key");
+      const { results, errors: stockErrors } = await fetchFinnhubQuotes(stockSymbols, finnhubKey);
+      stocks = results;
+      if (stockErrors) errors.stocks = stockErrors;
+    } catch (e) {
+      errors.stocks = String(e?.message || e);
     }
   }
 

@@ -5,8 +5,10 @@
 // Example: Costco_01-24-2026_feffa2087d299d5d
 //
 // Required env vars:
-//   ANTHROPIC_API_KEY
 //   RECEIPT_LEDGER_TABLE
+//
+// Secrets (fetched at runtime via getSecret, not baked into env vars):
+//   /finvault/anthropic/api-key
 //
 // Optional env vars:
 //   ANTHROPIC_MODEL (default: claude-sonnet-4-6)
@@ -17,6 +19,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, PutCommand, BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { getSecret } from "finvault-shared/getSecret.js";
 
 // AWS clients
 const s3 = new S3Client({});
@@ -239,7 +242,7 @@ function buildReceiptToolSchema() {
 }
 
 async function extractReceiptFromImageBytes({ imageBytes, mimeType }) {
-  const apiKey = requireEnv("ANTHROPIC_API_KEY");
+  const apiKey = await getSecret("/finvault/anthropic/api-key");
   const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
   const client = new Anthropic({ apiKey });
 

@@ -1,0 +1,3 @@
+# finvault_agent_core dependencies.
+# boto3 is already provided by the Lambda Python runtime — not listed here.
+# The anthropic SDK and other harness dependencies land here in Part 4.
