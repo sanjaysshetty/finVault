@@ -60,6 +60,9 @@ local/
 # Python virtual environments
 .venv/
 **/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
 
 # Architecture Diagrams
 **/*.drawio
