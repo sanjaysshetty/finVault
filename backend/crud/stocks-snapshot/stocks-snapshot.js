@@ -5,8 +5,15 @@
 // and writes stocks-snapshot.json to S3 — always overwriting the same key.
 
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSecret } from "finvault-shared/getSecret.js";
-import { queryAllByGSI1 } from "finvault-shared/db/finAssetsRepo.js";
+import { createRequire } from "module";
+
+// Node's native ESM `import` cannot resolve Lambda Layer content via
+// NODE_PATH — only CommonJS `require` can. createRequire bridges into that
+// NODE_PATH-aware resolution from this ESM file. Confirmed empirically:
+// without this, every invocation fails with ERR_MODULE_NOT_FOUND.
+const require = createRequire(import.meta.url);
+const { getSecret } = require("finvault-shared/getSecret");
+const { queryAllByGSI1 } = require("finvault-shared/db/finAssetsRepo");
 
 const REGION = process.env.AWS_REGION || "us-east-1";
 const BUCKET = process.env.STOCKS_SNAPSHOT_BUCKET;
