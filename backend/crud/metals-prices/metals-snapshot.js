@@ -1,6 +1,13 @@
 // metals-snapshot.mjs
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSecret } from "finvault-shared/getSecret.js";
+import { createRequire } from "module";
+
+// Node's native ESM `import` cannot resolve Lambda Layer content via
+// NODE_PATH — only CommonJS `require` can. createRequire bridges into that
+// NODE_PATH-aware resolution from this ESM file. Confirmed empirically:
+// without this, every invocation fails with ERR_MODULE_NOT_FOUND.
+const require = createRequire(import.meta.url);
+const { getSecret } = require("finvault-shared/getSecret");
 
 const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
 const BUCKET = process.env.METALS_BUCKET || "daily-metal-prices-1152";

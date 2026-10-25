@@ -17,8 +17,15 @@
 import crypto from "crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
-import { getSecret } from "finvault-shared/getSecret.js";
-import { putItem, batchWriteItems } from "finvault-shared/db/receiptLedgerRepo.js";
+import { createRequire } from "module";
+
+// Node's native ESM `import` cannot resolve Lambda Layer content via
+// NODE_PATH — only CommonJS `require` can. createRequire bridges into that
+// NODE_PATH-aware resolution from this ESM file. Confirmed empirically:
+// without this, every invocation fails with ERR_MODULE_NOT_FOUND.
+const require = createRequire(import.meta.url);
+const { getSecret } = require("finvault-shared/getSecret");
+const { putItem, batchWriteItems } = require("finvault-shared/db/receiptLedgerRepo");
 
 // AWS clients
 const s3 = new S3Client({});

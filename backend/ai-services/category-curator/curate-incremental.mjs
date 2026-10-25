@@ -5,8 +5,15 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import pLimit from "p-limit";
-import { getSecret } from "finvault-shared/getSecret.js";
-import { doc as ddb } from "finvault-shared/db/client.js";
+import { createRequire } from "module";
+
+// Node's native ESM `import` cannot resolve Lambda Layer content via
+// NODE_PATH — only CommonJS `require` can. createRequire bridges into that
+// NODE_PATH-aware resolution from this ESM file. Confirmed empirically:
+// without this, every invocation fails with ERR_MODULE_NOT_FOUND.
+const require = createRequire(import.meta.url);
+const { getSecret } = require("finvault-shared/getSecret");
+const { doc: ddb } = require("finvault-shared/db/client");
 
 /**
  * Incremental curation Lambda:
