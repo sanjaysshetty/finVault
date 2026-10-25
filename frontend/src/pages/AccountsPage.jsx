@@ -406,6 +406,109 @@ function InvitesPanel({ accountId }) {
   );
 }
 
+/* ── Investor profile (risk/goal context for the agentic engine) ── */
+const RISK_TOLERANCE_OPTIONS = ["Conservative", "Moderate", "Aggressive", "Very Aggressive"];
+const OBJECTIVE_OPTIONS = ["Capital Preservation", "Income Generation", "Balanced Growth", "Aggressive Growth", "Speculation"];
+const TIME_HORIZON_OPTIONS = ["< 1 year", "1–3 years", "3–5 years", "5–10 years", "10+ years"];
+const selectCls = "w-full px-3 py-2 rounded-xl bg-[#080D1A] border border-white/[0.1] text-slate-200 text-sm focus:outline-none focus:border-blue-500/40";
+const numInputCls = "w-full px-3 py-2 rounded-xl bg-[#080D1A] border border-white/[0.1] text-slate-200 text-sm placeholder:text-slate-700 focus:outline-none focus:border-blue-500/40";
+
+function InvestorProfilePanel({ account }) {
+  const qc = useQueryClient();
+  const p = account.investorProfile || {};
+  const [riskTolerance, setRiskTolerance] = useState(p.riskTolerance || "Moderate");
+  const [objective, setObjective] = useState(p.objective || "Balanced Growth");
+  const [timeHorizon, setTimeHorizon] = useState(p.timeHorizon || "5–10 years");
+  const [targetAnnualReturnPct, setTargetAnnualReturnPct] = useState(p.targetAnnualReturnPct ?? "");
+  const [goalAmount, setGoalAmount] = useState(p.netWorthGoal?.amount ?? "");
+  const [goalYear, setGoalYear] = useState(p.netWorthGoal?.byYear ?? "");
+  const [monthlyContribution, setMonthlyContribution] = useState(p.monthlyContribution ?? "");
+  const [notes, setNotes] = useState(p.notes || "");
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const saveMut = useMutation({
+    mutationFn: () =>
+      api.patch(`/accounts/${account.accountId}/investor-profile`, {
+        riskTolerance,
+        objective,
+        timeHorizon,
+        targetAnnualReturnPct: targetAnnualReturnPct === "" ? null : Number(targetAnnualReturnPct),
+        netWorthGoal: goalAmount !== "" && goalYear !== "" ? { amount: Number(goalAmount), byYear: Number(goalYear) } : null,
+        monthlyContribution: monthlyContribution === "" ? null : Number(monthlyContribution),
+        notes,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.accounts() });
+      setErr("");
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    },
+    onError: (e) => setErr(e.detail?.message || e.message),
+  });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-600">Investor Profile</p>
+        <p className="text-[11px] text-slate-600">Context for the Opportunity Engine &amp; Deep Dive — never used to size positions</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Risk Tolerance</label>
+          <select value={riskTolerance} onChange={(e) => setRiskTolerance(e.target.value)} className={selectCls}>
+            {RISK_TOLERANCE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Objective</label>
+          <select value={objective} onChange={(e) => setObjective(e.target.value)} className={selectCls}>
+            {OBJECTIVE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Time Horizon</label>
+          <select value={timeHorizon} onChange={(e) => setTimeHorizon(e.target.value)} className={selectCls}>
+            {TIME_HORIZON_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Target Annual Return (%)</label>
+          <input type="number" min="0" max="1000" step="0.5" value={targetAnnualReturnPct}
+            onChange={(e) => setTargetAnnualReturnPct(e.target.value)} placeholder="e.g. 20" className={numInputCls} />
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Net Worth Goal ($)</label>
+          <input type="number" min="0" step="1000" value={goalAmount}
+            onChange={(e) => setGoalAmount(e.target.value)} placeholder="e.g. 1000000" className={numInputCls} />
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Goal Year</label>
+          <input type="number" min={new Date().getFullYear()} max={new Date().getFullYear() + 100} value={goalYear}
+            onChange={(e) => setGoalYear(e.target.value)} placeholder="e.g. 2030" className={numInputCls} />
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Monthly Contribution ($)</label>
+          <input type="number" min="0" value={monthlyContribution}
+            onChange={(e) => setMonthlyContribution(e.target.value)} placeholder="e.g. 2000" className={numInputCls} />
+        </div>
+      </div>
+      <div className="mt-3">
+        <label className="text-[11px] text-slate-500 block mb-1">Special Considerations &amp; Constraints</label>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
+          className={`${numInputCls} min-h-[64px] resize-none`}
+          placeholder="e.g. Avoid tobacco and fossil fuel stocks. Concentrated in tech — looking to diversify..." />
+      </div>
+      {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+      <div className="mt-3">
+        <Btn onClick={() => saveMut.mutate()} loading={saveMut.isPending}>
+          {saved ? "Saved ✓" : "Save Profile"}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
 /* ── Settings panel (rename + delete) ──────────────────────── */
 function SettingsPanel({ account, onDeleted }) {
   const qc = useQueryClient();
@@ -462,6 +565,11 @@ function SettingsPanel({ account, onDeleted }) {
           </Btn>
         </div>
         {renameErr && <p className="text-xs text-red-400 mt-1">{renameErr}</p>}
+      </div>
+
+      {/* Investor profile */}
+      <div className="border-t border-white/[0.06] pt-4">
+        <InvestorProfilePanel account={account} />
       </div>
 
       {/* Danger zone */}
