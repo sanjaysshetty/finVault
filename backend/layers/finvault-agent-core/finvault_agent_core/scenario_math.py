@@ -222,6 +222,7 @@ def simulate_scenario(
             "pnl": round(payoff_at_price(legs, s_t), 2),
             "breakevens": breakevens,
             "payoff_curve": payoff_curve,
+            "days_to_expiry": days_to_expiry,
             "assumptions": {"model": "deterministic_point_eval"},
         }
 
@@ -245,6 +246,7 @@ def simulate_scenario(
             "pnl": round(total, 2),
             "breakevens": breakevens,
             "payoff_curve": payoff_curve,
+            "days_to_expiry": days_to_expiry,
             "assumptions": {"model": "black_scholes_reprice", "iv_crush_factor": iv_crush_factor},
         }
 
@@ -267,6 +269,7 @@ def simulate_scenario(
         "max_loss": round(min(pnls), 2),
         "breakevens": breakevens,
         "payoff_curve": payoff_curve,
+        "days_to_expiry": days_to_expiry,
         "assumptions": {
             "model": "gbm_monte_carlo",
             "paths": monte_carlo_paths,

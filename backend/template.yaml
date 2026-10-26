@@ -933,6 +933,45 @@ Resources:
             ScheduleExpression: "cron(0 5 * * ? *)"
             ScheduleExpressionTimezone: "America/Chicago"
 
+  # ── Calibration Check — weekly confidence-calibration job, Part 5/6 plan §6.6 ──
+  # Plain Python, no Claude call and no secrets-extension layer needed (validating
+  # whether stated probabilities were honest is arithmetic, not reasoning) — lives
+  # in crud/, not ai-services/, for exactly that reason (same precedent as the
+  # existing Python OptionMarksFunction). Schedule starts DISABLED, same cautious
+  # posture as every other new/unverified scheduled function in this rebuild,
+  # until there's real resolved data to check it against.
+  CalibrationCheckFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      CodeUri: crud/calibration-check/
+      Handler: app.handler
+      Timeout: 300
+      MemorySize: 512
+      Layers:
+        - !Ref FinVaultAgentCoreLayer
+      Environment:
+        Variables:
+          AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
+          PAPER_TRADES_TABLE: !Ref PaperTradesTable
+          ANALYTICS_BUCKET: !Ref AnalyticsBucket
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AgentRecommendationsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref PaperTradesTable
+        - S3CrudPolicy:
+            BucketName: !Ref AnalyticsBucket
+      Events:
+        WeeklyCalibrationCheck:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "cron(0 7 ? * SUN *)"
+            ScheduleExpressionTimezone: "America/New_York"
+            Description: "Weekly confidence-calibration check, Sundays 7am ET"
+            State: DISABLED
+
   PostConfirmationFunction:
     Type: AWS::Serverless::Function
     Properties:

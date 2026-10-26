@@ -130,6 +130,20 @@ class TestSimulateScenarioPriceMove(unittest.TestCase):
         self.assertEqual(result["pnl"], 1500)
         self.assertNotIn("probability_of_profit", result)
 
+    def test_days_to_expiry_echoed_in_every_scenario_type(self):
+        # The calibration job (weekly, checks whether a recommendation's
+        # scenario has "resolved" yet) needs this on every branch's output,
+        # not just expiry_distribution's -- it has no other way to learn
+        # the horizon after the fact once only the result is persisted.
+        leg = Leg(type=LegType.STOCK, side=LegSide.LONG, qty=100, entry_price=100)
+        for scenario_type, extra in [
+            ("price_move", {"price_move_pct": 0.1}),
+            ("iv_crush", {"iv_crush_factor": 0.5}),
+            ("expiry_distribution", {}),
+        ]:
+            result = simulate_scenario([leg], 100, 0.25, 45, scenario_type=scenario_type, **extra)
+            self.assertEqual(result["days_to_expiry"], 45, msg=f"scenario_type={scenario_type}")
+
     def test_breakeven_for_long_call(self):
         call = Leg(type=LegType.CALL, side=LegSide.LONG, qty=100, entry_price=3.0, strike=100)
         result = simulate_scenario(

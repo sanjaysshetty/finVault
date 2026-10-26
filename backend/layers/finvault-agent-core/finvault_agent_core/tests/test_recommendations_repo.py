@@ -17,7 +17,9 @@ from unittest.mock import MagicMock
 from finvault_agent_core.recommendations_repo import (
     _to_decimal,
     get_recommendation_with_history,
+    mark_calibration_evaluated,
     put_recommendation,
+    query_by_status,
     put_scenario_run,
     update_status,
 )
@@ -145,6 +147,41 @@ class TestUpdateStatus(unittest.TestCase):
         table.update_item.side_effect = Exception("ConditionalCheckFailedException")
         with self.assertRaises(Exception):
             update_status(table, "acct1", "missing", "APPROVED")
+
+
+class TestQueryByStatus(unittest.TestCase):
+    def test_paginates_until_no_last_evaluated_key(self):
+        table = MagicMock()
+        table.query.side_effect = [
+            {"Items": [{"recommendationId": "a"}], "LastEvaluatedKey": {"sk": "x"}},
+            {"Items": [{"recommendationId": "b"}]},
+        ]
+        items = query_by_status(table, "APPROVED")
+        self.assertEqual(len(items), 2)
+        self.assertEqual(table.query.call_count, 2)
+        self.assertEqual(table.query.call_args_list[0].kwargs["IndexName"], "StatusIndex")
+
+    def test_single_page(self):
+        table = MagicMock()
+        table.query.return_value = {"Items": [{"recommendationId": "a"}]}
+        items = query_by_status(table, "EXPIRED")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(table.query.call_count, 1)
+
+
+class TestMarkCalibrationEvaluated(unittest.TestCase):
+    def test_sets_outcome_fields_without_touching_status(self):
+        table = MagicMock()
+        mark_calibration_evaluated(
+            table, "acct1", "abc",
+            outcome={"realized_pnl": 123.45, "realized_win": True, "source": "paper_trade_fill"},
+        )
+        call_kwargs = table.update_item.call_args.kwargs
+        self.assertEqual(call_kwargs["Key"], {"accountId": "acct1", "sk": "REC#abc"})
+        self.assertNotIn(":status", call_kwargs["ExpressionAttributeValues"])
+        self.assertTrue(call_kwargs["ExpressionAttributeValues"][":calibrationEvaluated"])
+        self.assertEqual(call_kwargs["ExpressionAttributeValues"][":realizedPnl"], Decimal("123.45"))
+        self.assertTrue(call_kwargs["ExpressionAttributeValues"][":realizedWin"])
 
 
 if __name__ == "__main__":

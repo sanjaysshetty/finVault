@@ -71,6 +71,25 @@ def put_recommendation(
     return recommendation_id
 
 
+def query_by_status(table, status):
+    """Cross-account scan via StatusIndex — this is the GSI's actual
+    purpose (§6.4 of the plan): the weekly calibration job needs to find
+    every recommendation in a given status across every account, not
+    just one account at a time. Paginates internally; returns all items."""
+    items = []
+    kwargs = {
+        "IndexName": "StatusIndex",
+        "KeyConditionExpression": Key("status").eq(status),
+    }
+    while True:
+        resp = table.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    return items
+
+
 def get_recommendation_with_history(table, account_id, recommendation_id):
     """Header plus every scenario-run item, in one query — exactly what the
     pre-seeded Deep Dive entry path (?recommendationId=) needs to resume
@@ -128,6 +147,35 @@ def update_status(table, account_id, recommendation_id, status, extra_fields=Non
     attr_names = {}
     attr_values = {}
     for k, v in updates.items():
+        set_exprs.append(f"#{k} = :{k}")
+        attr_names[f"#{k}"] = k
+        attr_values[f":{k}"] = v
+    table.update_item(
+        Key={"accountId": account_id, "sk": f"REC#{recommendation_id}"},
+        UpdateExpression="SET " + ", ".join(set_exprs),
+        ExpressionAttributeNames=attr_names,
+        ExpressionAttributeValues=attr_values,
+        ConditionExpression="attribute_exists(accountId)",
+    )
+
+
+def mark_calibration_evaluated(table, account_id, recommendation_id, outcome):
+    """Records the calibration-check job's realized-outcome evaluation
+    without touching status (APPROVED/EXPIRED stays as-is) -- this is
+    bookkeeping so the weekly job doesn't re-evaluate the same
+    recommendation every run, not a workflow state transition."""
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    fields = _to_decimal({
+        "calibrationEvaluated": True,
+        "calibrationEvaluatedAt": now,
+        "realizedPnl": outcome["realized_pnl"],
+        "realizedWin": outcome["realized_win"],
+        "realizedOutcomeSource": outcome["source"],
+    })
+    set_exprs = []
+    attr_names = {}
+    attr_values = {}
+    for k, v in fields.items():
         set_exprs.append(f"#{k} = :{k}")
         attr_names[f"#{k}"] = k
         attr_values[f":{k}"] = v
