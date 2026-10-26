@@ -1,17 +1,20 @@
 """
 Unit tests for tower1.py — most importantly that Robinhood's as-yet-unset-up
 OAuth grant degrades gracefully (returns {"available": False}) rather than
-crashing the whole Opportunity Engine run, and that non-Robinhood pieces
-(manual holdings, investor profile) work independently of it.
+crashing the whole engine run, and that non-Robinhood pieces (manual
+holdings, investor profile) work independently of it. Lives in the shared
+layer (not per-service) since both Opportunity Engine and Deep Dive build
+on the identical Tower 1 snapshot.
 
-Run with: python3 -m unittest tests.test_tower1 -v
+Run with: python3 -m unittest finvault_agent_core.tests.test_tower1 -v
+(from backend/layers/finvault-agent-core/)
 """
 
 import unittest
 from unittest.mock import MagicMock
 
 from finvault_agent_core.robinhood_mcp import RobinhoodMcpError
-from tower1 import build_tower1_context, fetch_investor_profile, fetch_portfolio, fetch_robinhood_context
+from finvault_agent_core.tower1 import build_tower1_context, fetch_investor_profile, fetch_portfolio, fetch_robinhood_context
 
 
 class TestFetchRobinhoodContext(unittest.TestCase):

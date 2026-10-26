@@ -8,6 +8,8 @@ from .scenario_math import (
     payoff_at_price,
     simulate_scenario,
 )
+from .tower1 import build_tower1_context, fetch_investor_profile, fetch_portfolio, fetch_robinhood_context
+from .job_cache import read_cache, try_claim_job, write_cache
 
 __all__ = [
     "get_secret",
@@ -18,4 +20,11 @@ __all__ = [
     "black_scholes_price",
     "payoff_at_price",
     "simulate_scenario",
+    "build_tower1_context",
+    "fetch_investor_profile",
+    "fetch_portfolio",
+    "fetch_robinhood_context",
+    "read_cache",
+    "write_cache",
+    "try_claim_job",
 ]

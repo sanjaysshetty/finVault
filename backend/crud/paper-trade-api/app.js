@@ -19,6 +19,13 @@
  *   GET    /paper-trade/orders          → order history
  *   POST   /paper-trade/status/{id}     → manually check fill on a SUBMITTED order
  *   EventBridge schedule (every 15 min) → auto-fill all SUBMITTED limit orders
+ *   Direct Lambda invoke (event.source === "deep-dive-approval") → stage an
+ *     order from Deep Dive's approve_scenario tool. No JWT exists on a
+ *     backend-to-backend invoke, so this path trusts event.accountId
+ *     directly rather than going through resolveContext — safe because
+ *     IAM already restricts the only caller (DeepDiveWorkerFunction's
+ *     execution role) to this one Lambda's ARN; this isn't reachable from
+ *     the public API Gateway route at all.
  *
  * Fill logic:
  *   Market order → fills at current BS / stock price on submission
@@ -263,7 +270,7 @@ async function handleListStaged(ctx) {
   return json(200, { mode: TRADE_MODE, orders });
 }
 
-async function handleStageOrder(ctx, body) {
+async function handleStageOrder(accountId, body) {
   const { ticker, strategy, strike, expiry, quantity, orderType, limitPrice, scanId, source, notes } = body || {};
 
   const errors = [];
@@ -284,7 +291,7 @@ async function handleStageOrder(ctx, body) {
   const right   = OPTION_STRATEGIES.has(strategy) ? (strategy.includes("PUT") ? "P" : "C") : null;
 
   const item = {
-    accountId:   ctx.accountId,
+    accountId,
     tradeId,
     mode:        TRADE_MODE,
     modeStatus:  `${TRADE_MODE}#STAGED`,
@@ -304,7 +311,7 @@ async function handleStageOrder(ctx, body) {
   };
 
   await paperTradesRepo.putTrade(item);
-  log("INFO", "order_staged", { accountId: ctx.accountId, tradeId, ticker: item.ticker, strategy });
+  log("INFO", "order_staged", { accountId, tradeId, ticker: item.ticker, strategy });
   return json(201, { message: "Order staged", tradeId, order: item });
 }
 
@@ -602,6 +609,16 @@ exports.handler = async (event) => {
   // EventBridge scheduled trigger
   if (event.source === "aws.events") return handleAutoFill();
 
+  // Direct Lambda invoke from Deep Dive's approve_scenario tool — no JWT
+  // exists on a backend-to-backend invoke, so this trusts event.accountId
+  // directly. Not reachable via API Gateway; only DeepDiveWorkerFunction's
+  // execution role has lambda:InvokeFunction on this function's ARN.
+  if (event.source === "deep-dive-approval") {
+    if (!event.accountId) return { ok: false, error: "accountId is required" };
+    const result = await handleStageOrder(event.accountId, event.body);
+    return { ok: result.statusCode === 201, statusCode: result.statusCode, body: JSON.parse(result.body) };
+  }
+
   const method  = (event.requestContext?.http?.method || "GET").toUpperCase();
   const rawPath = event.rawPath || event.path || "/";
 
@@ -630,7 +647,7 @@ exports.handler = async (event) => {
       return handleListStaged(ctx);
 
     if (method === "POST"   && rawPath.endsWith("/paper-trade/staged"))
-      { assertWrite(ctx, "paperTrading"); return handleStageOrder(ctx, body); }
+      { assertWrite(ctx, "paperTrading"); return handleStageOrder(ctx.accountId, body); }
 
     if (method === "DELETE" && tradeIdFromPath && rawPath.includes("/paper-trade/staged/"))
       { assertWrite(ctx, "paperTrading"); return handleDiscardStaged(ctx, tradeIdFromPath); }

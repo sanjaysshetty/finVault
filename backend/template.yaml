@@ -1647,6 +1647,94 @@ Resources:
             Path: /research/opportunities/{recommendationId}
             Method: GET
 
+  # ── Deep Dive Worker — the actual AgentLoop work, Part 5/6 agentic rebuild ────
+  # Invoked as InvocationType: Event (fire-and-forget) by DeepDiveApi.
+  # MaximumRetryAttempts: 0 + try_claim_job's in-progress marker together close
+  # the idempotency gap AdvisorWorkerFunction has today (no guard at all) --
+  # the plan's explicit "fix as part of this port, not after" requirement.
+  DeepDiveWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      CodeUri: ai-services/deep-dive/
+      Handler: handler.worker_handler
+      Timeout: 300
+      MemorySize: 512
+      Layers:
+        - !Ref FinVaultAgentCoreLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
+          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
+          PAPER_TRADE_API_FUNCTION: !GetAtt PaperTradeApi.Arn
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAssetsTableName
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AgentRecommendationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdvisorCacheTable
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PaperTradeApi
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/mcp-access-token"
+
+  # ── Deep Dive API — handles auth, cache lookup, async dispatch ───────────────
+  # POST /research/deep-dive/chat → checks AdvisorCacheTable (reused generic
+  #   job-result cache, not a new table); on miss fires DeepDiveWorkerFunction
+  #   async and returns 202 { jobId, status: "pending" }.
+  # GET  /research/deep-dive/result/:cacheKey → poll; 404 = still pending.
+  DeepDiveApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/deep-dive-api/
+      Handler: app.handler
+      Timeout: 15
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          DEEP_DIVE_WORKER_FUNCTION: !GetAtt DeepDiveWorkerFunction.Arn
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          NODE_PATH: /opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref AdvisorCacheTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DeepDiveWorkerFunction
+      Events:
+        DeepDiveChat:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /research/deep-dive/chat
+            Method: POST
+        DeepDiveResult:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /research/deep-dive/result/{cacheKey}
+            Method: GET
+
   # ── Advisor Worker — runs the actual Anthropic call asynchronously ───────────
   # Invoked as InvocationType: Event (fire-and-forget) by AdvisorApi.
   # No API Gateway — no 29s timeout. Up to 5 min for Anthropic to respond.
