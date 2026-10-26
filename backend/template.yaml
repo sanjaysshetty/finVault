@@ -762,24 +762,29 @@ Resources:
       QueueName: !Sub "receipt-extractor-dlq-${AWS::StackName}"
       MessageRetentionPeriod: 1209600  # 14 days
 
+  # Python port (Part 7 step 10) -- was Node (src/handler.js). Category
+  # assignment is no longer part of this Lambda's own vision call; it
+  # delegates to the shared CategorizationFunction (see app.py's module
+  # docstring for why that also fixes the "needsCuration churn" for
+  # receipt-sourced items specifically).
   ReceiptExtractorFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: python3.11
       CodeUri: ai-services/receipt-extractor/
-      Handler: src/handler.handler
+      Handler: app.handler
       MemorySize: 1024
       Timeout: 60
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt ReceiptExtractorDLQ.Arn
       Layers:
-        - !Ref FinVaultSharedLayer
+        - !Ref FinVaultAgentCoreLayer
         - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
       Environment:
         Variables:
-          NODE_PATH: /opt/nodejs
           RECEIPT_LEDGER_TABLE: !Ref ReceiptLedgerV2TableName
-          ANTHROPIC_MODEL: "claude-sonnet-4-6"
+          CATEGORIZATION_FUNCTION: !GetAtt CategorizationFunction.Arn
       Policies:
         - AWSLambdaBasicExecutionRole
         - S3ReadPolicy:
@@ -788,6 +793,8 @@ Resources:
             TableName: !Ref ReceiptLedgerV2TableName
         - SQSSendMessagePolicy:
             QueueName: !GetAtt ReceiptExtractorDLQ.QueueName
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CategorizationFunction
         - Statement:
             - Effect: Allow
               Action: ssm:GetParameter
@@ -2153,16 +2160,21 @@ Resources:
       QueueName: !Sub "tax-doc-extractor-dlq-${AWS::StackName}"
       MessageRetentionPeriod: 1209600  # 14 days
 
+  # Python port (Part 7 step 10) -- was Node. Adds pre-call best-effort
+  # image PII redaction (Textract + Pillow, image uploads only) ahead of
+  # the extraction call, and post-extraction output redaction on every
+  # field before it's merged/persisted. See redaction.py's module
+  # docstring for the full layered design and its documented PDF gap.
   TaxDocExtractorFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ai-services/tax-return-extractor/
       Handler: app.handler
-      Runtime: nodejs20.x
+      Runtime: python3.11
       Timeout: 60
       MemorySize: 1024
       Layers:
-        - !Ref FinVaultSharedLayer
+        - !Ref FinVaultAgentCoreLayer
         - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
       DeadLetterQueue:
         Type: SQS
@@ -2172,8 +2184,6 @@ Resources:
           FIN_ASSETS_TABLE:          !Ref FinAssetsTableName
           FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
           FIN_ACCOUNTS_TABLE:        !Ref FinAccountsTable
-          ANTHROPIC_MODEL:           "claude-sonnet-4-6"
-          NODE_PATH:                 /opt/nodejs/node_modules:/opt/nodejs
       Policies:
         - AWSLambdaBasicExecutionRole
         # Use !Sub ARN (not !Ref TaxDocsBucket) so there is no CloudFormation dependency
@@ -2196,6 +2206,10 @@ Resources:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+            # redact_image_pii's best-effort pre-call pass (image uploads only).
+            - Effect: Allow
+              Action: textract:DetectDocumentText
+              Resource: "*" # Textract does not support resource-level permissions
       # No Events: block — S3 notification is wired directly on TaxDocsBucket below.
       # SAM's Type:S3 event on a same-stack bucket creates a circular dependency
       # (Lambda policy → !Ref Bucket, Bucket notification → Lambda Arn → circular).

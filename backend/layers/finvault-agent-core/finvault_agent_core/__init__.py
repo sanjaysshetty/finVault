@@ -11,6 +11,7 @@ from .scenario_math import (
 from .tower1 import build_tower1_context, fetch_investor_profile, fetch_portfolio, fetch_robinhood_context
 from .job_cache import read_cache, try_claim_job, write_cache
 from .structured_call import structured_call
+from .redaction import redact_text, redact_json, redact_image_pii
 
 __all__ = [
     "get_secret",
@@ -29,4 +30,7 @@ __all__ = [
     "write_cache",
     "try_claim_job",
     "structured_call",
+    "redact_text",
+    "redact_json",
+    "redact_image_pii",
 ]
