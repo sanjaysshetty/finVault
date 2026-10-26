@@ -1,3 +1,16 @@
 # tax-return-extractor dependencies.
-# boto3, anthropic, and Pillow are provided via the finvault-agent-core
-# Lambda layer -- this function has no direct dependencies of its own.
+# boto3 and anthropic are provided via the finvault-agent-core Lambda layer.
+# Pillow is NOT layer-provided -- it's bundled directly in this function's
+# own package since this is the only consumer of redaction.redact_image_pii
+# (PIL). Keeping it function-local instead of in the shared layer avoids
+# every other Python Lambda paying for a dependency it never imports.
+#
+# Exact-pinned, not a range: `sam build` resolves this spec against the
+# LOCAL platform first (picks up whatever's newest, e.g. 13.0.0/12.3.0) then
+# re-downloads that exact version for the Lambda target platform
+# (manylinux2014_x86_64) -- confirmed live via
+# `pip download --platform manylinux2014_x86_64` that 12.2.0 is the newest
+# release that actually publishes a manylinux wheel; several versions above
+# it are macOS/Windows-wheel-only so far. Bump this pin once a newer release
+# publishes a manylinux wheel too.
+Pillow==12.2.0
