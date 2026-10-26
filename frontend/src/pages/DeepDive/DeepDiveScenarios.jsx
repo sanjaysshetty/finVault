@@ -1,40 +1,288 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.jsx";
 import { PageIcons } from "../../components/ui/PageIcons.jsx";
-import { EmptyState } from "../../components/ui/EmptyState.jsx";
 
 /**
  * Deep Dive & Scenarios — chat + scenario simulation surface.
  *
- * Replaces Asset Hub and Compass AI / Advisor. Reachable two ways:
- *   - standalone, no params: freeform chat, name any ticker/strategy yourself
+ * Replaces Asset Hub and Compass AI / Advisor. Two entry paths:
+ *   - standalone (no params): freeform chat, name any ticker/strategy yourself
  *   - pre-seeded: /research/deep-dive?recommendationId=<id>, context pre-loaded
- *     from an Opportunity Engine card
+ *     from an Opportunity Engine card (fetched via the existing
+ *     GET /research/opportunities/{id} route — no new backend route needed
+ *     just to display it)
  *
- * The real chat + simulate_scenario/approve_scenario tool-use lands in a
- * later phase of the agentic rebuild; this page is the routed,
- * permission-gated shell (including both entry paths) so the nav
- * consolidation can ship independently of that backend work.
+ * Unlike AdvisorChat, replies render as plain text, not HTML-in-iframe —
+ * this prompt was never designed to emit HTML, and plain text via React's
+ * default escaping carries no injection surface to sandbox against in the
+ * first place.
  */
+
+const POLL_INTERVAL_MS = 3000;
+const POLL_TIMEOUT_MS = 4 * 60 * 1000;
+
+function TypingIndicator() {
+  return (
+    <div className="flex gap-3 justify-start">
+      <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-white">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm3.5 6.5-2 6-6 2 2-6 6-2z" />
+        </svg>
+      </div>
+      <div className="bg-white/[0.04] border border-white/[0.06] rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+        {[0, 1, 2].map((i) => (
+          <span key={i} className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function UserBubble({ content }) {
+  return (
+    <div className="flex gap-3 justify-end">
+      <div className="max-w-[80%] bg-blue-600/20 border border-blue-500/20 text-slate-200 rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
+        {content}
+      </div>
+      <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center shrink-0 mt-0.5">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-slate-300">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function AssistantBubble({ content }) {
+  return (
+    <div className="flex gap-3 justify-start">
+      <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center shrink-0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-white">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm3.5 6.5-2 6-6 2 2-6 6-2z" />
+        </svg>
+      </div>
+      <div className="max-w-[80%] bg-white/[0.04] border border-white/[0.06] text-slate-200 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
+        {content}
+      </div>
+    </div>
+  );
+}
+
+function RecommendationBanner({ recommendation }) {
+  if (!recommendation) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/[0.08] border border-emerald-500/[0.2] px-4 py-2.5 mb-3">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" className="w-4 h-4 shrink-0 text-emerald-400">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+        </svg>
+        <span className="text-xs text-emerald-300 font-medium truncate">
+          Continuing recommendation for <b>{recommendation.ticker}</b> ({recommendation.strategyType}) —{" "}
+          <span className="text-emerald-500/70">{recommendation.status}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function DeepDiveScenarios() {
   const [searchParams] = useSearchParams();
   const recommendationId = searchParams.get("recommendationId");
 
+  const { data: recommendationData } = useQuery({
+    queryKey: ["deepDiveRecommendation", recommendationId],
+    queryFn: () => api.get(`/research/opportunities/${recommendationId}`),
+    enabled: !!recommendationId,
+  });
+
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [pendingJob, setPendingJob] = useState(null);
+  const [linkedRecommendationId, setLinkedRecommendationId] = useState(recommendationId || null);
+
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  useEffect(() => {
+    if (!pendingJob) return;
+    let stopped = false;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get(`/research/deep-dive/result/${pendingJob.jobId}`);
+        if (stopped) return;
+        if (res.reply) {
+          setMessages((prev) => [...prev, { role: "assistant", content: res.reply }]);
+          if (res.recommendationId) setLinkedRecommendationId(res.recommendationId);
+          setPendingJob(null);
+          setLoading(false);
+        }
+      } catch (e) {
+        if (stopped) return;
+        if (e.status === 404) return; // still pending
+        const detail = e?.detail || {};
+        setError(detail.message || "Something went wrong. Please try again.");
+        setPendingJob(null);
+        setLoading(false);
+        setMessages((prev) => prev.slice(0, -1));
+      }
+    }, POLL_INTERVAL_MS);
+
+    const timeout = setTimeout(() => {
+      if (stopped) return;
+      clearInterval(interval);
+      setError("This is taking longer than expected. Please try again.");
+      setPendingJob(null);
+      setLoading(false);
+      setMessages((prev) => prev.slice(0, -1));
+    }, POLL_TIMEOUT_MS);
+
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [pendingJob]);
+
+  const sendMessage = useCallback(
+    async (text) => {
+      const msg = (text ?? input).trim();
+      if (!msg || loading) return;
+
+      setInput("");
+      setError("");
+      setMessages((prev) => [...prev, { role: "user", content: msg }]);
+      setLoading(true);
+
+      try {
+        const history = messages.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+        const res = await api.post("/research/deep-dive/chat", {
+          message: msg,
+          history,
+          recommendationId: linkedRecommendationId || undefined,
+        });
+
+        if (res.status === "pending" && res.jobId) {
+          setPendingJob({ jobId: res.jobId });
+          return;
+        }
+
+        if (res.recommendationId) setLinkedRecommendationId(res.recommendationId);
+        setMessages((prev) => [...prev, { role: "assistant", content: res.reply }]);
+        setLoading(false);
+      } catch (e) {
+        const detail = e?.detail || {};
+        setError(detail.message || "Something went wrong. Please try again.");
+        setMessages((prev) => prev.slice(0, -1));
+        setLoading(false);
+      }
+    },
+    [input, loading, messages, linkedRecommendationId]
+  );
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  const isEmpty = messages.length === 0;
+
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-7xl mx-auto">
+    <div className="flex flex-col gap-4 p-6 max-w-5xl mx-auto h-[calc(100vh-48px)]">
       <PageHeader
         title="Deep Dive & Scenarios"
         icon={PageIcons.deepDive}
         subtitle="Ask about any position or ticker, or dig into a recommendation — run scenarios and see the probability-weighted outcome before deciding."
       />
-      <EmptyState
-        type="empty"
-        message={
-          recommendationId
-            ? `This chat is being rebuilt as part of the agentic rebuild — once online, it'll open straight into recommendation ${recommendationId} with full context pre-loaded.`
-            : "This chat is being rebuilt as part of the agentic rebuild — standalone deep dives on any ticker or strategy will be available here once it's online."
-        }
-      />
+
+      <RecommendationBanner recommendation={recommendationData?.recommendation} />
+
+      <div className="flex flex-col flex-1 rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-hidden min-h-[500px]">
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {isEmpty && !loading && (
+            <div className="flex flex-col items-center justify-center h-full py-12 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-emerald-600/10 border border-emerald-500/20 flex items-center justify-center mb-4">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-8 h-8 text-emerald-400">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm3.5 6.5-2 6-6 2 2-6 6-2z" />
+                </svg>
+              </div>
+              <h3 className="text-base font-bold text-white mb-1" style={{ fontFamily: "Epilogue, sans-serif" }}>
+                Ask about any ticker or strategy
+              </h3>
+              <p className="text-sm text-slate-500 max-w-md">
+                {recommendationId
+                  ? "Loading context for your recommendation…"
+                  : "Research a ticker, run a scenario, or ask what your portfolio looks like right now — all grounded against your real positions."}
+              </p>
+            </div>
+          )}
+
+          {messages.map((msg, i) =>
+            msg.role === "user" ? <UserBubble key={i} content={msg.content} /> : <AssistantBubble key={i} content={msg.content} />
+          )}
+
+          {loading && <TypingIndicator />}
+
+          {error && (
+            <div className="flex justify-center">
+              <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 max-w-sm text-center">
+                {error}
+              </div>
+            </div>
+          )}
+
+          <div ref={bottomRef} />
+        </div>
+
+        <div className="border-t border-white/[0.06] p-4">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask about a ticker, run a scenario, or continue this recommendation…"
+                disabled={loading}
+                rows={1}
+                className="w-full bg-[#080D1A] border border-white/[0.08] rounded-xl px-4 py-3 text-slate-200 text-sm outline-none focus:border-emerald-500/40 transition-colors resize-none leading-relaxed disabled:opacity-50"
+                style={{ minHeight: "46px", maxHeight: "160px", overflowY: "auto" }}
+                onInput={(e) => {
+                  e.target.style.height = "auto";
+                  e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
+                }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => sendMessage()}
+              disabled={loading || !input.trim()}
+              className="w-11 h-11 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center justify-center shrink-0 transition-all cursor-pointer"
+            >
+              {loading ? (
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+                </svg>
+              )}
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-700 mt-2 text-center">Enter to send · Shift+Enter for new line</p>
+        </div>
+      </div>
     </div>
   );
 }

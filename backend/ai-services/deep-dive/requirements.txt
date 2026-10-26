@@ -1,0 +1,6 @@
+# deep-dive dependencies.
+# boto3, anthropic, and mcp are all provided via the finvault-agent-core
+# Lambda layer -- this function has no direct dependencies of its own
+# (unlike Opportunity Engine, it doesn't do its own yfinance-based
+# universe prefiltering; all market data comes from Robinhood MCP tools
+# via Tower 2's native connector).
