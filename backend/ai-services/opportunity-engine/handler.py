@@ -4,8 +4,9 @@ Opportunity Engine Lambda — Handler.
 Pipeline:
   1. Fetch S&P 500 + 400 ticker universe, fundamentals, hard filter, score
      (prefilter.py — relocated/generalized from wheel-scan/tools.py).
-  2. Build Tower 1 context once for the account (tower1.py) — shared by
-     every candidate's Tower 2 run.
+  2. Build Tower 1 context once for the account (finvault_agent_core.tower1
+     — shared with Deep Dive, which needs the identical snapshot) — reused
+     by every candidate's Tower 2 run.
   3. For the top-N shortlisted candidates, run a Tower 2 AgentLoop
      concurrently (ThreadPoolExecutor — each run is I/O-bound, waiting on
      Claude/MCP calls, and 20-25 sequential runs would risk Lambda's
@@ -31,8 +32,8 @@ from finvault_agent_core.agent_loop import AgentLoop
 from finvault_agent_core.robinhood_mcp import RobinhoodMcpClient
 
 import prefilter
-import recommendations_repo
-import tower1
+from finvault_agent_core import build_tower1_context
+from finvault_agent_core import recommendations_repo
 from tools import WEB_SEARCH_TOOL, build_robinhood_mcp_server_config, build_tower2_tools
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,7 @@ def handler(event, context):
     # 2. Tower 1 — built once, shared across every candidate's Tower 2 run.
     access_token = _robinhood_access_token()
     robinhood_client = RobinhoodMcpClient(token_provider=lambda: access_token) if access_token else None
-    tower1_context = tower1.build_tower1_context(robinhood_client, _assets_table, _accounts_table, account_id)
+    tower1_context = build_tower1_context(robinhood_client, _assets_table, _accounts_table, account_id)
     mcp_servers = build_robinhood_mcp_server_config(access_token) if access_token else None
     if mcp_servers is None:
         logger.warning("Running Tower 2 without Robinhood MCP (no access token yet) — web_search + fundamentals only")
