@@ -269,5 +269,43 @@ class TestMcpServers(unittest.TestCase):
         self.assertIn("mcp-client-2026-09-15", call_kwargs["betas"])
 
 
+class TestServerTools(unittest.TestCase):
+    def test_server_tool_included_in_tools_array_without_fn(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn", [_text_block("ok")])
+        web_search_tool = {"type": "web_search_20260209", "name": "web_search"}
+        loop = AgentLoop(
+            system_prompt="sys", tools=[_make_tool()], client=client,
+            server_tools=[web_search_tool],
+        )
+
+        loop.run([{"role": "user", "content": "hi"}])
+
+        sent_tools = client.messages.create.call_args.kwargs["tools"]
+        self.assertIn(web_search_tool, sent_tools)
+        # the local client-executed tool is still present alongside it
+        self.assertTrue(any(t.get("name") == "get_quote" for t in sent_tools))
+
+    def test_server_tool_result_blocks_not_sent_to_execute_tool(self):
+        # A server_tool_use/web_search_tool_result block pair (type != "tool_use")
+        # must not be mistaken for a client tool call needing execution.
+        client = MagicMock()
+        server_block = SimpleNamespace(type="server_tool_use", name="web_search", input={}, id="st_1")
+        client.messages.create.side_effect = [
+            _response("tool_use", [server_block, _tool_use_block("get_quote", {}, block_id="tu_1")]),
+            _response("end_turn", [_text_block("done")]),
+        ]
+        tool_fn = MagicMock(return_value={"price": 100})
+        loop = AgentLoop(
+            system_prompt="sys", tools=[_make_tool(fn=tool_fn)], client=client,
+            server_tools=[{"type": "web_search_20260209", "name": "web_search"}],
+        )
+
+        loop.run([{"role": "user", "content": "hi"}])
+
+        # only the real client tool_use block gets executed
+        tool_fn.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,11 @@ Parameters:
     Default: ""
     Description: userId (= accountId) whose account receives the weekly scheduled Wheel Scan report
 
+  OpportunityEngineAccountId:
+    Type: String
+    Default: ""
+    Description: userId (= accountId) whose account receives the weekly scheduled Opportunity Engine scan
+
   # Existing buckets (NOT created by this stack)
   # No Default — real bucket/table/domain names are resource-identifying info,
   # supplied only via a local, gitignored parameter-overrides file (see CLAUDE.md).
@@ -1543,6 +1548,104 @@ Resources:
             ApiId: !Ref MetalsHttpApi
             Path: /wheel/scan/trigger
             Method: POST
+
+  # ── Opportunity Engine — Part 5/6 agentic rebuild ──────────────────────────
+  # Pipeline: deterministic prefilter (relocated from wheel-scan/tools.py,
+  # strategy-agnostic) -> Tower 1 (portfolio/risk context) -> Tower 2
+  # (AgentLoop ranking pass per shortlisted candidate, concurrent) ->
+  # AgentRecommendationsTable. Schedule starts DISABLED, same cautious
+  # posture as WheelScanFunction's own schedule, until verified end-to-end
+  # against real data (Robinhood MCP in particular needs its own OAuth
+  # grant set up before Tower 2's market-data tools are live).
+  OpportunityEngineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      CodeUri: ai-services/opportunity-engine/
+      Handler: handler.handler
+      Timeout: 900
+      MemorySize: 2048
+      Layers:
+        - !Ref FinVaultAgentCoreLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Environment:
+        Variables:
+          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
+          OPPORTUNITY_ENGINE_ACCOUNT_ID: !Ref OpportunityEngineAccountId
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AgentRecommendationsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAssetsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/mcp-access-token"
+      Events:
+        WeeklyOpportunityScan:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "cron(30 6 ? * SAT *)"
+            ScheduleExpressionTimezone: "America/New_York"
+            Description: "Weekly Opportunity Engine scan at 6:30am ET, Saturdays"
+            State: DISABLED
+
+  # ── Opportunity Engine Read — Node.js Lambda (serves recommendations, triggers scans) ──
+  OpportunityEngineReadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: crud/opportunity-engine-read/
+      Handler: app.handler
+      Timeout: 30
+      MemorySize: 256
+      Layers:
+        - !Ref FinVaultSharedLayer
+      Environment:
+        Variables:
+          AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
+          OPPORTUNITY_ENGINE_FUNCTION: !GetAtt OpportunityEngineFunction.Arn
+          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
+          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
+          NODE_PATH: /opt/nodejs
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - DynamoDBReadPolicy:
+            TableName: !Ref AgentRecommendationsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountMembersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FinAccountsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !GetAtt OpportunityEngineFunction.Arn
+      Events:
+        OpportunityEngineList:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /research/opportunities
+            Method: GET
+        OpportunityEngineTrigger:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /research/opportunities/trigger
+            Method: POST
+        OpportunityEngineById:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /research/opportunities/{recommendationId}
+            Method: GET
 
   # ── Advisor Worker — runs the actual Anthropic call asynchronously ───────────
   # Invoked as InvocationType: Event (fire-and-forget) by AdvisorApi.

@@ -92,6 +92,7 @@ class AgentLoop:
         max_total_tokens: Optional[int] = 200_000,
         max_tokens: int = 4096,
         mcp_servers: Optional[list] = None,
+        server_tools: Optional[list] = None,
     ):
         self.system_prompt = system_prompt
         self.tools = {t.name: t for t in tools}
@@ -102,12 +103,22 @@ class AgentLoop:
         self.max_total_tokens = max_total_tokens
         self.max_tokens = max_tokens
         self.mcp_servers = mcp_servers
+        # Server-side tools (e.g. {"type": "web_search_20260209", "name":
+        # "web_search"}) execute on Anthropic's infrastructure, not via
+        # _execute_tool — they go in the same `tools` array sent to Claude
+        # (matching wheel-scan's existing WEB_SEARCH_TOOL pattern) but carry
+        # no `fn`, so they're kept separate from the client-tool registry.
+        # Their result blocks (server_tool_use/web_search_tool_result, or
+        # mcp_tool_use/mcp_tool_result for native-MCP-connector tools) are
+        # never type=="tool_use", so _execute_tool's filter already skips
+        # them correctly with no special-casing needed in the loop itself.
+        self.server_tools = server_tools or []
         self._system_prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:12]
 
     def run(self, messages: list, request_id: Optional[str] = None) -> AgentResult:
         messages = list(messages)
         deadline = time.monotonic() + self.deadline_seconds
-        tool_schemas = [t.to_anthropic_schema() for t in self.tools.values()]
+        tool_schemas = [t.to_anthropic_schema() for t in self.tools.values()] + list(self.server_tools)
         total_input_tokens = 0
         total_output_tokens = 0
 
