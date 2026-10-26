@@ -33,14 +33,12 @@ export const PAGE_ROUTES = [
   { pageKey: "receiptsLedger",    path: "/spending/receipts-ledger", label: "Receipts",      group: "Spending" },
   { pageKey: "budget",            path: "/budget/overview",          label: "Budget & Goals", group: "Spending" },
 
-  // ── Research ───────────────────────────────────────────────
-  { pageKey: "wheelScan",         path: "/research/wheel-scan",      label: "Wheel Scan",    group: "Research" },
-  { pageKey: "assetHub",          path: "/research/asset-hub",       label: "Asset Hub",     group: "Research" },
-  { pageKey: "advisor",           path: "/research/compass",         label: "Compass AI",    group: "Research" },
-
-  // ── Trading ────────────────────────────────────────────────
-  // paperTrading is intentionally separate from any future liveTrading entry.
-  { pageKey: "paperTrading",      path: "/research/paper-trading",   label: "Paper Trading", group: "Trading" },
+  // ── Agentic Center ─────────────────────────────────────────
+  // Replaces the old wheelScan/assetHub/advisor/paperTrading pages — see
+  // the Part 5/6 agentic rebuild plan. Paper Trading has no page anymore;
+  // its backend is reused internally by the approval flow (§6.5).
+  { pageKey: "opportunityEngine", path: "/research/opportunities",   label: "Opportunity Engine",   group: "Agentic Center" },
+  { pageKey: "deepDive",          path: "/research/deep-dive",       label: "Deep Dive & Scenarios", group: "Agentic Center" },
 
   // ── Tax ────────────────────────────────────────────────────
   { pageKey: "taxReturn",         path: "/tax/return",               label: "Tax Return",    group: "Tax" },
