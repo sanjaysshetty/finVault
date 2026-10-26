@@ -433,6 +433,62 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  # AgentRecommendationsTable: Opportunity Engine / Deep Dive recommendations
+  # and their scenario-run history (Part 5/6 agentic rebuild).
+  # Not a fit for the single-table finAssets pattern — this is a
+  # status-lifecycle entity with sub-record history, modeled like
+  # PaperTradesTable above rather than a transaction ledger.
+  #
+  # Key design:
+  #   PK = accountId
+  #   SK = "REC#<recId>"                 — recommendation header
+  #      | "REC#<recId>#SCENARIO#<ts>"    — one item per scenario run
+  #   Query(begins_with(sk, "REC#<recId>")) returns the header + full
+  #   scenario-run history in one call.
+  #
+  # StatusIndex GSI exists for the weekly calibration job, which needs a
+  # cross-account scan of resolved (APPROVED/EXPIRED) recommendations.
+  #
+  # ttl is set only on DISMISSED items (~90-day auto-cleanup) — APPROVED and
+  # EXPIRED items are never given a ttl, since they're the calibration
+  # ground-truth dataset and auto-deleting them would silently break the
+  # only mechanism for checking whether stated probabilities were honest.
+  AgentRecommendationsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: AgentRecommendations
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: accountId
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: accountId
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: StatusIndex
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
   # PriceCacheTable: stores the last /prices response with a 60-second application-level TTL.
   # Eliminates duplicate external API calls when multiple page components fetch prices simultaneously.
   # DynamoDB TTL (1 hour) handles cleanup of stale items automatically.
