@@ -4,6 +4,8 @@
 # wheel-scan/asset-hub's existing requirements.txt (still on >=0.40.0) were
 # last touched — confirmed by installing and introspecting the live
 # package, not assumed from memory. mcp_servers/betas params and several
-# stop_reason values used by agent_loop.py only exist on 2.x.
+# stop_reason values used by agent_loop.py only exist on 2.x. mcp>=2.0.0
+# is also required for robinhood_mcp.py's direct Tower-1 client
+# (streamable_http_client/ClientSession) — pulls in httpx2 transitively.
 anthropic>=2.0.0
 mcp>=2.0.0
