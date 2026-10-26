@@ -1,3 +1,9 @@
 # finvault_agent_core dependencies.
 # boto3 is already provided by the Lambda Python runtime — not listed here.
-# The anthropic SDK and other harness dependencies land here in Part 4.
+# Pinned to >=2.x deliberately: the SDK did a major 0.x -> 2.x jump since
+# wheel-scan/asset-hub's existing requirements.txt (still on >=0.40.0) were
+# last touched — confirmed by installing and introspecting the live
+# package, not assumed from memory. mcp_servers/betas params and several
+# stop_reason values used by agent_loop.py only exist on 2.x.
+anthropic>=2.0.0
+mcp>=2.0.0
