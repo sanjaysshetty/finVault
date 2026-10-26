@@ -9,16 +9,12 @@
 # (streamable_http_client/ClientSession) — pulls in httpx2 transitively.
 anthropic>=2.0.0
 mcp>=2.0.0
-# Pillow is only exercised by redaction.redact_image_pii (tax-return-extractor's
-# pre-call image redaction) -- every consumer of this layer gets it bundled
-# regardless, since layers are all-or-nothing, but it's a small, pure-stdlib-
-# adjacent dependency so the bloat for other functions is minor.
-# Exact-pinned, not a range: `sam build` resolves this spec against the
-# LOCAL platform first (picks up whatever's newest on this mac, e.g.
-# 13.0.0/12.3.0) then re-downloads that exact version for the Lambda
-# target platform (manylinux2014_x86_64) -- confirmed live via
-# `pip download --platform manylinux2014_x86_64` that 12.2.0 is the
-# newest release that actually publishes a manylinux wheel; several
-# versions above it are macOS/Windows-wheel-only so far. Bump this pin
-# once a newer release publishes a manylinux wheel too.
-Pillow==12.2.0
+# Pillow (redaction.redact_image_pii's PIL dependency) deliberately does NOT
+# live here anymore -- it's a per-function dependency of tax-return-extractor
+# only (the one consumer that calls redact_image_pii). This layer is shared
+# by every Python Lambda in the app (AssetHubFunction/WheelScanFunction's own
+# pandas/numpy/yfinance bundles pushed combined function+layer size over
+# Lambda's 250MB unzipped ceiling on 2026-10-26 -- see that incident's fix
+# commit for the full diagnosis); every extra MB added here is paid by every
+# consumer whether it needs it or not, so anything not needed by (almost)
+# everyone belongs in the specific function's own requirements.txt instead.

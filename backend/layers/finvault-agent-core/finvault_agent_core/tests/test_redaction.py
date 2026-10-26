@@ -4,6 +4,11 @@ JSON redaction, and best-effort pre-call image redaction (mocked Textract +
 real Pillow round-trip, no network calls).
 
 Run with: python3 -m unittest finvault_agent_core.tests.test_redaction -v
+
+Pillow is NOT in this layer's requirements.txt (it's tax-return-extractor's
+own per-function dependency now, to keep the shared layer small -- see
+requirements.txt's comment for why). Install it separately to run the
+image-redaction tests here: pip install Pillow==12.2.0
 """
 
 import io
