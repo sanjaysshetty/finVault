@@ -620,7 +620,7 @@ Resources:
           FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
           FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
           NODE_PATH: /opt/nodejs
-          ANTHROPIC_MODEL: "claude-haiku-4-5-20251001"
+          CATEGORIZATION_FUNCTION: !GetAtt CategorizationFunction.Arn
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ReceiptLedgerV2TableName
@@ -628,10 +628,8 @@ Resources:
             TableName: !Ref FinAccountMembersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref FinAccountsTable
-        - Statement:
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CategorizationFunction
       Events:
         SpendingListGet:
           Type: HttpApi
@@ -910,22 +908,18 @@ Resources:
       Timeout: 900
       Layers:
         - !Ref FinVaultSharedLayer
-        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
       Environment:
         Variables:
           NODE_PATH: /opt/nodejs
           TABLE: !Ref ReceiptLedgerV2TableNew
-          MODEL: "claude-haiku-4-5-20251001"
-          CONCURRENCY: "5"
           SCAN_LIMIT: "200"
           STOP_BUFFER_MS: "30000"
+          CATEGORIZATION_FUNCTION: !GetAtt CategorizationFunction.Arn
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ReceiptLedgerV2TableNew
-        - Statement:
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CategorizationFunction
       Events:
         DailyCuration:
           Type: ScheduleV2
@@ -1734,6 +1728,31 @@ Resources:
             ApiId: !Ref MetalsHttpApi
             Path: /research/deep-dive/result/{cacheKey}
             Method: GET
+
+  # ── Categorization — the one shared categorization service (Part 7 step 9) ──
+  # Direct-invoke only, no API Gateway route. Consolidates 3 independently
+  # drifted taxonomies (category-curator's batch job, spending-api's on-demand
+  # /spending/categorize route, and formerly receipt-extractor's inline call --
+  # that one is deliberately NOT cut over yet, see app.py's module docstring)
+  # into one StructuredCall service using category-curator's existing closed
+  # 10-category enum as the canonical taxonomy.
+  CategorizationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      CodeUri: ai-services/categorization/
+      Handler: app.handler
+      Timeout: 60
+      MemorySize: 512
+      Layers:
+        - !Ref FinVaultAgentCoreLayer
+        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
 
   # ── Advisor Worker — runs the actual Anthropic call asynchronously ───────────
   # Invoked as InvocationType: Event (fire-and-forget) by AdvisorApi.
