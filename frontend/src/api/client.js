@@ -115,15 +115,10 @@ export const queryKeys = {
   members:   (accountId) => ["accounts", accountId, "members"],
   invites:   (accountId) => ["accounts", accountId, "invites"],
 
-  // Wheel Scan
-  wheelHistory: ()         => ["wheel", "history"],
-  wheelLatest:  ()         => ["wheel", "latest"],
-  wheelScan:    (scanId)   => ["wheel", "scan", scanId],
-
-  // Paper Trading — intentionally namespaced "paperTrade" (not "trade")
-  // so a future liveTrade namespace stays clearly separate.
-  paperTradeStaged: ()         => ["paperTrade", "staged"],
-  paperTradeOrders: ()         => ["paperTrade", "orders"],
+  // Opportunity Engine — replaces the old Wheel Scan keys (page + backend
+  // both removed in the agentic rebuild)
+  opportunities:      ()       => ["opportunities"],
+  opportunityDetail:  (recId)  => ["opportunities", recId],
 
   // Budget & Goals
   budgetDefinition: (year, month) =>
