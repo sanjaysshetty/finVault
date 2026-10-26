@@ -8,6 +8,8 @@
  *   POST   /accounts                             — create a new account (caller becomes owner)
  *   PATCH  /accounts/:accountId                  — rename account (owner only)
  *   DELETE /accounts/:accountId                  — soft-delete account (owner only)
+ *   PATCH  /accounts/:accountId/investor-profile  — update risk/goal context for the agentic
+ *                                                  engine's Tower 1 (owner only)
  *
  *   GET    /accounts/:accountId/members          — list members (owner only)
  *   PATCH  /accounts/:accountId/members/:userId  — update member page roles (owner only)
@@ -50,6 +52,25 @@ const SPENDING_TABLE = process.env.SPENDING_TABLE            || "StoreReceiptLed
 const USER_POOL_ID   = process.env.USER_POOL_ID              || "";
 
 const cognito = new CognitoIdentityProviderClient({});
+
+// Investor profile — account-level risk/goal context consumed by Tower 1
+// (Opportunity Engine + Deep Dive). Promoted from AdvisorChat.jsx's old
+// client-only "Goals" localStorage panel so it's visible server-side.
+// Context only — never an optimization target the agentic engine sizes
+// positions against (see Part 5/6 plan, §6.2).
+const RISK_TOLERANCE_VALUES = ["Conservative", "Moderate", "Aggressive", "Very Aggressive"];
+const OBJECTIVE_VALUES = ["Capital Preservation", "Income Generation", "Balanced Growth", "Aggressive Growth", "Speculation"];
+const TIME_HORIZON_VALUES = ["< 1 year", "1–3 years", "3–5 years", "5–10 years", "10+ years"];
+
+const DEFAULT_INVESTOR_PROFILE = {
+  riskTolerance: "Moderate",
+  objective: "Balanced Growth",
+  timeHorizon: "5–10 years",
+  targetAnnualReturnPct: null,
+  netWorthGoal: null, // { amount, byYear }
+  monthlyContribution: null,
+  notes: "",
+};
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 
@@ -147,15 +168,16 @@ async function listAccounts(event) {
       }
 
       return {
-        accountId:   m.accountId,
-        accountName: meta.accountName || "",
-        isPrimary:   m.isPrimary || false,
-        role:        m.role,
-        pages:       m.pages,
-        status:      meta.status || "ACTIVE",
-        ownerId:     meta.ownerId,
+        accountId:       m.accountId,
+        accountName:     meta.accountName || "",
+        isPrimary:       m.isPrimary || false,
+        role:            m.role,
+        pages:           m.pages,
+        status:          meta.status || "ACTIVE",
+        ownerId:         meta.ownerId,
         ownerEmail,
-        createdAt:   meta.createdAt,
+        createdAt:       meta.createdAt,
+        investorProfile: meta.investorProfile || DEFAULT_INVESTOR_PROFILE,
       };
     })
   );
@@ -238,6 +260,80 @@ async function updateAccount(event) {
   });
 
   return json(200, { accountId, accountName });
+}
+
+/* ── PATCH /accounts/:accountId/investor-profile ──────────────── */
+
+async function updateInvestorProfile(event) {
+  const ctx = await resolveContext(event);
+  const accountId = pathParam(event, "accountId");
+  if (!accountId) return badRequest("accountId path parameter required");
+  requireOwner(ctx, accountId);
+
+  const body = parseBody(event);
+  if (!body) return badRequest("Request body required");
+
+  const riskTolerance = body.riskTolerance ?? DEFAULT_INVESTOR_PROFILE.riskTolerance;
+  const objective = body.objective ?? DEFAULT_INVESTOR_PROFILE.objective;
+  const timeHorizon = body.timeHorizon ?? DEFAULT_INVESTOR_PROFILE.timeHorizon;
+  if (!RISK_TOLERANCE_VALUES.includes(riskTolerance)) return badRequest(`riskTolerance must be one of: ${RISK_TOLERANCE_VALUES.join(", ")}`);
+  if (!OBJECTIVE_VALUES.includes(objective)) return badRequest(`objective must be one of: ${OBJECTIVE_VALUES.join(", ")}`);
+  if (!TIME_HORIZON_VALUES.includes(timeHorizon)) return badRequest(`timeHorizon must be one of: ${TIME_HORIZON_VALUES.join(", ")}`);
+
+  let targetAnnualReturnPct = null;
+  if (body.targetAnnualReturnPct != null && body.targetAnnualReturnPct !== "") {
+    targetAnnualReturnPct = Number(body.targetAnnualReturnPct);
+    if (!Number.isFinite(targetAnnualReturnPct) || targetAnnualReturnPct < 0 || targetAnnualReturnPct > 1000) {
+      return badRequest("targetAnnualReturnPct must be a number between 0 and 1000");
+    }
+  }
+
+  let netWorthGoal = null;
+  if (body.netWorthGoal != null) {
+    const amount = Number(body.netWorthGoal.amount);
+    const byYear = Number(body.netWorthGoal.byYear);
+    if (!Number.isFinite(amount) || amount <= 0) return badRequest("netWorthGoal.amount must be a positive number");
+    if (!Number.isFinite(byYear) || byYear < new Date().getFullYear() || byYear > new Date().getFullYear() + 100) {
+      return badRequest("netWorthGoal.byYear must be a plausible future year");
+    }
+    netWorthGoal = { amount, byYear };
+  }
+
+  let monthlyContribution = null;
+  if (body.monthlyContribution != null && body.monthlyContribution !== "") {
+    monthlyContribution = Number(body.monthlyContribution);
+    if (!Number.isFinite(monthlyContribution) || monthlyContribution < 0) {
+      return badRequest("monthlyContribution must be a non-negative number");
+    }
+  }
+
+  const notes = String(body.notes || "").trim().slice(0, 2000);
+
+  const investorProfile = {
+    riskTolerance,
+    objective,
+    timeHorizon,
+    targetAnnualReturnPct,
+    netWorthGoal,
+    monthlyContribution,
+    notes,
+  };
+
+  await doc.send(new UpdateCommand({
+    TableName: ACCOUNTS_TABLE,
+    Key: { accountId },
+    UpdateExpression: "SET investorProfile = :p, updatedAt = :now",
+    ExpressionAttributeValues: {
+      ":p": investorProfile,
+      ":now": new Date().toISOString(),
+    },
+    ConditionExpression: "attribute_exists(accountId)",
+  })).catch(e => {
+    if (e.name === "ConditionalCheckFailedException") throw Object.assign(new Error("Account not found"), { statusCode: 404 });
+    throw e;
+  });
+
+  return json(200, { accountId, investorProfile });
 }
 
 /* ── Bulk-delete helpers (used by deleteAccount) ─────────────── */
@@ -738,6 +834,11 @@ exports.handler = async function(event) {
     if (/^\/accounts\/[^/]+\/invites$/.test(path)) {
       if (method === "GET")  return await listInvites(event);
       if (method === "POST") return await createInvite(event);
+    }
+
+    // /accounts/:accountId/investor-profile
+    if (/^\/accounts\/[^/]+\/investor-profile$/.test(path)) {
+      if (method === "PATCH") return await updateInvestorProfile(event);
     }
 
     // /accounts/:accountId
