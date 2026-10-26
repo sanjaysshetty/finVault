@@ -1,3 +1,6 @@
 # finvault_agent_core dependencies.
 # boto3 is already provided by the Lambda Python runtime — not listed here.
-# The anthropic SDK and other harness dependencies land here in Part 4.
+# mcp>=2.0.0 is required for robinhood_mcp.py's direct Tower-1 client
+# (streamable_http_client/ClientSession — verified against the installed
+# package, not memorized). Pulls in httpx2 transitively.
+mcp>=2.0.0
