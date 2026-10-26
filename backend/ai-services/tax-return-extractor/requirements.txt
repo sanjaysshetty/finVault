@@ -1,0 +1,3 @@
+# tax-return-extractor dependencies.
+# boto3, anthropic, and Pillow are provided via the finvault-agent-core
+# Lambda layer -- this function has no direct dependencies of its own.
