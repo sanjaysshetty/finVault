@@ -898,6 +898,13 @@ Resources:
     Metadata:
       BuildMethod: python3.11
 
+  # No automatic trigger (manual invoke only) -- its DailyCuration ScheduleV2
+  # was removed 2026-10-26 after an unattended run of a different AI service
+  # (Opportunity Engine) burned through the Anthropic account's credit
+  # balance in a single invocation. No scheduled runs for any AI-calling
+  # Lambda (this one invokes CategorizationFunction) until cost guardrails
+  # are in place and verified. Re-add the schedule deliberately, not as a
+  # side effect of an unrelated template change.
   CurateBatchFunction:
     Type: AWS::Serverless::Function
     DeletionPolicy: Retain
@@ -922,12 +929,6 @@ Resources:
             TableName: !Ref ReceiptLedgerV2TableNew
         - LambdaInvokePolicy:
             FunctionName: !Ref CategorizationFunction
-      Events:
-        DailyCuration:
-          Type: ScheduleV2
-          Properties:
-            ScheduleExpression: "cron(0 5 * * ? *)"
-            ScheduleExpressionTimezone: "America/Chicago"
 
   PostConfirmationFunction:
     Type: AWS::Serverless::Function
@@ -1396,10 +1397,17 @@ Resources:
   # Pipeline: deterministic prefilter (relocated from wheel-scan/tools.py,
   # strategy-agnostic) -> Tower 1 (portfolio/risk context) -> Tower 2
   # (AgentLoop ranking pass per shortlisted candidate, concurrent) ->
-  # AgentRecommendationsTable. Schedule starts DISABLED, same cautious
-  # posture as WheelScanFunction's own schedule, until verified end-to-end
-  # against real data (Robinhood MCP in particular needs its own OAuth
-  # grant set up before Tower 2's market-data tools are live).
+  # AgentRecommendationsTable.
+  #
+  # No automatic trigger -- its WeeklyOpportunityScan ScheduleV2 was removed
+  # 2026-10-26 after a single manually-triggered run burned through the
+  # Anthropic account's entire credit balance (25 concurrent Tower 2 passes,
+  # each up to its 200k-token-per-run ceiling, web_search-heavy since
+  # Robinhood MCP wasn't authorized yet). No scheduled runs for any
+  # AI-calling Lambda until a scan-level cost cap and a much lower
+  # per-candidate token ceiling are in place and verified. Re-add the
+  # schedule deliberately, not as a side effect of an unrelated template
+  # change.
   OpportunityEngineFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1431,14 +1439,6 @@ Resources:
               Resource:
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/mcp-access-token"
-      Events:
-        WeeklyOpportunityScan:
-          Type: ScheduleV2
-          Properties:
-            ScheduleExpression: "cron(30 6 ? * SAT *)"
-            ScheduleExpressionTimezone: "America/New_York"
-            Description: "Weekly Opportunity Engine scan at 6:30am ET, Saturdays"
-            State: DISABLED
 
   # ── Opportunity Engine Read — Node.js Lambda (serves recommendations, triggers scans) ──
   OpportunityEngineReadFunction:
