@@ -1,10 +1,9 @@
 // curate-incremental.mjs
-import Anthropic from "@anthropic-ai/sdk";
 import {
   ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import pLimit from "p-limit";
+import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { createRequire } from "module";
 
 // Node's native ESM `import` cannot resolve Lambda Layer content via
@@ -12,13 +11,18 @@ import { createRequire } from "module";
 // NODE_PATH-aware resolution from this ESM file. Confirmed empirically:
 // without this, every invocation fails with ERR_MODULE_NOT_FOUND.
 const require = createRequire(import.meta.url);
-const { getSecret } = require("finvault-shared/getSecret");
 const { doc: ddb } = require("finvault-shared/db/client");
 
 /**
  * Incremental curation Lambda:
  * - Fetches ONLY items that have needsCuration = true (via Scan + FilterExpression)
- * - Classifies category using Anthropic Claude
+ * - Classifies category via the consolidated CategorizationFunction (Python,
+ *   StructuredCall) — NOT an inline Claude call anymore. This Lambda used to
+ *   run its own independent taxonomy; it's now one of two callers of the
+ *   single shared categorization service (the other being spending-api's
+ *   on-demand /spending/categorize route), closing the "needsCuration churn"
+ *   where items got reclassified against 2-3 different, drifted taxonomies
+ *   before settling on whichever ran last.
  * - Updates item with category + sets needsCuration=false
  * - Uses ConditionExpression to be idempotent and race-safe
  */
@@ -26,13 +30,11 @@ const { doc: ddb } = require("finvault-shared/db/client");
 const REGION =
   process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
 const TABLE = process.env.TABLE || "StoreReceiptLedger";
+const CATEGORIZATION_FUNCTION = process.env.CATEGORIZATION_FUNCTION || "";
 
-const MODEL = process.env.MODEL || "claude-haiku-4-5-20251001";
-
-// Concurrency (keep modest to avoid DynamoDB throttling + API bursts)
-const CONCURRENCY = Number(process.env.CONCURRENCY || "5");
-
-// Scan page size
+// Scan page size — also the batch size handed to the categorization
+// service in one invoke; it internally sub-chunks into its own smaller
+// Claude-call batches, so this Lambda doesn't need to chunk itself.
 const SCAN_LIMIT = Number(process.env.SCAN_LIMIT || "200");
 
 // Optional: cap number of processed items per run (useful while testing)
@@ -41,31 +43,7 @@ const MAX_ITEMS = process.env.MAX_ITEMS ? Number(process.env.MAX_ITEMS) : null;
 // Stop early before timeout (ms). Default: 30s buffer.
 const STOP_BUFFER_MS = Number(process.env.STOP_BUFFER_MS || "30000");
 
-const CATEGORIES = [
-  "Groceries",
-  "Dining & Takeout",
-  "Household Supplies",
-  "Personal Care",
-  "Clothing & Footwear",
-  "Home & Furniture",
-  "Health & Pharmacy",
-  "Electronics & Gadgets",
-  "Transportation & Auto",
-  "Miscellaneous / Other",
-];
-
-let clientPromise;
-function getClient() {
-  if (!clientPromise) {
-    clientPromise = getSecret("/finvault/anthropic/api-key").then(
-      (apiKey) => new Anthropic({ apiKey })
-    );
-    clientPromise.catch(() => { clientPromise = undefined; });
-  }
-  return clientPromise;
-}
-
-const limit = pLimit(CONCURRENCY);
+const lambda = new LambdaClient({});
 
 function nowIso() {
   return new Date().toISOString();
@@ -79,9 +57,6 @@ function pickField(obj, keys) {
 }
 
 function normalizeItemForModel(item) {
-  const pk = item.pk;
-  const sk = item.sk;
-
   const store =
     pickField(item, ["storeName", "merchant", "merchantName", "retailer", "vendor"]) || "";
 
@@ -92,77 +67,30 @@ function normalizeItemForModel(item) {
     pickField(item, ["productCode", "upc", "sku", "itemCode", "plu"]) || "";
 
   return {
-    pk,
-    sk,
     storeName: String(store).slice(0, 80),
     productDescription: String(desc).slice(0, 200),
     productCode: String(code).slice(0, 60),
   };
 }
 
-function buildInstructions() {
-  return `
-You are categorizing store receipt LINE ITEMS into exactly one of the following categories:
-
-${CATEGORIES.map((c, i) => `${i + 1}. ${c}`).join("\n")}
-
-Rules:
-- Choose exactly ONE category from the list (must match spelling exactly).
-- Use productDescription primarily. Use storeName and productCode only as tie-breakers.
-- If description is vague (e.g., "item", "misc", "fee") choose "Miscellaneous / Other".
-- Food you bring home -> "Groceries".
-- Prepared food/drinks consumed outside home -> "Dining & Takeout".
-- Paper goods, detergents, trash bags, cleaning -> "Household Supplies".
-- Shampoo, toothpaste, deodorant, cosmetics, vitamins -> "Personal Care".
-- Apparel/shoes -> "Clothing & Footwear".
-- Durable home goods, cookware, bins, small appliances -> "Home & Furniture".
-- Prescriptions, OTC meds, first aid -> "Health & Pharmacy".
-- Chargers, cables, devices, batteries -> "Electronics & Gadgets".
-- Gas, motor oil, car wash, accessories -> "Transportation & Auto".
-
-Output format:
-Return ONLY valid JSON with this schema:
-{
-  "category": "<one of the 10 categories>",
-  "confidence": 0-1,
-  "reason": "<short, 1 sentence>"
-}
-`.trim();
-}
-
-async function classifyOne(item) {
-  const payload = normalizeItemForModel(item);
-
-  const client = await getClient();
-  const res = await client.messages.create({
-    model: MODEL,
-    max_tokens: 256,
-    system: buildInstructions(),
-    messages: [{ role: "user", content: JSON.stringify(payload) }],
-    temperature: 0.2,
-  });
-
-  const text = res.content[0].text;
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    // Recover minimal JSON if model outputs extra text
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error(`Non-JSON model output: ${text.slice(0, 200)}`);
-    json = JSON.parse(match[0]);
+/** One RequestResponse invoke of the shared categorization service.
+ * Returns a list of {category, confidence} in the same order as `items`. */
+async function categorizeBatch(items) {
+  if (!CATEGORIZATION_FUNCTION) {
+    throw new Error("CATEGORIZATION_FUNCTION env var not configured");
   }
-
-  const category = json.category;
-  if (!CATEGORIES.includes(category)) {
-    throw new Error(`Invalid category '${category}' pk=${item.pk} sk=${item.sk}`);
+  const resp = await lambda.send(
+    new InvokeCommand({
+      FunctionName: CATEGORIZATION_FUNCTION,
+      InvocationType: "RequestResponse",
+      Payload: Buffer.from(JSON.stringify({ items: items.map(normalizeItemForModel) })),
+    })
+  );
+  const payload = JSON.parse(Buffer.from(resp.Payload).toString("utf-8"));
+  if (!payload.ok) {
+    throw new Error(`Categorization service failed: ${payload.error}`);
   }
-
-  return {
-    category,
-    confidence: json.confidence ?? null,
-    reason: json.reason ?? null,
-  };
+  return payload.categorizations;
 }
 
 /**
@@ -235,8 +163,7 @@ export const handler = async (event, context) => {
   console.log("Incremental curation batch starting", {
     REGION,
     TABLE,
-    MODEL,
-    CONCURRENCY,
+    CATEGORIZATION_FUNCTION,
     SCAN_LIMIT,
     MAX_ITEMS,
     requestId: context?.awsRequestId,
@@ -264,42 +191,44 @@ export const handler = async (event, context) => {
       break;
     }
 
-    const tasks = items.map((it) =>
-      limit(async () => {
-        if (!it.pk || !it.sk) {
-          skipped += 1;
-          return;
-        }
+    const validItems = items.filter((it) => it.pk && it.sk && it.needsCuration === true);
+    skipped += items.length - validItems.length;
 
-        // Since we scanned w/ filter, this is usually true, but keep it safe
-        if (it.needsCuration !== true) {
-          skipped += 1;
-          return;
-        }
+    if (validItems.length > 0) {
+      try {
+        processed += validItems.length;
+        const categorizations = await categorizeBatch(validItems);
 
-        try {
-          processed += 1;
-
-          const { category } = await classifyOne(it);
-
-          // Conditional update ensures we only update if still needsCuration=true
-          await updateItemIfStillNeedsCuration({ pk: it.pk, sk: it.sk }, category);
-
-          updated += 1;
-        } catch (e) {
-          failed += 1;
-          const msg = String(e?.message || e);
-          // Conditional check fails are okay (means it got curated elsewhere)
-          if (msg.includes("ConditionalCheckFailed")) {
-            skipped += 1;
-            return;
+        for (let i = 0; i < validItems.length; i++) {
+          const it = validItems[i];
+          const { category } = categorizations[i] || {};
+          if (!category) {
+            failed += 1;
+            console.error(`No category returned for pk=${it.pk} sk=${it.sk}`);
+            continue;
           }
-          console.error(`FAILED pk=${it.pk} sk=${it.sk} :: ${msg.slice(0, 300)}`);
+          try {
+            await updateItemIfStillNeedsCuration({ pk: it.pk, sk: it.sk }, category);
+            updated += 1;
+          } catch (e) {
+            const msg = String(e?.message || e);
+            // Conditional check fails are okay (means it got curated elsewhere)
+            if (msg.includes("ConditionalCheckFailed")) {
+              skipped += 1;
+            } else {
+              failed += 1;
+              console.error(`FAILED update pk=${it.pk} sk=${it.sk} :: ${msg.slice(0, 300)}`);
+            }
+          }
         }
-      })
-    );
-
-    await Promise.all(tasks);
+      } catch (e) {
+        // Whole-batch failure (e.g. categorization service down) -- don't
+        // update anything from this page; these items stay needsCuration=true
+        // and get retried on the next scheduled run.
+        failed += validItems.length;
+        console.error(`Batch categorization failed: ${String(e?.message || e).slice(0, 300)}`);
+      }
+    }
 
     console.log("Progress", { scanned, processed, updated, skipped, failed });
 

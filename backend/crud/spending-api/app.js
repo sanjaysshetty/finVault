@@ -43,7 +43,10 @@ function parseBody(event) {
 }
 
 const { resolveContext, assertRead, assertWrite } = require("finvault-shared/resolveContext");
-const { getSecret } = require("finvault-shared/getSecret");
+const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
+
+const lambda = new LambdaClient({});
+const CATEGORIZATION_FUNCTION = process.env.CATEGORIZATION_FUNCTION || "";
 
 async function resolveCtxCached(event) {
   if (!event._ctx) event._ctx = await resolveContext(event);
@@ -805,64 +808,38 @@ async function deleteReceipt(event) {
 
 /* -------------------- Categorize (LLM) -------------------- */
 
+// Delegates to the consolidated CategorizationFunction (Python,
+// StructuredCall) instead of making an inline Claude call -- this route
+// used to run its own independent taxonomy/free-text parsing; it's now one
+// of two callers of the single shared categorization service (the other
+// being category-curator's daily batch job), using the same closed
+// 10-category enum so this route's results no longer drift from curator's.
 async function categorizeDescriptions(event) {
   await assertWrite(await resolveCtxCached(event), "receiptsLedger");
   const body = parseBody(event);
   const descriptions = Array.isArray(body.descriptions) ? body.descriptions : [];
   if (!descriptions.length) return json(200, { categories: [] });
 
-  const apiKey = await getSecret("/finvault/anthropic/api-key");
-
-  const model = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
-  const AnthropicModule = require("@anthropic-ai/sdk");
-  const AnthropicClass = AnthropicModule.default ?? AnthropicModule;
-  const client = new AnthropicClass({ apiKey });
-
-  const systemPrompt =
-    `You assign spending categories to store names or transaction descriptions.\n` +
-    `Use broad, meaningful categories — aim for roughly 10 across all your responses, give or take a few.\n` +
-    `Avoid overly granular or one-off labels. Good examples: Groceries, Produce, Meat & Seafood, Dairy & Eggs, ` +
-    `Beverages, Household, Personal Care, Health & Medicine, Dining & Restaurant, Electronics, Clothing, ` +
-    `Fuel & Auto, Other. You are not limited to this list — reason from the store type.\n\n` +
-    `Category reasoning guidance:\n` +
-    `- Grocery chains (H-E-B, Kroger, Costco, Walmart, Aldi, Whole Foods, Trader Joe's) → Groceries\n` +
-    `- Restaurants, fast food, cafés, food delivery, bakeries → Dining & Restaurant\n` +
-    `- Pharmacies (CVS, Walgreens), clinics, dental → Health & Medicine\n` +
-    `- Salons, spas, beauty supply (Ulta, Sally Beauty) → Personal Care\n` +
-    `- Liquor stores, coffee shops, juice bars → Beverages\n` +
-    `- Home improvement (Home Depot, Lowe's), cleaning supply stores → Household\n` +
-    `- Gas stations, auto shops → Fuel & Auto\n` +
-    `- Clothing retailers → Clothing\n` +
-    `- Electronics retailers → Electronics\n` +
-    `- Streaming, utilities, insurance, anything else → Other\n` +
-    `\nReturn ONLY a JSON array of category strings in the same order as the input. No explanation.`;
-
-  const userMsg = `Categorize each of these descriptions:\n${descriptions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`;
-
-  const response = await client.messages.create({
-    model,
-    max_tokens: 1024,
-    system: systemPrompt,
-    messages: [{ role: "user", content: userMsg }],
-  });
-
-  const text = response.content.find((b) => b.type === "text")?.text || "[]";
-  let categories;
-  try {
-    const match = text.match(/\[[\s\S]*\]/);
-    categories = JSON.parse(match ? match[0] : text);
-  } catch {
-    categories = text
-      .split("\n")
-      .map((l) => l.replace(/^\d+\.\s*/, "").replace(/^["']|["']$/g, "").trim())
-      .filter(Boolean);
+  if (!CATEGORIZATION_FUNCTION) {
+    throw new Error("Server misconfigured: CATEGORIZATION_FUNCTION is not set");
   }
 
-  // Ensure same length as input; only fall back to "Other" if blank
-  const result = descriptions.map((_, i) => {
-    const cat = String(categories[i] || "").trim();
-    return cat || "Other";
-  });
+  const items = descriptions.map((d) => ({ storeName: String(d || "") }));
+  const resp = await lambda.send(
+    new InvokeCommand({
+      FunctionName: CATEGORIZATION_FUNCTION,
+      InvocationType: "RequestResponse",
+      Payload: Buffer.from(JSON.stringify({ items })),
+    })
+  );
+  const payload = JSON.parse(Buffer.from(resp.Payload).toString("utf-8"));
+  if (!payload.ok) {
+    throw new Error(`Categorization service failed: ${payload.error}`);
+  }
+
+  // Preserve this route's existing response shape (array of plain category
+  // strings, same order/length as input) so the frontend caller is unaffected.
+  const result = payload.categorizations.map((c) => c?.category || "Miscellaneous / Other");
 
   return json(200, { categories: result });
 }
