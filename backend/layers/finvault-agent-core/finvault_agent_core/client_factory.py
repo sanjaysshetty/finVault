@@ -68,6 +68,12 @@ def claude_create_with_retry(client, use_beta=False, **kwargs):
     deliberate inter-stage sleep pattern on an unattended weekly batch job —
     it extends, not replaces, the SDK's own built-in retry (max_retries on
     the client handles 408/409/5xx transparently already).
+
+    Cost accounting note: a rejected 429/529 attempt produces no response
+    object and is not billed by Anthropic, so AgentLoop's cost tracking
+    (pricing.estimate_cost_from_response) only ever runs against the one
+    attempt that actually succeeded here -- no separate handling needed
+    for retries.
     """
     create_fn = client.beta.messages.create if use_beta else client.messages.create
     for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):

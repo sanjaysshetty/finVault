@@ -105,6 +105,14 @@ def fetch_stock_fundamentals(ticker):
         industry = info.get("industry") or "Unknown"
         name = info.get("longName") or ticker
 
+        # Momentum/liquidity signals -- same yfinance `info` dict, zero
+        # extra API calls. Added to make the ranking score correlate more
+        # directly with "likely to succeed as a near-term trade idea,"
+        # not just "financially healthy" (see score_stock_fundamentals).
+        week52_high = info.get("fiftyTwoWeekHigh")
+        week52_low = info.get("fiftyTwoWeekLow")
+        avg_volume = info.get("averageVolume") or 0
+
         return {
             "ticker": ticker,
             "name": name,
@@ -120,6 +128,9 @@ def fetch_stock_fundamentals(ticker):
             "roe": round(roe, 1),
             "eps_growth": round(eps_growth, 1),
             "pe_ratio": round(float(pe_ratio), 1) if pe_ratio else None,
+            "week52_high": round(float(week52_high), 2) if week52_high else None,
+            "week52_low": round(float(week52_low), 2) if week52_low else None,
+            "avg_volume": int(avg_volume),
         }
     except Exception as e:
         logger.debug(f"Failed to fetch {ticker}: {e}")
@@ -156,51 +167,95 @@ def apply_hard_filters(stocks):
 
 def score_stock_fundamentals(stock):
     """
-    Score a stock 0-100 based on fundamental factors — strategy-agnostic
-    (works identically whether the eventual candidate becomes a long
-    equity idea, a short, or an options structure). Weights:
-      Revenue growth 20%, Gross margin 20%, FCF quality 15%,
-      Debt/Equity 15%, ROE 15%, EPS growth 15%.
+    Score a stock 0-100 — strategy-agnostic (works identically whether
+    the eventual candidate becomes a long equity idea, a short, or an
+    options structure). Weights:
+      Revenue growth 15%, Gross margin 15%, FCF quality 10%,
+      Debt/Equity 10%, ROE 10%, EPS growth 10%,
+      Momentum/52-week range position 15%, Liquidity 15%.
+
+    The last two are new: pure fundamentals say "financially healthy,"
+    not "worth deep-diving right now" -- these push the score toward
+    candidates that are actually tradeable near-term (confirmed uptrend,
+    not a fresh 52-week low or an already-overextended blow-off top) and
+    liquid enough to trade without excess slippage. Both come from the
+    same yfinance `info` dict already fetched, zero extra API calls, so
+    there's no cost reason to keep the rubric coarse.
     """
     score = 0
 
     rg = stock["rev_growth"]
-    if rg >= 20: score += 20
-    elif rg >= 15: score += 16
-    elif rg >= 10: score += 12
-    elif rg >= 5: score += 8
+    if rg >= 20: score += 15
+    elif rg >= 15: score += 12
+    elif rg >= 10: score += 9
+    elif rg >= 5: score += 6
 
     gm = stock["gross_margin"]
-    if gm >= 60: score += 20
-    elif gm >= 50: score += 16
-    elif gm >= 40: score += 12
-    elif gm >= 30: score += 8
+    if gm >= 60: score += 15
+    elif gm >= 50: score += 12
+    elif gm >= 40: score += 9
+    elif gm >= 30: score += 6
 
     fcf_b = stock["fcf"] / 1e9
-    if fcf_b >= 5: score += 15
-    elif fcf_b >= 2: score += 12
-    elif fcf_b >= 0.5: score += 9
-    elif fcf_b > 0: score += 5
+    if fcf_b >= 5: score += 10
+    elif fcf_b >= 2: score += 8
+    elif fcf_b >= 0.5: score += 6
+    elif fcf_b > 0: score += 3
 
     de = stock["de_ratio"]
-    if de <= 0.3: score += 15
-    elif de <= 0.7: score += 12
-    elif de <= 1.0: score += 9
-    elif de <= 1.5: score += 6
-    elif de <= 2.0: score += 3
+    if de <= 0.3: score += 10
+    elif de <= 0.7: score += 8
+    elif de <= 1.0: score += 6
+    elif de <= 1.5: score += 4
+    elif de <= 2.0: score += 2
 
     roe = stock["roe"]
-    if roe >= 30: score += 15
-    elif roe >= 20: score += 12
-    elif roe >= 15: score += 9
-    elif roe >= 10: score += 6
-    else: score += 3
+    if roe >= 30: score += 10
+    elif roe >= 20: score += 8
+    elif roe >= 15: score += 6
+    elif roe >= 10: score += 4
+    else: score += 2
 
     eg = stock.get("eps_growth", 0) or 0
-    if eg >= 20: score += 15
-    elif eg >= 15: score += 12
-    elif eg >= 10: score += 9
-    elif eg >= 5: score += 6
-    else: score += 3
+    if eg >= 20: score += 10
+    elif eg >= 15: score += 8
+    elif eg >= 10: score += 6
+    elif eg >= 5: score += 4
+    else: score += 2
+
+    # Momentum / 52-week range position: reward a confirmed uptrend
+    # that isn't already overextended into blow-off territory. Absent
+    # (no 52-week high/low available) scores neither up nor down.
+    week52_high = stock.get("week52_high")
+    week52_low = stock.get("week52_low")
+    if week52_high and week52_low and week52_high > week52_low:
+        range_pos = (stock["price"] - week52_low) / (week52_high - week52_low)
+        if 0.55 <= range_pos <= 0.85: score += 15
+        elif 0.40 <= range_pos < 0.55 or 0.85 < range_pos <= 0.95: score += 10
+        elif 0.25 <= range_pos < 0.40: score += 5
+
+    # Liquidity: average dollar volume/day -- tighter spreads, lower
+    # slippage/gap risk, easier exits for whatever strategy gets built
+    # on top.
+    avg_dollar_volume_m = (stock.get("avg_volume") or 0) * stock["price"] / 1e6
+    if avg_dollar_volume_m >= 50: score += 15
+    elif avg_dollar_volume_m >= 20: score += 12
+    elif avg_dollar_volume_m >= 5: score += 8
+    elif avg_dollar_volume_m >= 1: score += 4
 
     return min(score, 100)
+
+
+def summarize_fundamentals(stock):
+    """The ONLY form candidate fundamentals are allowed to enter a
+    Tower 2 prompt in -- already-compact data, formatted consistently
+    instead of built inline per call site. Reused by Tower 2's prompt
+    construction and by the lightweight note stored on screened-only
+    (not deep-dived) candidates."""
+    return (
+        f"{stock['ticker']} ({stock['name']}, {stock['sector']}): "
+        f"price ${stock['price']}, mkt cap ${stock['market_cap_b']}B, "
+        f"rev growth {stock['rev_growth']}%, gross margin {stock['gross_margin']}%, "
+        f"D/E {stock['de_ratio']}, ROE {stock['roe']}%, EPS growth {stock['eps_growth']}%, "
+        f"fundamental score {stock.get('_fund_score')}/100"
+    )

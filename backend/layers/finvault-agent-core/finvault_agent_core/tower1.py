@@ -184,3 +184,62 @@ def build_tower1_context(robinhood_client, assets_table, accounts_table, account
         "manual_holdings": fetch_portfolio(assets_table, account_id),
         "investor_profile": fetch_investor_profile(accounts_table, account_id),
     }
+
+
+def summarize_tower1_context(context: dict) -> str:
+    """The ONLY form Tower 1 context is allowed to enter a prompt in.
+
+    Before this, callers interpolated the full nested dict directly
+    (f"{tower1_context}") -- token cost grew with portfolio size and was
+    repeated identically for every one of 25 candidates in a scan, a real
+    contributor to the incident this function exists to prevent. Fixed-
+    top-N truncation below keeps this block's size roughly constant
+    regardless of how large the underlying portfolio is -- that's the
+    actual token-growth fix, not just shorter phrasing.
+
+    Caveat: Robinhood's OAuth grant for finVault's backend isn't set up
+    yet (see fetch_robinhood_context's docstring), so the exact field
+    names inside get_portfolio()/get_equity_positions()/get_realized_pnl()
+    have never been exercised against real data. This function reads
+    them defensively (.get() chains, safe fallbacks) and should be
+    revisited once real Robinhood data actually flows through it.
+    """
+    context = context or {}
+    mh = context.get("manual_holdings") or {}
+    rh = context.get("robinhood") or {}
+    ip = context.get("investor_profile") or {}
+
+    stocks = sorted(mh.get("stocks") or [], key=lambda s: (s.get("qty") or 0) * (s.get("avg_cost") or 0), reverse=True)
+    top_stocks = ", ".join(
+        f"{s.get('ticker')} ${(s.get('qty') or 0) * (s.get('avg_cost') or 0):,.0f} "
+        f"({s.get('qty')}sh@${s.get('avg_cost')})"
+        for s in stocks[:5]
+    )
+    manual_line = (
+        f"Manual holdings: ${mh.get('total_invested', 0):,.0f} invested — "
+        f"{len(mh.get('stocks') or [])} stocks, {len(mh.get('options') or [])} options, "
+        f"{len(mh.get('crypto') or [])} crypto, {len(mh.get('bullion') or [])} bullion, "
+        f"{len(mh.get('fixed_income') or [])} fixed-income. Top positions: {top_stocks or 'none'}."
+    )
+
+    if not rh.get("available"):
+        rh_line = "Robinhood: not connected."
+    else:
+        portfolio = rh.get("portfolio") or {}
+        equity_positions = rh.get("equity_positions") or []
+        realized_pnl = rh.get("realized_pnl") or {}
+        top_equity = ", ".join(
+            f"{p.get('symbol')} ${(p.get('market_value') or 0):,.0f}" for p in equity_positions[:3]
+        )
+        rh_line = (
+            f"Robinhood: cash ${(portfolio.get('cash') or 0):,.0f}, "
+            f"{len(equity_positions)} equity positions (top: {top_equity or 'none'}), "
+            f"{len(rh.get('option_positions') or [])} option positions, "
+            f"realized P&L ${(realized_pnl.get('total') or 0):,.0f}."
+        )
+
+    profile_line = (
+        f"Investor profile: risk={ip.get('riskTolerance')}, objective={ip.get('objective')}, "
+        f"horizon={ip.get('timeHorizon')}, target return={ip.get('targetAnnualReturnPct')}%/yr."
+    )
+    return "\n".join([manual_line, rh_line, profile_line])

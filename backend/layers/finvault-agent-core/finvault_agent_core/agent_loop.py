@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from .client_factory import MCP_CONNECTOR_BETA, MODELS, claude_create_with_retry, get_anthropic_client
+from .pricing import estimate_cost_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +65,14 @@ class ToolSpec:
 @dataclass
 class AgentResult:
     status: str  # "done" | "max_iterations_exceeded" | "deadline_exceeded" | "budget_exceeded"
-    #              | "refusal" | "max_tokens" | "model_context_window_exceeded" | "unknown_stop_reason"
+    #              | "cost_exceeded" | "refusal" | "max_tokens"
+    #              | "model_context_window_exceeded" | "unknown_stop_reason"
     messages: list
     iterations: int
     final_response: Optional[Any] = None
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cost_usd: float = 0.0
 
     @property
     def final_text(self) -> Optional[str]:
@@ -85,15 +88,33 @@ class AgentLoop:
         self,
         system_prompt: str,
         tools: list,
+        *,
+        max_cost_usd: Optional[float],
         model: Optional[str] = None,
         client=None,
         max_iterations: int = 10,
         deadline_seconds: float = 240.0,
         max_total_tokens: Optional[int] = 200_000,
+        cost_safety_margin: float = 0.85,
         max_tokens: int = 4096,
         mcp_servers: Optional[list] = None,
         server_tools: Optional[list] = None,
     ):
+        """max_cost_usd is required (pass None explicitly to opt out of
+        dollar-cost enforcement entirely) -- deliberately no default.
+        The incident this guards against was a call site silently
+        inheriting a non-protective default; a required param makes
+        "what's this run's dollar ceiling?" grep-able and impossible to
+        skip by accident.
+
+        cost_safety_margin (default 0.85): the loop refuses to start a
+        new paid call once cumulative cost reaches this fraction of
+        max_cost_usd, not 100% of it. A completed API call can't be
+        un-billed, so this is what actually bounds worst-case overshoot
+        from one unexpectedly large single turn -- "hard guardrail" in
+        practice means "never knowingly start another paid call past
+        this point," not a mathematical guarantee to the penny.
+        """
         self.system_prompt = system_prompt
         self.tools = {t.name: t for t in tools}
         self.model = model or MODELS["DEFAULT"]
@@ -101,6 +122,8 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.deadline_seconds = deadline_seconds
         self.max_total_tokens = max_total_tokens
+        self.max_cost_usd = max_cost_usd
+        self.cost_safety_margin = cost_safety_margin
         self.max_tokens = max_tokens
         self.mcp_servers = mcp_servers
         # Server-side tools (e.g. {"type": "web_search_20260209", "name":
@@ -121,12 +144,21 @@ class AgentLoop:
         tool_schemas = [t.to_anthropic_schema() for t in self.tools.values()] + list(self.server_tools)
         total_input_tokens = 0
         total_output_tokens = 0
+        total_cost_usd = 0.0
 
         for iteration in range(1, self.max_iterations + 1):
             if time.monotonic() > deadline:
-                return AgentResult("deadline_exceeded", messages, iteration - 1, None, total_input_tokens, total_output_tokens)
+                return AgentResult("deadline_exceeded", messages, iteration - 1, None,
+                                    total_input_tokens, total_output_tokens, total_cost_usd)
             if self.max_total_tokens is not None and (total_input_tokens + total_output_tokens) >= self.max_total_tokens:
-                return AgentResult("budget_exceeded", messages, iteration - 1, None, total_input_tokens, total_output_tokens)
+                return AgentResult("budget_exceeded", messages, iteration - 1, None,
+                                    total_input_tokens, total_output_tokens, total_cost_usd)
+            # Pre-call dollar guard -- checked BEFORE every new paid call,
+            # never after. See cost_safety_margin's docstring above for
+            # why this is the achievable form of "hard."
+            if self.max_cost_usd is not None and total_cost_usd >= self.max_cost_usd * self.cost_safety_margin:
+                return AgentResult("cost_exceeded", messages, iteration - 1, None,
+                                    total_input_tokens, total_output_tokens, total_cost_usd)
 
             kwargs = dict(
                 model=self.model,
@@ -145,14 +177,21 @@ class AgentLoop:
             if response.usage:
                 total_input_tokens += response.usage.input_tokens or 0
                 total_output_tokens += response.usage.output_tokens or 0
+            # Rejected requests (429/529, handled entirely inside
+            # claude_create_with_retry's retry wheel) produce no response
+            # object and are never billed by Anthropic -- this only ever
+            # runs against the one attempt that actually succeeded and
+            # was billed, so retries need no separate cost accounting.
+            total_cost_usd += estimate_cost_from_response(self.model, response)
 
-            self._log_step(request_id, iteration, messages, response)
+            self._log_step(request_id, iteration, messages, response, total_cost_usd)
 
             stop_reason = response.stop_reason
 
             if stop_reason == "end_turn":
                 messages.append({"role": "assistant", "content": response.content})
-                return AgentResult("done", messages, iteration, response, total_input_tokens, total_output_tokens)
+                return AgentResult("done", messages, iteration, response,
+                                    total_input_tokens, total_output_tokens, total_cost_usd)
 
             if stop_reason == "pause_turn":
                 # Server-side tool (e.g. web_search) paused mid-turn — resend
@@ -170,13 +209,16 @@ class AgentLoop:
                 continue
 
             if stop_reason in _TERMINAL_STOP_REASONS:
-                return AgentResult(stop_reason, messages, iteration, response, total_input_tokens, total_output_tokens)
+                return AgentResult(stop_reason, messages, iteration, response,
+                                    total_input_tokens, total_output_tokens, total_cost_usd)
 
             # Unrecognized/None stop_reason — stop and surface distinctly,
             # never treat an unexpected value as success.
-            return AgentResult("unknown_stop_reason", messages, iteration, response, total_input_tokens, total_output_tokens)
+            return AgentResult("unknown_stop_reason", messages, iteration, response,
+                                total_input_tokens, total_output_tokens, total_cost_usd)
 
-        return AgentResult("max_iterations_exceeded", messages, self.max_iterations, None, total_input_tokens, total_output_tokens)
+        return AgentResult("max_iterations_exceeded", messages, self.max_iterations, None,
+                            total_input_tokens, total_output_tokens, total_cost_usd)
 
     def _execute_tool(self, block) -> dict:
         tool = self.tools.get(block.name)
@@ -199,7 +241,7 @@ class AgentLoop:
                 "is_error": True,
             }
 
-    def _log_step(self, request_id, iteration, messages, response):
+    def _log_step(self, request_id, iteration, messages, response, total_cost_usd):
         logger.info(json.dumps({
             "request_id": request_id,
             "iteration": iteration,
@@ -212,4 +254,5 @@ class AgentLoop:
                 "input_tokens": response.usage.input_tokens if response.usage else None,
                 "output_tokens": response.usage.output_tokens if response.usage else None,
             },
+            "total_cost_usd_running": round(total_cost_usd, 6),
         }, default=str))

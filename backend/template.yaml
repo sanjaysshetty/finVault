@@ -1416,6 +1416,15 @@ Resources:
       Handler: handler.handler
       Timeout: 900
       MemorySize: 2048
+      # Forced to 0 after the 2026-10-26 incident (a single scan exhausted
+      # the entire Anthropic account credit balance) -- codifies the
+      # live/out-of-band throttle applied directly against the running
+      # function at the time, so raising it later is a reviewed template
+      # diff, not an easily-forgotten console click. Raise deliberately,
+      # only once the cost guardrails below (scan budget, per-candidate
+      # ceiling, deep-dive-top-N split) are verified live against real
+      # Anthropic Console billing -- see the cost-guardrails plan.
+      ReservedConcurrentExecutions: 0
       Layers:
         - !Ref FinVaultAgentCoreLayer
         - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
@@ -1425,6 +1434,11 @@ Resources:
           FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
           AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
           OPPORTUNITY_ENGINE_ACCOUNT_ID: !Ref OpportunityEngineAccountId
+          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
+          OPPORTUNITY_ENGINE_SCAN_BUDGET_USD: "0.20"
+          OPPORTUNITY_ENGINE_PER_CANDIDATE_CEILING_USD: "0.10"
+          OPPORTUNITY_ENGINE_DEEP_DIVE_TOP_N: "5"
+          OPPORTUNITY_ENGINE_MIN_VIABLE_CANDIDATE_BUDGET_USD: "0.02"
       Policies:
         - AWSLambdaBasicExecutionRole
         - DynamoDBCrudPolicy:
@@ -1433,6 +1447,8 @@ Resources:
             TableName: !Ref FinAssetsTable
         - DynamoDBReadPolicy:
             TableName: !Ref FinAccountsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdvisorCacheTable
         - Statement:
             - Effect: Allow
               Action: ssm:GetParameter
@@ -1503,6 +1519,11 @@ Resources:
       Handler: handler.worker_handler
       Timeout: 300
       MemorySize: 512
+      # Forced to 0 after the 2026-10-26 Opportunity Engine cost incident
+      # (same rationale as OpportunityEngineFunction's own throttle above
+      # -- codifying the live mitigation into IaC). Raise deliberately,
+      # once the per-turn cost cap below is verified live.
+      ReservedConcurrentExecutions: 0
       Layers:
         - !Ref FinVaultAgentCoreLayer
         - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
@@ -1515,6 +1536,8 @@ Resources:
           AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
           ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
           PAPER_TRADE_API_FUNCTION: !GetAtt PaperTradeApi.Arn
+          DEEP_DIVE_PER_TURN_COST_CAP_USD: "0.10"
+          DEEP_DIVE_MAX_WEB_SEARCHES_PER_TURN: "3"
       Policies:
         - AWSLambdaBasicExecutionRole
         - DynamoDBReadPolicy:

@@ -8,11 +8,11 @@ Run with: python3 -m unittest finvault_agent_core.tests.test_job_cache -v
 """
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from botocore.exceptions import ClientError
 
-from finvault_agent_core.job_cache import read_cache, try_claim_job, write_cache
+from finvault_agent_core.job_cache import CACHE_TTL_SECONDS, read_cache, try_claim_job, write_cache
 
 
 def _conditional_check_failed():
@@ -49,6 +49,24 @@ class TestTryClaimJob(unittest.TestCase):
         # Can't enforce the guard without a table -- proceeds rather than
         # blocking all work, matching pre-existing (unguarded) behavior.
         self.assertTrue(try_claim_job(None, "key1"))
+
+    def test_default_ttl_matches_module_constant(self):
+        table = MagicMock()
+        with patch("finvault_agent_core.job_cache.time.time", return_value=1_000_000):
+            try_claim_job(table, "key1")
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["expiresAt"], 1_000_000 + CACHE_TTL_SECONDS)
+
+    def test_custom_ttl_seconds_overrides_default(self):
+        # Opportunity Engine's weekly scan claim needs a much longer TTL
+        # (days, not the 30-minute job-cache default) -- confirm the
+        # override actually reaches the stored item.
+        table = MagicMock()
+        custom_ttl = 8 * 24 * 3600
+        with patch("finvault_agent_core.job_cache.time.time", return_value=1_000_000):
+            try_claim_job(table, "key1", ttl_seconds=custom_ttl)
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["expiresAt"], 1_000_000 + custom_ttl)
 
 
 class TestReadWriteCache(unittest.TestCase):

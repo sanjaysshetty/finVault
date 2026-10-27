@@ -17,8 +17,11 @@ from unittest.mock import MagicMock
 from finvault_agent_core.recommendations_repo import (
     _to_decimal,
     get_recommendation_with_history,
+    get_scan_run_for_week,
     put_recommendation,
+    put_scan_run,
     put_scenario_run,
+    put_screened_recommendation,
     update_status,
 )
 
@@ -128,6 +131,58 @@ class TestPutScenarioRun(unittest.TestCase):
             scenario_input={}, scenario_output={"pnl": 0.0},
         )
         self.assertIsNotNone(scenario_id)
+
+
+class TestPutScreenedRecommendation(unittest.TestCase):
+    def test_writes_lightweight_record_without_tower2_fields(self):
+        table = MagicMock()
+        rec_id = put_screened_recommendation(
+            table, "acct1",
+            ticker="MSFT",
+            fundamental_score=72,
+            fundamentals_summary="MSFT (Microsoft, Technology): price $400, ...",
+            note="Did not rank in the top N for deep-dive analysis.",
+        )
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["sk"], f"REC#{rec_id}")
+        self.assertEqual(item["status"], "SCREENED_ONLY")
+        self.assertEqual(item["ticker"], "MSFT")
+        self.assertEqual(item["fundamentalScore"], 72)
+        # Absent, not None-filled -- a reader must not mistake this for a
+        # deep-dived recommendation that merely found nothing.
+        self.assertNotIn("tower2Research", item)
+        self.assertNotIn("probabilityOfProfit", item)
+        self.assertNotIn("strategyDetail", item)
+
+
+class TestScanRun(unittest.TestCase):
+    def test_put_then_get_round_trip(self):
+        table = MagicMock()
+        put_scan_run(table, "acct1", "2026-W44", status="IN_PROGRESS", universeSize=897)
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["sk"], "SCANRUN#2026-W44")
+        self.assertEqual(item["weekKey"], "2026-W44")
+        self.assertEqual(item["status"], "IN_PROGRESS")
+        self.assertEqual(item["universeSize"], 897)
+
+        table.get_item.return_value = {"Item": item}
+        fetched = get_scan_run_for_week(table, "acct1", "2026-W44")
+        self.assertEqual(fetched["status"], "IN_PROGRESS")
+        call_kwargs = table.get_item.call_args.kwargs
+        self.assertEqual(call_kwargs["Key"], {"accountId": "acct1", "sk": "SCANRUN#2026-W44"})
+
+    def test_completion_overwrites_in_progress(self):
+        table = MagicMock()
+        put_scan_run(table, "acct1", "2026-W44", status="IN_PROGRESS")
+        put_scan_run(table, "acct1", "2026-W44", status="COMPLETE", totalActualCostUsd=0.1823)
+        final_item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(final_item["status"], "COMPLETE")
+        self.assertEqual(final_item["totalActualCostUsd"], Decimal("0.1823"))
+
+    def test_get_returns_none_when_no_scan_run_yet(self):
+        table = MagicMock()
+        table.get_item.return_value = {}
+        self.assertIsNone(get_scan_run_for_week(table, "acct1", "2026-W44"))
 
 
 class TestUpdateStatus(unittest.TestCase):

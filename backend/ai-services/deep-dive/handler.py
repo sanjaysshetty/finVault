@@ -29,6 +29,7 @@ from finvault_agent_core import (
     build_tower1_context,
     get_secret,
     read_cache,
+    summarize_tower1_context,
     try_claim_job,
     write_cache,
 )
@@ -51,6 +52,13 @@ PAPER_TRADE_API_FUNCTION = os.environ.get("PAPER_TRADE_API_FUNCTION", "")
 TOWER1_CACHE_TTL_SECONDS = 300  # ~5 min, matches AdvisorApi's framework-cache pattern
 MAX_ITERATIONS = 10
 DEADLINE_SECONDS = 240.0
+# Cost guardrail (added after the 2026-10-26 Opportunity Engine incident):
+# per-turn, not cumulative across a conversation -- confirmed design,
+# since worker_handler already constructs a fresh AgentLoop per chat
+# message, "per turn" and "per AgentLoop instance" are the same thing,
+# so no cross-turn running total needs to be persisted.
+DEEP_DIVE_PER_TURN_COST_CAP_USD = float(os.environ.get("DEEP_DIVE_PER_TURN_COST_CAP_USD", "0.10"))
+DEEP_DIVE_MAX_WEB_SEARCHES_PER_TURN = int(os.environ.get("DEEP_DIVE_MAX_WEB_SEARCHES_PER_TURN", "3"))
 
 _ddb = boto3.resource("dynamodb")
 _assets_table = _ddb.Table(FIN_ASSETS_TABLE) if FIN_ASSETS_TABLE else None
@@ -88,7 +96,7 @@ def _get_tower1_context(account_id):
 
 
 def _build_context_preamble(tower1_context, preseeded_header):
-    parts = [f"Tower 1 — investor's portfolio and risk context:\n{tower1_context}"]
+    parts = [f"Tower 1 — investor's portfolio and risk context:\n{summarize_tower1_context(tower1_context)}"]
     if preseeded_header:
         parts.append(
             "This conversation continues an existing recommendation:\n"
@@ -136,13 +144,18 @@ def worker_handler(payload, context=None):
             ticker_hint=(preseeded_header or {}).get("ticker"),
         )
 
+        # Local override, not a mutation of the shared WEB_SEARCH_TOOL
+        # constant -- Opportunity Engine may want a different cap.
+        per_turn_web_search_tool = {**WEB_SEARCH_TOOL, "max_uses": DEEP_DIVE_MAX_WEB_SEARCHES_PER_TURN}
+
         loop = AgentLoop(
             system_prompt=SYSTEM_PROMPT,
             tools=tools,
-            server_tools=[WEB_SEARCH_TOOL],
+            server_tools=[per_turn_web_search_tool],
             mcp_servers=mcp_servers,
             max_iterations=MAX_ITERATIONS,
             deadline_seconds=DEADLINE_SECONDS,
+            max_cost_usd=DEEP_DIVE_PER_TURN_COST_CAP_USD,
         )
 
         if not history:
@@ -153,14 +166,21 @@ def worker_handler(payload, context=None):
 
         result = loop.run(messages, request_id=cache_key)
 
+        reply = result.final_text or ""
+        if result.status == "cost_exceeded" and not reply:
+            reply = (
+                "I had to stop early to stay within this message's cost guardrail. "
+                "Ask a more specific follow-up and I'll continue from here."
+            )
+
         write_cache(_cache_table, cache_key, {
             "status": "DONE",
-            "reply": result.final_text or "",
+            "reply": reply,
             "recommendationId": state.get("active_recommendation_id"),
             "approved": state.get("approved"),
             "loopStatus": result.status,
         })
-        logger.info(f"Deep Dive worker done: cacheKey={cache_key} loopStatus={result.status}")
+        logger.info(f"Deep Dive worker done: cacheKey={cache_key} loopStatus={result.status} cost=${result.total_cost_usd:.4f}")
 
     except Exception as e:
         logger.error(f"Deep Dive worker failed: cacheKey={cache_key} {e}", exc_info=True)
