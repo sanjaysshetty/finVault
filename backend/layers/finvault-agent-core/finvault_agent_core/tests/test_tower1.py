@@ -14,7 +14,13 @@ import unittest
 from unittest.mock import MagicMock
 
 from finvault_agent_core.robinhood_mcp import RobinhoodMcpError
-from finvault_agent_core.tower1 import build_tower1_context, fetch_investor_profile, fetch_portfolio, fetch_robinhood_context
+from finvault_agent_core.tower1 import (
+    build_tower1_context,
+    fetch_investor_profile,
+    fetch_portfolio,
+    fetch_robinhood_context,
+    summarize_tower1_context,
+)
 
 
 class TestFetchRobinhoodContext(unittest.TestCase):
@@ -121,6 +127,60 @@ class TestBuildTower1Context(unittest.TestCase):
         # handler.py passes robinhood_client=None when no access token exists yet.
         context = build_tower1_context(None, None, None, "acct1")
         self.assertFalse(context["robinhood"]["available"])
+
+
+class TestSummarizeTower1Context(unittest.TestCase):
+    def test_empty_context_does_not_crash(self):
+        summary = summarize_tower1_context({})
+        self.assertIn("Robinhood: not connected.", summary)
+        self.assertIn("Manual holdings: $0 invested", summary)
+
+    def test_none_context_does_not_crash(self):
+        summary = summarize_tower1_context(None)
+        self.assertIsInstance(summary, str)
+
+    def test_truncates_to_top_5_stocks_by_position_size(self):
+        stocks = [{"ticker": f"T{i}", "qty": 1, "avg_cost": i} for i in range(1, 11)]
+        context = {"manual_holdings": {"stocks": stocks, "total_invested": 0}}
+        summary = summarize_tower1_context(context)
+        # Largest positions (T10..T6) should appear; smallest (T1..T5) should not.
+        self.assertIn("T10", summary)
+        self.assertIn("T6", summary)
+        self.assertNotIn("T1 ", summary)
+
+    def test_robinhood_not_connected_line(self):
+        context = {"robinhood": {"available": False}}
+        summary = summarize_tower1_context(context)
+        self.assertIn("Robinhood: not connected.", summary)
+
+    def test_robinhood_connected_summarizes_defensively(self):
+        # Field names here are best-effort/unverified (no real Robinhood
+        # OAuth grant exists yet) -- this only proves the function never
+        # raises on a plausible shape, not that the shape is correct.
+        context = {
+            "robinhood": {
+                "available": True,
+                "portfolio": {"cash": 5000},
+                "equity_positions": [{"symbol": "AAPL", "market_value": 10000}],
+                "option_positions": [],
+                "realized_pnl": {"total": 250},
+            }
+        }
+        summary = summarize_tower1_context(context)
+        self.assertIn("cash $5,000", summary)
+        self.assertIn("AAPL", summary)
+
+    def test_missing_robinhood_subfields_do_not_crash(self):
+        context = {"robinhood": {"available": True}}
+        summary = summarize_tower1_context(context)
+        self.assertIn("Robinhood:", summary)
+
+    def test_investor_profile_line_present(self):
+        context = {"investor_profile": {"riskTolerance": "Aggressive", "objective": "Growth",
+                                         "timeHorizon": "10+ years", "targetAnnualReturnPct": 20}}
+        summary = summarize_tower1_context(context)
+        self.assertIn("risk=Aggressive", summary)
+        self.assertIn("20%/yr", summary)
 
 
 if __name__ == "__main__":

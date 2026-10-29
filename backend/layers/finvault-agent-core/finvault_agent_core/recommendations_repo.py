@@ -71,6 +71,64 @@ def put_recommendation(
     return recommendation_id
 
 
+def put_screened_recommendation(
+    table,
+    account_id,
+    *,
+    ticker,
+    fundamental_score,
+    fundamentals_summary,
+    note,
+    source="opportunity_engine_scan",
+):
+    """Lightweight record for a shortlisted-but-not-deep-dived candidate --
+    zero Anthropic spend, since this candidate never went through Tower 2.
+    No tower2Research/probabilityOfProfit/strategyDetail keys -- absent
+    entirely, not None-filled, so a reader can't mistake this for a
+    deep-dived recommendation that merely found nothing."""
+    recommendation_id = str(uuid.uuid4())
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    item = _to_decimal({
+        "accountId": account_id,
+        "sk": f"REC#{recommendation_id}",
+        "recommendationId": recommendation_id,
+        "status": "SCREENED_ONLY",
+        "source": source,
+        "ticker": ticker,
+        "fundamentalScore": fundamental_score,
+        "fundamentalsSummary": fundamentals_summary,
+        "note": note,
+        "createdAt": now,
+        "updatedAt": now,
+    })
+    table.put_item(Item=item)
+    return recommendation_id
+
+
+def put_scan_run(table, account_id, week_key, **fields):
+    """Upsert the one ScanRun summary item per account+week -- written
+    once at scan start (status=IN_PROGRESS) and once at completion
+    (status=COMPLETE, with the final counts/cost). Not conditional --
+    try_claim_job is the race-safe gate for whether a scan runs at all;
+    this is just the human/UI-facing summary record, safely overwritten
+    by whichever single invocation actually won that claim."""
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+    item = _to_decimal({
+        "accountId": account_id,
+        "sk": f"SCANRUN#{week_key}",
+        "weekKey": week_key,
+        "updatedAt": now,
+        **fields,
+    })
+    table.put_item(Item=item)
+    return week_key
+
+
+def get_scan_run_for_week(table, account_id, week_key):
+    resp = table.get_item(Key={"accountId": account_id, "sk": f"SCANRUN#{week_key}"})
+    return resp.get("Item")
+
+
 def get_recommendation_with_history(table, account_id, recommendation_id):
     """Header plus every scenario-run item, in one query — exactly what the
     pre-seeded Deep Dive entry path (?recommendationId=) needs to resume

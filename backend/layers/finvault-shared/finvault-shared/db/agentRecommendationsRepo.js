@@ -56,6 +56,21 @@ async function putRecommendation(item) {
   await doc.send(new PutCommand({ TableName: TABLE, Item: item }));
 }
 
+/**
+ * Reads the ScanRun summary item Opportunity Engine's Python handler
+ * writes per account+week (sk="SCANRUN#<weekKey>") -- used by the
+ * trigger route's pre-check (cost-guardrail fix, Part 7) to avoid even
+ * invoking the scan Lambda if this week's scan already completed.
+ * Doesn't collide with listRecommendations' query since that one is
+ * scoped server-side to sk begins_with "REC#".
+ */
+async function getScanRunForWeek(accountId, weekKey) {
+  const res = await doc.send(
+    new GetCommand({ TableName: TABLE, Key: { accountId, sk: `SCANRUN#${weekKey}` } })
+  );
+  return res.Item || null;
+}
+
 async function updateRecommendationStatus(accountId, recommendationId, status, extraFields = {}) {
   const updates = { status, updatedAt: new Date().toISOString(), ...extraFields };
   const setExprs = [];
@@ -81,6 +96,7 @@ async function updateRecommendationStatus(accountId, recommendationId, status, e
 module.exports = {
   listRecommendations,
   getRecommendationWithHistory,
+  getScanRunForWeek,
   putRecommendation,
   updateRecommendationStatus,
 };

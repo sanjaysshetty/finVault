@@ -53,7 +53,7 @@ def write_cache(table, cache_key, data):
     table.put_item(Item=item)
 
 
-def try_claim_job(table, cache_key):
+def try_claim_job(table, cache_key, ttl_seconds=CACHE_TTL_SECONDS):
     """Conditional put: returns True if this invocation successfully
     claimed the job (no entry existed yet for this cacheKey), False if
     another invocation already claimed or completed it.
@@ -63,10 +63,15 @@ def try_claim_job(table, cache_key):
     True unconditionally (can't enforce the guard, but doesn't block
     work either — matches the pre-existing behavior rather than
     introducing a new failure mode when misconfigured).
+
+    ttl_seconds defaults to this module's 30-minute job-cache TTL
+    (Deep Dive's existing call site is unaffected); callers claiming a
+    longer-lived resource -- e.g. Opportunity Engine's "already scanned
+    this week" claim -- pass a longer value explicitly.
     """
     if not table:
         return True
-    expires_at = int(time.time()) + CACHE_TTL_SECONDS
+    expires_at = int(time.time()) + ttl_seconds
     try:
         table.put_item(
             Item={

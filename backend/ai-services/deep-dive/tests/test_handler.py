@@ -34,7 +34,7 @@ class TestWorkerHandlerSuccess(unittest.TestCase):
         self, mock_agent_loop_cls, mock_token, mock_tower1, mock_claim, mock_write_cache,
     ):
         mock_loop = MagicMock()
-        mock_loop.run.return_value = SimpleNamespace(final_text="Here's my analysis", status="done")
+        mock_loop.run.return_value = SimpleNamespace(final_text="Here's my analysis", status="done", total_cost_usd=0.01)
         mock_agent_loop_cls.return_value = mock_loop
 
         handler.worker_handler({"cacheKey": "key1", "accountId": "acct1", "message": "what about AAPL?"})
@@ -56,7 +56,7 @@ class TestWorkerHandlerSuccess(unittest.TestCase):
         self, mock_agent_loop_cls, mock_token, mock_tower1, mock_claim, mock_write_cache,
     ):
         mock_loop = MagicMock()
-        mock_loop.run.return_value = SimpleNamespace(final_text="follow-up answer", status="done")
+        mock_loop.run.return_value = SimpleNamespace(final_text="follow-up answer", status="done", total_cost_usd=0.01)
         mock_agent_loop_cls.return_value = mock_loop
 
         history = [
@@ -79,7 +79,7 @@ class TestWorkerHandlerSuccess(unittest.TestCase):
         self, mock_agent_loop_cls, mock_token, mock_tower1, mock_claim, mock_write_cache, mock_get_rec,
     ):
         mock_loop = MagicMock()
-        mock_loop.run.return_value = SimpleNamespace(final_text="continuing analysis", status="done")
+        mock_loop.run.return_value = SimpleNamespace(final_text="continuing analysis", status="done", total_cost_usd=0.01)
         mock_agent_loop_cls.return_value = mock_loop
 
         handler.worker_handler({
@@ -91,6 +91,59 @@ class TestWorkerHandlerSuccess(unittest.TestCase):
         messages = mock_loop.run.call_args.args[0]
         self.assertIn("existing recommendation", messages[0]["content"])
         self.assertIn("AAPL", messages[0]["content"])
+
+
+class TestWorkerHandlerCostGuardrail(unittest.TestCase):
+    @patch("handler.write_cache")
+    @patch("handler.try_claim_job", return_value=True)
+    @patch("handler._get_tower1_context", return_value={"robinhood": {"available": False}})
+    @patch("handler._robinhood_access_token", return_value=None)
+    @patch("handler.AgentLoop")
+    def test_max_cost_usd_passed_to_agent_loop(self, mock_agent_loop_cls, mock_token, mock_tower1, mock_claim, mock_write_cache):
+        mock_loop = MagicMock()
+        mock_loop.run.return_value = SimpleNamespace(final_text="ok", status="done", total_cost_usd=0.01)
+        mock_agent_loop_cls.return_value = mock_loop
+
+        handler.worker_handler({"cacheKey": "key5", "accountId": "acct1", "message": "hi"})
+
+        call_kwargs = mock_agent_loop_cls.call_args.kwargs
+        self.assertEqual(call_kwargs["max_cost_usd"], handler.DEEP_DIVE_PER_TURN_COST_CAP_USD)
+        self.assertEqual(call_kwargs["server_tools"][0]["max_uses"], handler.DEEP_DIVE_MAX_WEB_SEARCHES_PER_TURN)
+
+    @patch("handler.write_cache")
+    @patch("handler.try_claim_job", return_value=True)
+    @patch("handler._get_tower1_context", return_value={"robinhood": {"available": False}})
+    @patch("handler._robinhood_access_token", return_value=None)
+    @patch("handler.AgentLoop")
+    def test_cost_exceeded_with_no_text_gets_friendly_fallback_reply(
+        self, mock_agent_loop_cls, mock_token, mock_tower1, mock_claim, mock_write_cache,
+    ):
+        mock_loop = MagicMock()
+        mock_loop.run.return_value = SimpleNamespace(final_text=None, status="cost_exceeded", total_cost_usd=0.1)
+        mock_agent_loop_cls.return_value = mock_loop
+
+        handler.worker_handler({"cacheKey": "key6", "accountId": "acct1", "message": "hi"})
+
+        cache_call = mock_write_cache.call_args
+        self.assertIn("cost guardrail", cache_call.args[2]["reply"])
+        self.assertEqual(cache_call.args[2]["loopStatus"], "cost_exceeded")
+
+    @patch("handler.write_cache")
+    @patch("handler.try_claim_job", return_value=True)
+    @patch("handler._get_tower1_context", return_value={"robinhood": {"available": False}})
+    @patch("handler._robinhood_access_token", return_value=None)
+    @patch("handler.AgentLoop")
+    def test_cost_exceeded_with_partial_text_keeps_the_partial_text(
+        self, mock_agent_loop_cls, mock_token, mock_tower1, mock_claim, mock_write_cache,
+    ):
+        mock_loop = MagicMock()
+        mock_loop.run.return_value = SimpleNamespace(final_text="Here's what I found so far...", status="cost_exceeded", total_cost_usd=0.1)
+        mock_agent_loop_cls.return_value = mock_loop
+
+        handler.worker_handler({"cacheKey": "key7", "accountId": "acct1", "message": "hi"})
+
+        cache_call = mock_write_cache.call_args
+        self.assertEqual(cache_call.args[2]["reply"], "Here's what I found so far...")
 
 
 class TestWorkerHandlerFailure(unittest.TestCase):
