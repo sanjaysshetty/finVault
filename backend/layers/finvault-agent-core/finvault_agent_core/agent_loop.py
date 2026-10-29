@@ -99,6 +99,7 @@ class AgentLoop:
         max_tokens: int = 4096,
         mcp_servers: Optional[list] = None,
         server_tools: Optional[list] = None,
+        enable_prompt_caching: bool = True,
     ):
         """max_cost_usd is required (pass None explicitly to opt out of
         dollar-cost enforcement entirely) -- deliberately no default.
@@ -136,12 +137,34 @@ class AgentLoop:
         # never type=="tool_use", so _execute_tool's filter already skips
         # them correctly with no special-casing needed in the loop itself.
         self.server_tools = server_tools or []
+        self.enable_prompt_caching = enable_prompt_caching
         self._system_prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:12]
 
     def run(self, messages: list, request_id: Optional[str] = None) -> AgentResult:
         messages = list(messages)
         deadline = time.monotonic() + self.deadline_seconds
+
+        # System prompt + tool definitions are IDENTICAL on every turn of
+        # this run, and across every other AgentLoop instance built with
+        # the same system_prompt/tools (e.g. every candidate in one
+        # Opportunity Engine scan, or every turn of one Deep Dive
+        # conversation) -- resending them at full input-token price every
+        # single call was a real, unaddressed cost driver. cache_control
+        # on the last tool caches the whole tools array as one prefix
+        # (Anthropic's documented placement rule); on the system block it
+        # caches the system prompt. Both are static per-run, so computed
+        # once here, not per-iteration. Below Sonnet's 512-token minimum
+        # cacheable length, Anthropic just serves the request uncached
+        # with no error -- never a correctness risk, only a missed saving
+        # on a run whose system+tools happen to be unusually short.
         tool_schemas = [t.to_anthropic_schema() for t in self.tools.values()] + list(self.server_tools)
+        if self.enable_prompt_caching and tool_schemas:
+            tool_schemas = tool_schemas[:-1] + [{**tool_schemas[-1], "cache_control": {"type": "ephemeral"}}]
+        if self.enable_prompt_caching:
+            system_param = [{"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}}]
+        else:
+            system_param = self.system_prompt
+
         total_input_tokens = 0
         total_output_tokens = 0
         total_cost_usd = 0.0
@@ -163,7 +186,7 @@ class AgentLoop:
             kwargs = dict(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                system=self.system_prompt,
+                system=system_param,
                 messages=messages,
                 tools=tool_schemas,
             )
@@ -253,6 +276,11 @@ class AgentLoop:
             "usage": {
                 "input_tokens": response.usage.input_tokens if response.usage else None,
                 "output_tokens": response.usage.output_tokens if response.usage else None,
+                # Both 0 here means this call's system+tools prefix didn't
+                # get cached -- expected below Sonnet's 512-token minimum,
+                # worth a second look otherwise.
+                "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", None) if response.usage else None,
+                "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", None) if response.usage else None,
             },
             "total_cost_usd_running": round(total_cost_usd, 6),
         }, default=str))

@@ -360,7 +360,7 @@ class TestServerTools(unittest.TestCase):
         web_search_tool = {"type": "web_search_20260209", "name": "web_search"}
         loop = AgentLoop(
             system_prompt="sys", tools=[_make_tool()], client=client,
-            server_tools=[web_search_tool], max_cost_usd=None,
+            server_tools=[web_search_tool], max_cost_usd=None, enable_prompt_caching=False,
         )
 
         loop.run([{"role": "user", "content": "hi"}])
@@ -389,6 +389,96 @@ class TestServerTools(unittest.TestCase):
 
         # only the real client tool_use block gets executed
         tool_fn.assert_called_once()
+
+
+class TestPromptCaching(unittest.TestCase):
+    def test_system_prompt_cached_by_default(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn", [_text_block("ok")])
+        loop = AgentLoop(system_prompt="sys prompt text", tools=[_make_tool()], client=client, max_cost_usd=None)
+
+        loop.run([{"role": "user", "content": "hi"}])
+
+        sent_system = client.messages.create.call_args.kwargs["system"]
+        self.assertEqual(sent_system, [{"type": "text", "text": "sys prompt text", "cache_control": {"type": "ephemeral"}}])
+
+    def test_last_tool_gets_cache_control_others_dont(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn", [_text_block("ok")])
+        loop = AgentLoop(
+            system_prompt="sys", tools=[_make_tool(name="tool_a"), _make_tool(name="tool_b")], client=client,
+            server_tools=[{"type": "web_search_20260209", "name": "web_search"}], max_cost_usd=None,
+        )
+
+        loop.run([{"role": "user", "content": "hi"}])
+
+        sent_tools = client.messages.create.call_args.kwargs["tools"]
+        self.assertNotIn("cache_control", sent_tools[0])
+        self.assertNotIn("cache_control", sent_tools[1])
+        self.assertEqual(sent_tools[-1]["cache_control"], {"type": "ephemeral"})
+        self.assertEqual(sent_tools[-1]["name"], "web_search")
+
+    def test_disabling_caching_reverts_to_plain_string_system_and_uncached_tools(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn", [_text_block("ok")])
+        loop = AgentLoop(system_prompt="sys prompt text", tools=[_make_tool()], client=client,
+                          max_cost_usd=None, enable_prompt_caching=False)
+
+        loop.run([{"role": "user", "content": "hi"}])
+
+        call_kwargs = client.messages.create.call_args.kwargs
+        self.assertEqual(call_kwargs["system"], "sys prompt text")
+        self.assertNotIn("cache_control", call_kwargs["tools"][-1])
+
+    def test_caching_does_not_mutate_shared_server_tool_object(self):
+        # server_tools entries are often module-level shared constants
+        # (e.g. tower2_shared.WEB_SEARCH_TOOL, reused across every
+        # Opportunity Engine candidate and every Deep Dive turn) --
+        # mutating one in place would leak cache_control across every
+        # other unrelated AgentLoop instance that imports the same object.
+        shared_web_search_tool = {"type": "web_search_20260209", "name": "web_search"}
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn", [_text_block("ok")])
+        loop = AgentLoop(system_prompt="sys", tools=[_make_tool()], client=client,
+                          server_tools=[shared_web_search_tool], max_cost_usd=None)
+
+        loop.run([{"role": "user", "content": "hi"}])
+
+        self.assertNotIn("cache_control", shared_web_search_tool)
+
+    def test_no_tools_at_all_does_not_crash(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn", [_text_block("ok")])
+        loop = AgentLoop(system_prompt="sys", tools=[], client=client, max_cost_usd=None)
+
+        result = loop.run([{"role": "user", "content": "hi"}])
+
+        self.assertEqual(result.status, "done")
+        self.assertEqual(client.messages.create.call_args.kwargs["tools"], [])
+
+    def test_single_tool_still_gets_cache_control(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response("end_turn", [_text_block("ok")])
+        loop = AgentLoop(system_prompt="sys", tools=[_make_tool()], client=client, max_cost_usd=None)
+
+        loop.run([{"role": "user", "content": "hi"}])
+
+        sent_tools = client.messages.create.call_args.kwargs["tools"]
+        self.assertEqual(len(sent_tools), 1)
+        self.assertEqual(sent_tools[0]["cache_control"], {"type": "ephemeral"})
+
+    def test_cache_read_and_creation_tokens_logged(self):
+        client = MagicMock()
+        client.messages.create.return_value = _response(
+            "end_turn", [_text_block("ok")],
+            usage=_usage(cache_creation_input_tokens=600, cache_read_input_tokens=0),
+        )
+        loop = AgentLoop(system_prompt="sys", tools=[_make_tool()], client=client, max_cost_usd=None)
+        with self.assertLogs(level="INFO") as captured:
+            loop.run([{"role": "user", "content": "hi"}])
+
+        logged = captured.records[0].getMessage()
+        self.assertIn('"cache_creation_input_tokens": 600', logged)
 
 
 if __name__ == "__main__":
