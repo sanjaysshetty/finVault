@@ -119,6 +119,8 @@ export const queryKeys = {
   // both removed in the agentic rebuild)
   opportunities:      ()       => ["opportunities"],
   opportunityDetail:  (recId)  => ["opportunities", recId],
+  opportunityScans:   ()       => ["opportunities", "scans"],
+  opportunityScanDetail: (scanId) => ["opportunities", "scans", scanId],
 
   // Budget & Goals
   budgetDefinition: (year, month) =>

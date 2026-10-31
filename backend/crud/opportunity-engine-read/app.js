@@ -9,6 +9,8 @@
  *
  * Routes:
  *   GET  /research/opportunities                  → list recommendations for the account
+ *   GET  /research/opportunities/scans             → last 10 ScanRuns, newest first
+ *   GET  /research/opportunities/scans/{scanId}    → that scan's candidates (deep-dived + screened-only)
  *   GET  /research/opportunities/{recommendationId} → one recommendation + scenario-run history
  *   POST /research/opportunities/trigger           → async-invoke OpportunityEngineFunction
  *
@@ -30,8 +32,10 @@ const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
 const { resolveContext, assertRead } = require("finvault-shared/resolveContext");
 const {
   listRecommendations,
+  listRecommendationsForScan,
   getRecommendationWithHistory,
   getMostRecentScanRun,
+  listRecentScanRuns,
 } = require("finvault-shared/db/agentRecommendationsRepo");
 
 const lambda = new LambdaClient({});
@@ -132,6 +136,25 @@ exports.handler = async (event) => {
     if (method === "GET" && rawPath.endsWith("/research/opportunities")) {
       const items = await listRecommendations(ctx.accountId);
       return json(200, { recommendations: items });
+    }
+
+    // ── GET /research/opportunities/scans ──────────────────────
+    // Must be checked before the generic {recommendationId} catch-all
+    // below, since "scans" would otherwise be mistaken for an id.
+    if (method === "GET" && rawPath.endsWith("/research/opportunities/scans")) {
+      const scans = await listRecentScanRuns(ctx.accountId);
+      return json(200, { scans });
+    }
+
+    // ── GET /research/opportunities/scans/{scanId} ─────────────
+    if (method === "GET" && rawPath.includes("/research/opportunities/scans/")) {
+      // scanId is an ISO timestamp (colons, dots) -- always arrives
+      // URL-encoded from the frontend; decode defensively either way.
+      const rawSegment = rawPath.split("/research/opportunities/scans/")[1]?.trim();
+      const scanId = rawSegment ? decodeURIComponent(rawSegment) : "";
+      if (!scanId) return json(400, { error: "scanId is required" });
+      const recommendations = await listRecommendationsForScan(ctx.accountId, scanId);
+      return json(200, { scanId, recommendations });
     }
 
     // ── GET /research/opportunities/{recommendationId} ────────

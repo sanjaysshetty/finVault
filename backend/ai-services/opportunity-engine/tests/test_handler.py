@@ -118,6 +118,19 @@ class TestDeepDiveSplit(unittest.TestCase):
         self.assertEqual(result["body"]["deep_dived"], 3)
         self.assertEqual(result["body"]["screened_only"], 5)
 
+    def test_scan_id_passed_to_both_deep_dived_and_screened_only_records(self):
+        # Regression guard for the scan-history feature -- every candidate
+        # record (deep-dived or screened-only) must carry the same scanId
+        # as this run's own ScanRun, or the history UI can't group them.
+        result, mock_repo, _ = self._run_with_shortlist(n_candidates=5, deep_dive_top_n=2)
+        scan_id = result["body"]["scanId"]
+        self.assertTrue(scan_id)
+
+        deep_dived_scan_ids = {c.kwargs["scan_id"] for c in mock_repo.put_recommendation.call_args_list}
+        screened_scan_ids = {c.kwargs["scan_id"] for c in mock_repo.put_screened_recommendation.call_args_list}
+        self.assertEqual(deep_dived_scan_ids, {scan_id})
+        self.assertEqual(screened_scan_ids, {scan_id})
+
 
 class TestBudgetExhaustionMidScan(unittest.TestCase):
     def test_candidates_past_budget_exhaustion_become_screened_only_not_tower2_calls(self):

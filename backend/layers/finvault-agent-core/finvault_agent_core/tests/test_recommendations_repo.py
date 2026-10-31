@@ -18,6 +18,7 @@ from finvault_agent_core.recommendations_repo import (
     _to_decimal,
     get_recommendation_with_history,
     get_most_recent_scan_run,
+    list_recent_scan_runs,
     put_recommendation,
     put_scan_run,
     put_scenario_run,
@@ -79,6 +80,31 @@ class TestPutRecommendation(unittest.TestCase):
                     _assert_no_float(v)
 
         _assert_no_float(item)
+
+    def test_scan_id_stored_when_provided(self):
+        table = MagicMock()
+        put_recommendation(
+            table, "acct1",
+            ticker="AAPL", strategy_type="LONG_EQUITY", strategy_detail=[],
+            tower1_context={}, tower2_research={}, rationale="x",
+            rank_score=85, probability_of_profit=0.62,
+            scan_id="2026-10-28T14:00:00.000000Z",
+        )
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["scanId"], "2026-10-28T14:00:00.000000Z")
+
+    def test_scan_id_absent_when_not_provided(self):
+        # Deep Dive's standalone chat entry path creates recommendations
+        # with no scan to attribute them to -- must not write scanId=None.
+        table = MagicMock()
+        put_recommendation(
+            table, "acct1",
+            ticker="AAPL", strategy_type="LONG_EQUITY", strategy_detail=[],
+            tower1_context={}, tower2_research={}, rationale="x",
+            rank_score=85, probability_of_profit=0.62,
+        )
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertNotIn("scanId", item)
 
 
 class TestGetRecommendationWithHistory(unittest.TestCase):
@@ -153,6 +179,18 @@ class TestPutScreenedRecommendation(unittest.TestCase):
         self.assertNotIn("tower2Research", item)
         self.assertNotIn("probabilityOfProfit", item)
         self.assertNotIn("strategyDetail", item)
+        self.assertNotIn("scanId", item)
+
+    def test_scan_id_stored_when_provided(self):
+        table = MagicMock()
+        put_screened_recommendation(
+            table, "acct1",
+            ticker="MSFT", fundamental_score=72, fundamentals_summary="...",
+            note="Did not rank in the top N.",
+            scan_id="2026-10-28T14:00:00.000000Z",
+        )
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["scanId"], "2026-10-28T14:00:00.000000Z")
 
 
 class TestScanRun(unittest.TestCase):
@@ -197,6 +235,28 @@ class TestScanRun(unittest.TestCase):
         table = MagicMock()
         table.query.return_value = {"Items": []}
         self.assertIsNone(get_most_recent_scan_run(table, "acct1"))
+
+
+class TestListRecentScanRuns(unittest.TestCase):
+    def test_queries_with_default_limit_newest_first(self):
+        table = MagicMock()
+        table.query.return_value = {"Items": [{"scanId": "b"}, {"scanId": "a"}]}
+        result = list_recent_scan_runs(table, "acct1")
+        self.assertEqual(result, [{"scanId": "b"}, {"scanId": "a"}])
+        call_kwargs = table.query.call_args.kwargs
+        self.assertEqual(call_kwargs["ScanIndexForward"], False)
+        self.assertEqual(call_kwargs["Limit"], 10)
+
+    def test_respects_custom_limit(self):
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        list_recent_scan_runs(table, "acct1", limit=3)
+        self.assertEqual(table.query.call_args.kwargs["Limit"], 3)
+
+    def test_returns_empty_list_when_no_scans_ever_run(self):
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        self.assertEqual(list_recent_scan_runs(table, "acct1"), [])
 
 
 class TestUpdateStatus(unittest.TestCase):

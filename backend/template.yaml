@@ -1506,6 +1506,18 @@ Resources:
             ApiId: !Ref MetalsHttpApi
             Path: /research/opportunities/trigger
             Method: POST
+        OpportunityEngineScans:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /research/opportunities/scans
+            Method: GET
+        OpportunityEngineScanById:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MetalsHttpApi
+            Path: /research/opportunities/scans/{scanId}
+            Method: GET
         OpportunityEngineById:
           Type: HttpApi
           Properties:
