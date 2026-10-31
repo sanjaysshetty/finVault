@@ -12,14 +12,18 @@
  *   GET  /research/opportunities/{recommendationId} → one recommendation + scenario-run history
  *   POST /research/opportunities/trigger           → async-invoke OpportunityEngineFunction
  *
- * Cost-guardrail fix (Part 7, after the 2026-10-26 incident): the trigger
- * route now pre-checks for an already-completed scan this ISO week
- * before invoking the Lambda at all, so a re-click (or anyone re-POSTing)
- * doesn't fire a second full-cost scan. This is a courtesy pre-check, not
- * the authoritative guard -- it isn't atomic against two genuinely
- * concurrent clicks. The Python handler's own try_claim_job is the real
- * race-safe gate; this just avoids even invoking the Lambda in the
- * common case.
+ * Recency-prompt fix (Part 7, revised after 2026-10-28 feedback): the
+ * trigger route checks a ROLLING 7-day window from the most recent
+ * COMPLETE scan (not a calendar-week reset) and, if inside it, does NOT
+ * silently refuse -- it returns a "needs_confirmation" response the
+ * frontend turns into an explicit "a scan completed N days ago, run
+ * again anyway?" prompt. Only a POST with `{ force: true }` in the body
+ * (i.e. the user said yes) actually proceeds past that point. An
+ * in-progress scan is still refused unconditionally -- that one was
+ * never a "do you want to" question. This route's own check-then-invoke
+ * is a courtesy, not atomic against two genuinely concurrent clicks;
+ * the Python handler's own try_claim_job is the real race-safe gate for
+ * that, kept separate from this recency/confirmation logic entirely.
  */
 
 const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
@@ -27,29 +31,50 @@ const { resolveContext, assertRead } = require("finvault-shared/resolveContext")
 const {
   listRecommendations,
   getRecommendationWithHistory,
-  getScanRunForWeek,
+  getMostRecentScanRun,
 } = require("finvault-shared/db/agentRecommendationsRepo");
 
 const lambda = new LambdaClient({});
 
 const OPPORTUNITY_ENGINE_FUNCTION = process.env.OPPORTUNITY_ENGINE_FUNCTION || "";
+const RECENCY_PROMPT_WINDOW_DAYS = 7;
+
+function parseBody(event) {
+  if (!event.body) return {};
+  try {
+    return JSON.parse(event.body);
+  } catch {
+    return {};
+  }
+}
 
 /**
- * ISO 8601 year-week key, e.g. "2026-W44". Must match the Python handler's
- * _scan_week_key() exactly (both implement the same ISO week-numbering
- * rule, including the year-boundary edge case where late December can
- * belong to week 1 of the following ISO year) -- verified against
- * Python's date.isocalendar() across every such edge case before use,
- * not assumed.
+ * Pure decision function, extracted specifically so the date-boundary
+ * cases (same-day, exactly-7-days, just-over-7-days) are directly
+ * unit-testable rather than trusted inline inside the route handler.
+ * `now` is injectable for tests; defaults to the real current time.
  */
-function isoWeekKey(date = new Date()) {
-  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const dayOfWeek = d.getUTCDay() || 7; // Mon=1..Sun=7
-  d.setUTCDate(d.getUTCDate() + 4 - dayOfWeek); // move to Thursday of this ISO week
-  const isoYear = d.getUTCFullYear();
-  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
-  const isoWeek = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-  return `${isoYear}-W${String(isoWeek).padStart(2, "0")}`;
+function decideTriggerAction(mostRecentScanRun, force, now = new Date()) {
+  if (mostRecentScanRun?.status === "IN_PROGRESS") {
+    return { status: "in_progress", message: "A scan is already running — check back shortly." };
+  }
+
+  if (mostRecentScanRun?.status === "COMPLETE" && mostRecentScanRun.completedAt && !force) {
+    const daysSinceLastScan = Math.floor((now.getTime() - new Date(mostRecentScanRun.completedAt).getTime()) / 86400000);
+    if (daysSinceLastScan < RECENCY_PROMPT_WINDOW_DAYS) {
+      return {
+        status: "needs_confirmation",
+        daysSinceLastScan,
+        lastScanAt: mostRecentScanRun.completedAt,
+        message:
+          daysSinceLastScan <= 0
+            ? "A scan completed earlier today. Run another one anyway?"
+            : `A scan completed ${daysSinceLastScan} day${daysSinceLastScan === 1 ? "" : "s"} ago. Run another one anyway?`,
+      };
+    }
+  }
+
+  return { status: "proceed" };
 }
 
 function corsHeaders() {
@@ -82,18 +107,17 @@ exports.handler = async (event) => {
         return json(503, { error: "Scan function not configured" });
       }
 
-      const weekKey = isoWeekKey();
-      const existingScanRun = await getScanRunForWeek(ctx.accountId, weekKey);
-      if (existingScanRun?.status === "COMPLETE") {
-        return json(200, {
-          status: "already_scanned",
-          weekKey,
-          message: `This week's scan (${weekKey}) already completed — see existing recommendations.`,
-          scanRun: existingScanRun,
-        });
+      const body = parseBody(event);
+      const force = body?.force === true;
+
+      const mostRecent = await getMostRecentScanRun(ctx.accountId);
+      const decision = decideTriggerAction(mostRecent, force);
+
+      if (decision.status === "in_progress") {
+        return json(202, decision);
       }
-      if (existingScanRun?.status === "IN_PROGRESS") {
-        return json(202, { status: "in_progress", weekKey, message: "This week's scan is already running — check back shortly." });
+      if (decision.status === "needs_confirmation") {
+        return json(200, decision);
       }
 
       await lambda.send(new InvokeCommand({
@@ -101,7 +125,7 @@ exports.handler = async (event) => {
         InvocationType: "Event",
         Payload: JSON.stringify({ source: "manual-trigger", accountId: ctx.accountId }),
       }));
-      return json(202, { status: "triggered", weekKey, message: "Scan triggered. Check back in a few minutes." });
+      return json(202, { status: "triggered", message: "Scan triggered. Check back in a few minutes." });
     }
 
     // ── GET /research/opportunities ────────────────────────────
@@ -132,3 +156,8 @@ exports.handler = async (event) => {
     return json(500, { error: "Internal server error" });
   }
 };
+
+// Exported alongside the handler for direct verification of the
+// date-boundary decision logic (no test framework in this repo --
+// see the manual verification notes in the cost-guardrails PR).
+exports.decideTriggerAction = decideTriggerAction;

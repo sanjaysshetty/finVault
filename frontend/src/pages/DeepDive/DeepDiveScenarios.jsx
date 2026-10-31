@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.jsx";
 import { PageIcons } from "../../components/ui/PageIcons.jsx";
+import { Badge } from "../../components/ui/Badge.jsx";
 
 /**
  * Deep Dive & Scenarios — chat + scenario simulation surface.
@@ -15,6 +16,17 @@ import { PageIcons } from "../../components/ui/PageIcons.jsx";
  *     GET /research/opportunities/{id} route — no new backend route needed
  *     just to display it)
  *
+ * Recency gate (mirrors Opportunity Engine's "already scanned, run again
+ * anyway?" fix, scoped here to pre-seeded entries only — see 2026-10-28
+ * feedback): a freeform chat message has no reliable, cost-free way to
+ * tell whether it's "redo this ticker's analysis" vs. an unrelated
+ * question, so this only gates the one case with a known ticker and
+ * existing stored analysis — arriving via ?recommendationId=<id>. If that
+ * recommendation already has real Tower-2 content (status !== SCREENED_ONLY)
+ * from within the last 7 days, show it directly instead of defaulting into
+ * a fresh (paid) chat turn; the user must explicitly ask to start a new
+ * analysis to reach the chat input.
+ *
  * Unlike AdvisorChat, replies render as plain text, not HTML-in-iframe —
  * this prompt was never designed to emit HTML, and plain text via React's
  * default escaping carries no injection surface to sandbox against in the
@@ -23,6 +35,21 @@ import { PageIcons } from "../../components/ui/PageIcons.jsx";
 
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 4 * 60 * 1000;
+const RECENCY_GATE_WINDOW_DAYS = 7;
+
+function daysSince(iso) {
+  if (!iso) return Infinity;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+
+function formatGateDate(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return "";
+  }
+}
 
 function TypingIndicator() {
   return (
@@ -88,6 +115,67 @@ function RecommendationBanner({ recommendation }) {
   );
 }
 
+const STATUS_BADGE_VARIANT = {
+  NEW: "info",
+  REVIEWING: "warning",
+  SCENARIO_RUN: "warning",
+  APPROVED: "gain",
+  DISMISSED: "neutral",
+  EXPIRED: "neutral",
+};
+
+function ExistingAnalysisGate({ recommendation, daysAgo, onRunNewAnalysis }) {
+  const pct = recommendation.probabilityOfProfit != null ? Math.round(recommendation.probabilityOfProfit * 100) : null;
+  const ageLabel = daysAgo <= 0 ? "earlier today" : `${daysAgo} day${daysAgo === 1 ? "" : "s"} ago`;
+
+  return (
+    <div className="flex-1 rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-y-auto p-6">
+      <div className="flex items-center justify-between gap-3 rounded-xl bg-emerald-500/[0.08] border border-emerald-500/[0.2] px-4 py-2.5 mb-5">
+        <span className="text-xs text-emerald-300 font-medium">
+          This ticker was already deep-dived {ageLabel}. Showing the existing analysis instead of running a new one.
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2.5 flex-wrap mb-2">
+        <h3 className="text-xl font-black text-white" style={{ fontFamily: "Epilogue, sans-serif" }}>
+          {recommendation.ticker}
+        </h3>
+        <Badge variant={STATUS_BADGE_VARIANT[recommendation.status] || "neutral"}>{recommendation.status}</Badge>
+      </div>
+      <p className="text-xs text-slate-500 mb-4">
+        {recommendation.strategyType} · analyzed {formatGateDate(recommendation.createdAt)}
+      </p>
+
+      <div className="flex gap-6 mb-4">
+        {recommendation.rankScore != null && (
+          <div>
+            <div className="text-[10px] text-slate-500 uppercase tracking-wide">Rank</div>
+            <div className="text-sm font-bold text-white">{recommendation.rankScore}</div>
+          </div>
+        )}
+        {pct != null && (
+          <div>
+            <div className="text-[10px] text-slate-500 uppercase tracking-wide">Prob. profit</div>
+            <div className="text-sm font-bold text-emerald-400">{pct}%</div>
+          </div>
+        )}
+      </div>
+
+      {recommendation.rationale && (
+        <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap mb-6">{recommendation.rationale}</p>
+      )}
+
+      <button
+        type="button"
+        onClick={onRunNewAnalysis}
+        className="text-xs font-bold px-4 py-2 rounded-full bg-white/[0.06] text-slate-300 border border-white/[0.1] hover:bg-white/[0.1] transition-colors cursor-pointer"
+      >
+        Run a new analysis anyway →
+      </button>
+    </div>
+  );
+}
+
 export default function DeepDiveScenarios() {
   const [searchParams] = useSearchParams();
   const recommendationId = searchParams.get("recommendationId");
@@ -104,6 +192,20 @@ export default function DeepDiveScenarios() {
   const [error, setError] = useState("");
   const [pendingJob, setPendingJob] = useState(null);
   const [linkedRecommendationId, setLinkedRecommendationId] = useState(recommendationId || null);
+  // User explicitly asked to bypass the recency gate below and start a
+  // fresh (paid) analysis anyway -- once true, the gate never re-shows
+  // for this page visit, even if messages are still empty.
+  const [freshAnalysisRequested, setFreshAnalysisRequested] = useState(false);
+
+  const recommendation = recommendationData?.recommendation || null;
+  const hasStoredAnalysis = !!recommendation && recommendation.status !== "SCREENED_ONLY";
+  const daysSinceAnalysis = hasStoredAnalysis ? daysSince(recommendation.createdAt) : null;
+  const showRecencyGate =
+    !!recommendationId &&
+    hasStoredAnalysis &&
+    daysSinceAnalysis < RECENCY_GATE_WINDOW_DAYS &&
+    !freshAnalysisRequested &&
+    messages.length === 0;
 
   const bottomRef = useRef(null);
 
@@ -205,8 +307,15 @@ export default function DeepDiveScenarios() {
         subtitle="Ask about any position or ticker, or dig into a recommendation — run scenarios and see the probability-weighted outcome before deciding."
       />
 
-      <RecommendationBanner recommendation={recommendationData?.recommendation} />
+      <RecommendationBanner recommendation={recommendation} />
 
+      {showRecencyGate ? (
+        <ExistingAnalysisGate
+          recommendation={recommendation}
+          daysAgo={daysSinceAnalysis}
+          onRunNewAnalysis={() => setFreshAnalysisRequested(true)}
+        />
+      ) : (
       <div className="flex flex-col flex-1 rounded-2xl border border-white/[0.06] bg-[#0F1729] overflow-hidden min-h-[500px]">
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {isEmpty && !loading && (
@@ -283,6 +392,7 @@ export default function DeepDiveScenarios() {
           <p className="text-[11px] text-slate-700 mt-2 text-center">Enter to send · Shift+Enter for new line</p>
         </div>
       </div>
+      )}
     </div>
   );
 }
