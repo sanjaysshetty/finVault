@@ -1595,6 +1595,7 @@ Resources:
       Environment:
         Variables:
           DEEP_DIVE_WORKER_FUNCTION: !GetAtt DeepDiveWorkerFunction.Arn
+          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
           FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
           FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
           NODE_PATH: /opt/nodejs
