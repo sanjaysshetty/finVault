@@ -6,6 +6,7 @@ import { PageHeader } from "../components/ui/PageHeader.jsx";
 import { PageIcons } from "../components/ui/PageIcons.jsx";
 import { EmptyState } from "../components/ui/EmptyState.jsx";
 import { Badge } from "../components/ui/Badge.jsx";
+import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
 
 /**
  * Opportunity Engine — scheduled + on-demand market scan.
@@ -87,6 +88,10 @@ export default function OpportunityEngine() {
   const navigate = useNavigate();
   const [triggering, setTriggering] = useState(false);
   const [triggerMessage, setTriggerMessage] = useState("");
+  // Holds the server's "needs_confirmation" response while the confirm
+  // modal is open -- a scan completed within the last 7 days and the
+  // user hasn't yet said whether to run another one anyway.
+  const [pendingConfirmation, setPendingConfirmation] = useState(null);
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: queryKeys.opportunities(),
@@ -95,17 +100,27 @@ export default function OpportunityEngine() {
 
   const recommendations = data?.recommendations || [];
 
-  const handleTrigger = async () => {
+  const handleTrigger = async (force = false) => {
     setTriggering(true);
     setTriggerMessage("");
     try {
-      const res = await api.post("/research/opportunities/trigger", {});
+      const res = await api.post("/research/opportunities/trigger", { force });
+      if (res?.status === "needs_confirmation") {
+        setPendingConfirmation(res);
+        return; // not triggered yet -- wait for the user's yes/no
+      }
+      setPendingConfirmation(null);
       setTriggerMessage(res?.message || "Scan triggered. Check back in a few minutes.");
     } catch (e) {
       setTriggerMessage(e?.detail?.message || "Failed to trigger scan. Please try again.");
     } finally {
       setTriggering(false);
     }
+  };
+
+  const handleConfirmRunAnyway = () => {
+    setPendingConfirmation(null);
+    handleTrigger(true);
   };
 
   const handleDeepDive = (recommendationId) => {
@@ -121,13 +136,24 @@ export default function OpportunityEngine() {
       >
         <button
           type="button"
-          onClick={handleTrigger}
+          onClick={() => handleTrigger(false)}
           disabled={triggering}
           className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold transition-colors cursor-pointer"
         >
           {triggering ? "Triggering…" : "Run scan now"}
         </button>
       </PageHeader>
+
+      {pendingConfirmation && (
+        <DeleteConfirmModal
+          title="Recent scan found"
+          message={pendingConfirmation.message}
+          confirmLabel="Run anyway"
+          deleting={triggering}
+          onConfirm={handleConfirmRunAnyway}
+          onClose={() => setPendingConfirmation(null)}
+        />
+      )}
 
       {triggerMessage && (
         <div className="text-xs text-emerald-300 bg-emerald-500/[0.08] border border-emerald-500/[0.2] rounded-xl px-4 py-2.5">

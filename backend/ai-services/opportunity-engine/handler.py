@@ -15,9 +15,14 @@ Pipeline:
 
 Cost guardrails (added after the 2026-10-26 incident where a single scan
 exhausted the entire Anthropic account credit balance):
-  - Weekly idempotency: claims "this account's scan for this ISO week"
-    before doing ANY work, via try_claim_job -- a second trigger within
-    the same week is a no-op, not a second full-cost scan.
+  - In-progress concurrency guard: claims "this account has a scan
+    running right now" (short TTL, just long enough to cover one real
+    run) before doing ANY work, via try_claim_job -- prevents two
+    genuinely concurrent triggers from both running, nothing more. The
+    "already scanned recently, run again anyway?" decision is a
+    user-facing, OVERRIDABLE prompt handled entirely by the Node trigger
+    route (OpportunityEngineReadFunction) BEFORE this Lambda is even
+    invoked -- this handler has no opinion on recency, only concurrency.
   - Scan-level dollar budget (SCAN_BUDGET_USD) is the true hard ceiling.
     Each deep-dived candidate's allowance is computed dynamically
     (remaining_budget / remaining_candidate_count) immediately before it
@@ -31,8 +36,10 @@ Triggers:
     after the incident; not reinstated until this guardrail set is
     verified live (see finVault's cost-guardrails plan).
   - Async Lambda invoke from OpportunityEngineReadFunction's
-    POST /research/opportunities/trigger (which itself pre-checks for an
-    already-completed scan this week before invoking at all).
+    POST /research/opportunities/trigger, only after that route's own
+    rolling-7-day recency prompt has been shown and either there was
+    nothing recent to warn about, or the user explicitly confirmed
+    "run anyway."
 """
 
 import concurrent.futures
@@ -79,10 +86,12 @@ PER_CANDIDATE_CEILING_USD = float(os.environ.get("OPPORTUNITY_ENGINE_PER_CANDIDA
 # Below this, don't bother starting another candidate -- not enough
 # budget left for a run to produce anything useful.
 MIN_VIABLE_CANDIDATE_BUDGET_USD = float(os.environ.get("OPPORTUNITY_ENGINE_MIN_VIABLE_CANDIDATE_BUDGET_USD", "0.02"))
-# How long the "already scanned this week" claim lives -- long enough to
-# span the week, short enough that a permanently-stuck claim (e.g. from a
-# crashed run) doesn't block every future week too.
-SCAN_WEEK_CLAIM_TTL_SECONDS = 8 * 24 * 3600
+# In-progress concurrency guard only (NOT a "once per week" cap -- that
+# decision lives in the Node trigger route, see module docstring). Long
+# enough to cover one real scan (Timeout=900s=15min) plus buffer, short
+# enough that a crashed run's stale claim doesn't block the account for
+# more than ~25 minutes.
+SCAN_RUNNING_CLAIM_TTL_SECONDS = 25 * 60
 
 _ddb = boto3.resource("dynamodb")
 _assets_table = _ddb.Table(FIN_ASSETS_TABLE) if FIN_ASSETS_TABLE else None
@@ -92,17 +101,6 @@ _cache_table = _ddb.Table(ADVISOR_CACHE_TABLE) if ADVISOR_CACHE_TABLE else None
 
 with open(os.path.join(os.path.dirname(__file__), "prompts", "tower2_ranking.md")) as f:
     TOWER2_SYSTEM_PROMPT = f.read()
-
-
-def _scan_week_key(now=None):
-    """ISO year-week key, e.g. "2026-W44". Must match the Node trigger
-    route's hand-rolled equivalent exactly (see opportunity-engine-read's
-    isoWeekKey) -- both implement the same ISO 8601 week-numbering rule,
-    including the year-boundary edge case where late December can belong
-    to week 1 of the following ISO year."""
-    now = now or datetime.datetime.utcnow()
-    iso_year, iso_week, _ = now.isocalendar()
-    return f"{iso_year}-W{iso_week:02d}"
 
 
 def _robinhood_access_token():
@@ -276,18 +274,20 @@ def handler(event, context=None):
         logger.error("No accountId in event and OPPORTUNITY_ENGINE_ACCOUNT_ID not configured")
         return {"statusCode": 500, "body": "OPPORTUNITY_ENGINE_ACCOUNT_ID not configured"}
 
-    week_key = _scan_week_key()
-    scan_claim_key = f"oe-scan-week#{account_id}#{week_key}"
+    # In-progress concurrency guard ONLY -- not a weekly cap. The Node
+    # trigger route already decided this run should happen (nothing
+    # recent to warn about, or the user explicitly confirmed "run
+    # anyway"); this just stops two genuinely concurrent invocations from
+    # both doing the work, since that check-then-invoke isn't itself
+    # atomic.
+    running_claim_key = f"oe-scan-running#{account_id}"
+    if not try_claim_job(_cache_table, running_claim_key, ttl_seconds=SCAN_RUNNING_CLAIM_TTL_SECONDS):
+        logger.warning(f"A scan is already running for account={account_id} — not starting a second one")
+        return {"statusCode": 200, "body": {"status": "already_running"}}
 
-    # Defense in depth behind the Node route's own pre-check -- that
-    # check-then-invoke isn't itself atomic against two genuinely
-    # concurrent triggers, so this is the authoritative, race-safe gate.
-    if not try_claim_job(_cache_table, scan_claim_key, ttl_seconds=SCAN_WEEK_CLAIM_TTL_SECONDS):
-        logger.warning(f"Week {week_key} already claimed for account={account_id} — not re-scanning")
-        return {"statusCode": 200, "body": {"status": "already_scanned", "weekKey": week_key}}
-
-    logger.info(f"Opportunity Engine scan started for account={account_id}, week={week_key} at {started_at}")
-    recommendations_repo.put_scan_run(_recommendations_table, account_id, week_key, status="IN_PROGRESS", startedAt=started_at)
+    scan_id = started_at  # ISO timestamp -- also this scan's sort key via SCANRUN#<scan_id>
+    logger.info(f"Opportunity Engine scan started for account={account_id} at {started_at}")
+    recommendations_repo.put_scan_run(_recommendations_table, account_id, scan_id, status="IN_PROGRESS", startedAt=started_at)
 
     # 1. Deterministic prefilter — identical to wheel-scan's existing universe/
     # fundamentals/hard-filter/scoring pass, strategy-agnostic. Pure Python,
@@ -295,7 +295,7 @@ def handler(event, context=None):
     tickers = prefilter.get_full_universe()
     if not tickers:
         logger.error("Failed to fetch ticker universe")
-        recommendations_repo.put_scan_run(_recommendations_table, account_id, week_key, status="FAILED", startedAt=started_at, error="Failed to fetch ticker universe")
+        recommendations_repo.put_scan_run(_recommendations_table, account_id, scan_id, status="FAILED", startedAt=started_at, error="Failed to fetch ticker universe")
         return {"statusCode": 500, "body": "Failed to fetch ticker universe"}
 
     all_stocks = prefilter.batch_fetch_fundamentals(tickers, max_workers=30)
@@ -313,7 +313,7 @@ def handler(event, context=None):
     if not shortlist:
         logger.warning("No candidates passed the hard filter — nothing to run Tower 2 on")
         recommendations_repo.put_scan_run(
-            _recommendations_table, account_id, week_key, status="COMPLETE", startedAt=started_at,
+            _recommendations_table, account_id, scan_id, status="COMPLETE", startedAt=started_at,
             completedAt=datetime.datetime.utcnow().isoformat() + "Z",
             universeSize=len(tickers), shortlistSize=0, deepDivedCount=0, screenedOnlyCount=0,
             recordedCount=0, skippedCount=0, totalActualCostUsd=0.0,
@@ -345,7 +345,7 @@ def handler(event, context=None):
 
     completed_at = datetime.datetime.utcnow().isoformat() + "Z"
     recommendations_repo.put_scan_run(
-        _recommendations_table, account_id, week_key, status="COMPLETE", startedAt=started_at, completedAt=completed_at,
+        _recommendations_table, account_id, scan_id, status="COMPLETE", startedAt=started_at, completedAt=completed_at,
         universeSize=len(tickers), shortlistSize=len(shortlist),
         deepDivedCount=len(deep_dive_candidates) - len(never_started),
         screenedOnlyCount=len(screened_only_candidates) + len(never_started),
@@ -357,7 +357,7 @@ def handler(event, context=None):
     return {
         "statusCode": 200,
         "body": {
-            "weekKey": week_key,
+            "scanId": scan_id,
             "universe_size": len(tickers),
             "shortlist_size": len(shortlist),
             "deep_dived": len(deep_dive_candidates) - len(never_started),

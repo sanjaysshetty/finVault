@@ -12,7 +12,7 @@
  * writes once that surface exists.
  */
 
-const { GetCommand, PutCommand, QueryCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
+const { PutCommand, QueryCommand, UpdateCommand } = require("@aws-sdk/lib-dynamodb");
 const { doc } = require("./client");
 
 const TABLE = process.env.AGENT_RECOMMENDATIONS_TABLE || "AgentRecommendations";
@@ -57,18 +57,26 @@ async function putRecommendation(item) {
 }
 
 /**
- * Reads the ScanRun summary item Opportunity Engine's Python handler
- * writes per account+week (sk="SCANRUN#<weekKey>") -- used by the
- * trigger route's pre-check (cost-guardrail fix, Part 7) to avoid even
- * invoking the scan Lambda if this week's scan already completed.
- * Doesn't collide with listRecommendations' query since that one is
- * scoped server-side to sk begins_with "REC#".
+ * Reads the single most recent ScanRun summary item (sk="SCANRUN#<scanId>",
+ * scanId is an ISO timestamp so sk sorts chronologically for free) --
+ * used by the trigger route's rolling-7-day recency prompt ("already
+ * scanned N days ago, run again anyway?") and its in-progress check.
+ * Deliberately NOT scoped to a calendar week -- a scan from 2 days ago
+ * in the previous ISO week still counts as "recent." Doesn't collide
+ * with listRecommendations' query since that one is scoped server-side
+ * to sk begins_with "REC#".
  */
-async function getScanRunForWeek(accountId, weekKey) {
+async function getMostRecentScanRun(accountId) {
   const res = await doc.send(
-    new GetCommand({ TableName: TABLE, Key: { accountId, sk: `SCANRUN#${weekKey}` } })
+    new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "accountId = :accountId AND begins_with(sk, :prefix)",
+      ExpressionAttributeValues: { ":accountId": accountId, ":prefix": "SCANRUN#" },
+      ScanIndexForward: false,
+      Limit: 1,
+    })
   );
-  return res.Item || null;
+  return (res.Items && res.Items[0]) || null;
 }
 
 async function updateRecommendationStatus(accountId, recommendationId, status, extraFields = {}) {
@@ -96,7 +104,7 @@ async function updateRecommendationStatus(accountId, recommendationId, status, e
 module.exports = {
   listRecommendations,
   getRecommendationWithHistory,
-  getScanRunForWeek,
+  getMostRecentScanRun,
   putRecommendation,
   updateRecommendationStatus,
 };

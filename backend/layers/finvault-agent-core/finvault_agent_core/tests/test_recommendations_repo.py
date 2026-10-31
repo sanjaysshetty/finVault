@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 from finvault_agent_core.recommendations_repo import (
     _to_decimal,
     get_recommendation_with_history,
-    get_scan_run_for_week,
+    get_most_recent_scan_run,
     put_recommendation,
     put_scan_run,
     put_scenario_run,
@@ -156,33 +156,47 @@ class TestPutScreenedRecommendation(unittest.TestCase):
 
 
 class TestScanRun(unittest.TestCase):
-    def test_put_then_get_round_trip(self):
+    def test_put_then_get_most_recent_round_trip(self):
         table = MagicMock()
-        put_scan_run(table, "acct1", "2026-W44", status="IN_PROGRESS", universeSize=897)
+        scan_id = "2026-10-28T14:00:00.000000Z"
+        put_scan_run(table, "acct1", scan_id, status="IN_PROGRESS", universeSize=897)
         item = table.put_item.call_args.kwargs["Item"]
-        self.assertEqual(item["sk"], "SCANRUN#2026-W44")
-        self.assertEqual(item["weekKey"], "2026-W44")
+        self.assertEqual(item["sk"], f"SCANRUN#{scan_id}")
+        self.assertEqual(item["scanId"], scan_id)
         self.assertEqual(item["status"], "IN_PROGRESS")
         self.assertEqual(item["universeSize"], 897)
 
-        table.get_item.return_value = {"Item": item}
-        fetched = get_scan_run_for_week(table, "acct1", "2026-W44")
+        table.query.return_value = {"Items": [item]}
+        fetched = get_most_recent_scan_run(table, "acct1")
         self.assertEqual(fetched["status"], "IN_PROGRESS")
-        call_kwargs = table.get_item.call_args.kwargs
-        self.assertEqual(call_kwargs["Key"], {"accountId": "acct1", "sk": "SCANRUN#2026-W44"})
+        call_kwargs = table.query.call_args.kwargs
+        self.assertEqual(call_kwargs["ScanIndexForward"], False)
+        self.assertEqual(call_kwargs["Limit"], 1)
 
-    def test_completion_overwrites_in_progress(self):
+    def test_completion_updates_the_same_scan_id_record(self):
         table = MagicMock()
-        put_scan_run(table, "acct1", "2026-W44", status="IN_PROGRESS")
-        put_scan_run(table, "acct1", "2026-W44", status="COMPLETE", totalActualCostUsd=0.1823)
+        scan_id = "2026-10-28T14:00:00.000000Z"
+        put_scan_run(table, "acct1", scan_id, status="IN_PROGRESS")
+        put_scan_run(table, "acct1", scan_id, status="COMPLETE", totalActualCostUsd=0.1823)
         final_item = table.put_item.call_args.kwargs["Item"]
         self.assertEqual(final_item["status"], "COMPLETE")
+        self.assertEqual(final_item["sk"], f"SCANRUN#{scan_id}")
         self.assertEqual(final_item["totalActualCostUsd"], Decimal("0.1823"))
 
-    def test_get_returns_none_when_no_scan_run_yet(self):
+    def test_a_second_confirmed_run_gets_its_own_record_not_an_overwrite(self):
+        # Confirming "run again anyway" within 7 days must create a NEW
+        # history entry, not clobber the previous run's summary.
         table = MagicMock()
-        table.get_item.return_value = {}
-        self.assertIsNone(get_scan_run_for_week(table, "acct1", "2026-W44"))
+        put_scan_run(table, "acct1", "2026-10-21T14:00:00.000000Z", status="COMPLETE")
+        first_item = table.put_item.call_args.kwargs["Item"]
+        put_scan_run(table, "acct1", "2026-10-28T09:00:00.000000Z", status="COMPLETE")
+        second_item = table.put_item.call_args.kwargs["Item"]
+        self.assertNotEqual(first_item["sk"], second_item["sk"])
+
+    def test_get_most_recent_returns_none_when_no_scan_run_yet(self):
+        table = MagicMock()
+        table.query.return_value = {"Items": []}
+        self.assertIsNone(get_most_recent_scan_run(table, "acct1"))
 
 
 class TestUpdateStatus(unittest.TestCase):

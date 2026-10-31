@@ -105,28 +105,49 @@ def put_screened_recommendation(
     return recommendation_id
 
 
-def put_scan_run(table, account_id, week_key, **fields):
-    """Upsert the one ScanRun summary item per account+week -- written
+def put_scan_run(table, account_id, scan_id, **fields):
+    """Upsert the one ScanRun summary item for this scan instance -- written
     once at scan start (status=IN_PROGRESS) and once at completion
-    (status=COMPLETE, with the final counts/cost). Not conditional --
-    try_claim_job is the race-safe gate for whether a scan runs at all;
-    this is just the human/UI-facing summary record, safely overwritten
-    by whichever single invocation actually won that claim."""
+    (status=COMPLETE, with the final counts/cost), both calls using the
+    SAME scan_id so the second write updates the first instead of
+    creating a second record.
+
+    scan_id MUST be an ISO 8601 UTC timestamp (e.g. the scan's own
+    startedAt) -- the sk is "SCANRUN#<scan_id>", and DynamoDB sorts sk
+    lexicographically, so an ISO-formatted scan_id sorts chronologically
+    for free, which is exactly what get_most_recent_scan_run relies on.
+
+    One record per scan RUN, not per week: a user can confirm "run again
+    anyway" more than once within 7 days (see the Node trigger route's
+    recency-prompt), and each confirmed run gets its own history entry
+    rather than overwriting the prior week's summary.
+    """
     now = datetime.datetime.utcnow().isoformat() + "Z"
     item = _to_decimal({
         "accountId": account_id,
-        "sk": f"SCANRUN#{week_key}",
-        "weekKey": week_key,
+        "sk": f"SCANRUN#{scan_id}",
+        "scanId": scan_id,
         "updatedAt": now,
         **fields,
     })
     table.put_item(Item=item)
-    return week_key
+    return scan_id
 
 
-def get_scan_run_for_week(table, account_id, week_key):
-    resp = table.get_item(Key={"accountId": account_id, "sk": f"SCANRUN#{week_key}"})
-    return resp.get("Item")
+def get_most_recent_scan_run(table, account_id):
+    """The single most recent ScanRun for this account, regardless of
+    which calendar week it falls in -- used for the "already scanned
+    within the last 7 days, run again anyway?" prompt (a rolling window
+    from the actual last run, not a calendar-week reset) and for
+    detecting a currently-IN_PROGRESS run. Returns None if no scan has
+    ever run for this account."""
+    resp = table.query(
+        KeyConditionExpression=Key("accountId").eq(account_id) & Key("sk").begins_with("SCANRUN#"),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    items = resp.get("Items") or []
+    return items[0] if items else None
 
 
 def get_recommendation_with_history(table, account_id, recommendation_id):

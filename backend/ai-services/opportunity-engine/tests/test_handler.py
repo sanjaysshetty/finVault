@@ -1,7 +1,10 @@
 """
 Unit tests for handler.py's orchestration -- the cost-guardrail
-restructuring added after the 2026-10-26 incident (weekly idempotency
-claim, deep-dive-top-N split, budget-gated Tower 2 submission).
+restructuring added after the 2026-10-26 incident (in-progress
+concurrency claim, deep-dive-top-N split, budget-gated Tower 2
+submission). The "already scanned within 7 days, run again anyway?"
+decision lives entirely in the Node trigger route, NOT here -- this
+handler only ever refuses to start a second CONCURRENT run.
 
 run_tower2_for_candidate itself is mocked throughout (returns canned
 (captured, cost) tuples) -- these tests verify handler()/run_tower2_pass's
@@ -27,14 +30,27 @@ def _candidate(ticker, score):
     }
 
 
-class TestWeeklyClaim(unittest.TestCase):
+class TestInProgressClaim(unittest.TestCase):
     @patch("handler.try_claim_job", return_value=False)
     @patch("handler.prefilter")
-    def test_already_scanned_bails_before_universe_fetch(self, mock_prefilter, mock_claim):
+    def test_already_running_bails_before_universe_fetch(self, mock_prefilter, mock_claim):
         result = handler.handler({"accountId": "acct1"})
 
-        self.assertEqual(result["body"]["status"], "already_scanned")
+        self.assertEqual(result["body"]["status"], "already_running")
         mock_prefilter.get_full_universe.assert_not_called()
+
+    @patch("handler.try_claim_job", return_value=False)
+    @patch("handler.prefilter")
+    def test_claim_key_has_no_week_component(self, mock_prefilter, mock_claim):
+        # Regression guard: the claim must be scoped to "is a scan
+        # running right now," not to a calendar week -- a stale week-
+        # scoped key would silently resurrect the old behavior this
+        # whole change was meant to remove.
+        handler.handler({"accountId": "acct1"})
+
+        claim_key = mock_claim.call_args.args[1]
+        self.assertEqual(claim_key, "oe-scan-running#acct1")
+        self.assertNotIn("W", claim_key)
 
     @patch("handler.recommendations_repo")
     @patch("handler.try_claim_job", return_value=True)
