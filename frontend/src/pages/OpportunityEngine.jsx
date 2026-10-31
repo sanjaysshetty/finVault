@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryKeys } from "../api/client.js";
@@ -11,12 +11,19 @@ import { DeleteConfirmModal } from "../components/ui/DeleteConfirmModal.jsx";
 /**
  * Opportunity Engine — scheduled + on-demand market scan.
  *
- * Replaces the old Wheel Scan page. Lists ranked AgentRecommendations
- * (GET /research/opportunities), lets you fire an on-demand scan
- * (POST /research/opportunities/trigger — async, minutes not seconds, so
- * this just confirms the trigger rather than waiting on a result), and
- * hands off to Deep Dive & Scenarios for anything you want to dig into
- * (?recommendationId=<id>).
+ * Replaces the old Wheel Scan page. Shows the last 10 scan runs
+ * (GET /research/opportunities/scans); selecting one loads that scan's
+ * own candidates (GET /research/opportunities/scans/{scanId}) rather
+ * than one flat all-time list -- each run's shortlist is a distinct,
+ * comparable snapshot, not one ever-growing pile. Lets you fire an
+ * on-demand scan (POST /research/opportunities/trigger — async, minutes
+ * not seconds, so this just confirms the trigger rather than waiting on
+ * a result), and hands off to Deep Dive & Scenarios for anything you
+ * want to dig into (?recommendationId=<id>).
+ *
+ * Recommendations from scans run before this feature shipped have no
+ * scanId and won't appear under any entry in the history list below --
+ * expected, not a bug (see the scan-history plan's stated caveat).
  */
 
 const STATUS_BADGE_VARIANT = {
@@ -26,6 +33,13 @@ const STATUS_BADGE_VARIANT = {
   APPROVED: "gain",
   DISMISSED: "neutral",
   EXPIRED: "neutral",
+  SCREENED_ONLY: "neutral",
+};
+
+const SCAN_STATUS_BADGE_VARIANT = {
+  IN_PROGRESS: "warning",
+  COMPLETE: "gain",
+  FAILED: "loss",
 };
 
 function formatRecDate(iso) {
@@ -35,6 +49,46 @@ function formatRecDate(iso) {
   } catch {
     return "";
   }
+}
+
+function formatScanDateTime(iso) {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function ScanHistoryRow({ scan, selected, onSelect }) {
+  const cost = scan.totalActualCostUsd != null ? `$${Number(scan.totalActualCostUsd).toFixed(2)}` : null;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(scan.scanId)}
+      className={[
+        "w-full text-left rounded-xl border px-3.5 py-3 transition-colors cursor-pointer",
+        selected
+          ? "bg-emerald-500/[0.1] border-emerald-500/30"
+          : "bg-white/[0.02] border-white/[0.06] hover:bg-white/[0.04]",
+      ].join(" ")}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-bold text-white">{formatScanDateTime(scan.startedAt)}</span>
+        <Badge variant={SCAN_STATUS_BADGE_VARIANT[scan.status] || "neutral"}>{scan.status}</Badge>
+      </div>
+      {scan.status === "COMPLETE" && (
+        <p className="text-[11px] text-slate-500 mt-1">
+          {scan.deepDivedCount ?? 0} deep-dived · {scan.screenedOnlyCount ?? 0} screened{cost ? ` · ${cost}` : ""}
+        </p>
+      )}
+      {scan.status === "FAILED" && scan.error && (
+        <p className="text-[11px] text-red-400/80 mt-1 line-clamp-1">{scan.error}</p>
+      )}
+    </button>
+  );
 }
 
 function RecommendationCard({ rec, onDeepDive }) {
@@ -92,13 +146,43 @@ export default function OpportunityEngine() {
   // modal is open -- a scan completed within the last 7 days and the
   // user hasn't yet said whether to run another one anyway.
   const [pendingConfirmation, setPendingConfirmation] = useState(null);
+  const [selectedScanId, setSelectedScanId] = useState(null);
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: queryKeys.opportunities(),
-    queryFn: () => api.get("/research/opportunities"),
+  const {
+    data: scansData,
+    isLoading: scansLoading,
+    isError: scansError,
+    refetch: refetchScans,
+  } = useQuery({
+    queryKey: queryKeys.opportunityScans(),
+    queryFn: () => api.get("/research/opportunities/scans"),
   });
 
-  const recommendations = data?.recommendations || [];
+  const scans = scansData?.scans || [];
+
+  // Default to the most recent run once the history loads, so the page
+  // doesn't open on an empty candidate panel -- but only if nothing's
+  // been explicitly selected yet, so a later refetch (e.g. after
+  // triggering a new scan) doesn't yank the user back to the top.
+  const mostRecentScanId = scans[0]?.scanId || null;
+  useEffect(() => {
+    if (!selectedScanId && mostRecentScanId) {
+      setSelectedScanId(mostRecentScanId);
+    }
+  }, [mostRecentScanId, selectedScanId]);
+
+  const {
+    data: scanDetailData,
+    isLoading: scanDetailLoading,
+    isError: scanDetailError,
+  } = useQuery({
+    queryKey: queryKeys.opportunityScanDetail(selectedScanId),
+    queryFn: () => api.get(`/research/opportunities/scans/${encodeURIComponent(selectedScanId)}`),
+    enabled: !!selectedScanId,
+  });
+
+  const recommendations = scanDetailData?.recommendations || [];
+  const selectedScan = scans.find((s) => s.scanId === selectedScanId) || null;
 
   const handleTrigger = async (force = false) => {
     setTriggering(true);
@@ -111,6 +195,7 @@ export default function OpportunityEngine() {
       }
       setPendingConfirmation(null);
       setTriggerMessage(res?.message || "Scan triggered. Check back in a few minutes.");
+      refetchScans();
     } catch (e) {
       setTriggerMessage(e?.detail?.message || "Failed to trigger scan. Please try again.");
     } finally {
@@ -161,22 +246,60 @@ export default function OpportunityEngine() {
         </div>
       )}
 
-      {isLoading && <EmptyState type="loading" message="Loading recommendations…" />}
+      {scansLoading && <EmptyState type="loading" message="Loading scan history…" />}
 
-      {isError && <EmptyState type="error" onRetry={refetch} />}
+      {scansError && <EmptyState type="error" onRetry={refetchScans} />}
 
-      {!isLoading && !isError && recommendations.length === 0 && (
+      {!scansLoading && !scansError && scans.length === 0 && (
         <EmptyState
           type="empty"
-          message="No recommendations yet. Run a scan to get ranked opportunities, or check back after the next scheduled weekly scan."
+          message="No scans yet. Run a scan to get ranked opportunities, or check back after the next scheduled weekly scan."
         />
       )}
 
-      {!isLoading && !isError && recommendations.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {recommendations.map((rec) => (
-            <RecommendationCard key={rec.recommendationId} rec={rec} onDeepDive={handleDeepDive} />
-          ))}
+      {!scansLoading && !scansError && scans.length > 0 && (
+        <div className="flex flex-col lg:flex-row gap-6">
+          <div className="lg:w-72 shrink-0 flex flex-col gap-2">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide px-1">
+              Scan history
+            </h3>
+            {scans.map((scan) => (
+              <ScanHistoryRow
+                key={scan.scanId}
+                scan={scan}
+                selected={scan.scanId === selectedScanId}
+                onSelect={setSelectedScanId}
+              />
+            ))}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            {selectedScan?.status === "IN_PROGRESS" && (
+              <EmptyState type="loading" message="This scan is still running — check back shortly." />
+            )}
+
+            {selectedScan?.status === "FAILED" && (
+              <EmptyState type="error" message={selectedScan.error || "This scan failed to complete."} />
+            )}
+
+            {selectedScan?.status === "COMPLETE" && scanDetailLoading && (
+              <EmptyState type="loading" message="Loading candidates…" />
+            )}
+
+            {selectedScan?.status === "COMPLETE" && scanDetailError && <EmptyState type="error" />}
+
+            {selectedScan?.status === "COMPLETE" && !scanDetailLoading && !scanDetailError && recommendations.length === 0 && (
+              <EmptyState type="empty" message="This scan didn't produce any candidates." />
+            )}
+
+            {selectedScan?.status === "COMPLETE" && !scanDetailLoading && !scanDetailError && recommendations.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {recommendations.map((rec) => (
+                  <RecommendationCard key={rec.recommendationId} rec={rec} onDeepDive={handleDeepDive} />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -45,9 +45,12 @@ def put_recommendation(
     rank_score,
     probability_of_profit,
     source="opportunity_engine_scan",
+    scan_id=None,
 ):
     """Writes a new recommendation header with status=NEW. Returns the
-    generated recommendationId."""
+    generated recommendationId. scan_id (the ScanRun that produced this
+    candidate) is optional -- callers outside a scan (e.g. Deep Dive's
+    standalone chat entry path) have no scan to attribute this to."""
     recommendation_id = str(uuid.uuid4())
     now = datetime.datetime.utcnow().isoformat() + "Z"
     item = _to_decimal({
@@ -56,6 +59,7 @@ def put_recommendation(
         "recommendationId": recommendation_id,
         "status": "NEW",
         "source": source,
+        **({"scanId": scan_id} if scan_id else {}),
         "ticker": ticker,
         "strategyType": strategy_type,
         "strategyDetail": strategy_detail,
@@ -80,6 +84,7 @@ def put_screened_recommendation(
     fundamentals_summary,
     note,
     source="opportunity_engine_scan",
+    scan_id=None,
 ):
     """Lightweight record for a shortlisted-but-not-deep-dived candidate --
     zero Anthropic spend, since this candidate never went through Tower 2.
@@ -94,6 +99,7 @@ def put_screened_recommendation(
         "recommendationId": recommendation_id,
         "status": "SCREENED_ONLY",
         "source": source,
+        **({"scanId": scan_id} if scan_id else {}),
         "ticker": ticker,
         "fundamentalScore": fundamental_score,
         "fundamentalsSummary": fundamentals_summary,
@@ -148,6 +154,20 @@ def get_most_recent_scan_run(table, account_id):
     )
     items = resp.get("Items") or []
     return items[0] if items else None
+
+
+def list_recent_scan_runs(table, account_id, limit=10):
+    """The last `limit` ScanRuns for this account, newest first -- backs
+    the Opportunity Engine scan-history UI (list of past runs, select one
+    to see its candidates). Unlike get_most_recent_scan_run this returns
+    every status (IN_PROGRESS/FAILED/COMPLETE), not just the latest, so a
+    failed or in-progress attempt is still visible in the history."""
+    resp = table.query(
+        KeyConditionExpression=Key("accountId").eq(account_id) & Key("sk").begins_with("SCANRUN#"),
+        ScanIndexForward=False,
+        Limit=limit,
+    )
+    return resp.get("Items") or []
 
 
 def get_recommendation_with_history(table, account_id, recommendation_id):

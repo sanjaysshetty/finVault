@@ -79,6 +79,34 @@ async function getMostRecentScanRun(accountId) {
   return (res.Items && res.Items[0]) || null;
 }
 
+/** The last `limit` ScanRuns for this account, newest first -- backs the
+ * scan-history UI (list of past runs, select one to see its candidates).
+ * Unlike getMostRecentScanRun this returns every status, not just the
+ * latest, so a failed or in-progress run is still visible in the list. */
+async function listRecentScanRuns(accountId, limit = 10) {
+  const res = await doc.send(
+    new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "accountId = :accountId AND begins_with(sk, :prefix)",
+      ExpressionAttributeValues: { ":accountId": accountId, ":prefix": "SCANRUN#" },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+  );
+  return res.Items || [];
+}
+
+/** Every recommendation (deep-dived or screened-only) produced by one
+ * specific scan. No GSI on scanId -- this table is personal-scale (one
+ * account's own scans), so filtering the already-fetched REC# items in
+ * code is simpler than adding an index for it. Recommendations from
+ * scans run before the scanId field existed won't match any scanId and
+ * are correctly excluded here, not just silently dropped. */
+async function listRecommendationsForScan(accountId, scanId) {
+  const all = await listRecommendations(accountId);
+  return all.filter((it) => it.scanId === scanId);
+}
+
 async function updateRecommendationStatus(accountId, recommendationId, status, extraFields = {}) {
   const updates = { status, updatedAt: new Date().toISOString(), ...extraFields };
   const setExprs = [];
@@ -103,8 +131,10 @@ async function updateRecommendationStatus(accountId, recommendationId, status, e
 
 module.exports = {
   listRecommendations,
+  listRecommendationsForScan,
   getRecommendationWithHistory,
   getMostRecentScanRun,
+  listRecentScanRuns,
   putRecommendation,
   updateRecommendationStatus,
 };

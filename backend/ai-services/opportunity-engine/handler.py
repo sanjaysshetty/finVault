@@ -159,7 +159,7 @@ def run_tower2_for_candidate(candidate, tower1_context, mcp_servers, cost_cap_us
     return state.get("captured_recommendation"), result.total_cost_usd
 
 
-def persist_recommendation(account_id, candidate, tower1_context, captured):
+def persist_recommendation(account_id, candidate, tower1_context, captured, scan_id):
     return recommendations_repo.put_recommendation(
         _recommendations_table,
         account_id,
@@ -175,10 +175,11 @@ def persist_recommendation(account_id, candidate, tower1_context, captured):
         rationale=f"{captured['portfolio_fit_rationale']} {captured['market_rationale']}",
         rank_score=captured["rank_score"],
         probability_of_profit=captured["probability_of_profit"],
+        scan_id=scan_id,
     )
 
 
-def persist_screened_only(account_id, candidate, note):
+def persist_screened_only(account_id, candidate, note, scan_id):
     return recommendations_repo.put_screened_recommendation(
         _recommendations_table,
         account_id,
@@ -186,10 +187,11 @@ def persist_screened_only(account_id, candidate, note):
         fundamental_score=candidate.get("_fund_score"),
         fundamentals_summary=prefilter.summarize_fundamentals(candidate),
         note=note,
+        scan_id=scan_id,
     )
 
 
-def run_tower2_pass(deep_dive_candidates, tower1_context, mcp_servers, scan_budget, account_id):
+def run_tower2_pass(deep_dive_candidates, tower1_context, mcp_servers, scan_budget, account_id, scan_id):
     """Budget-gated, bounded-concurrency Tower 2 pass. Checks remaining
     scan budget immediately before EVERY candidate kickoff, not once up
     front for the whole batch -- replacing the original "submit all N
@@ -248,7 +250,7 @@ def run_tower2_pass(deep_dive_candidates, tower1_context, mcp_servers, scan_budg
 
                 if captured:
                     try:
-                        recommendation_id = persist_recommendation(account_id, candidate, tower1_context, captured)
+                        recommendation_id = persist_recommendation(account_id, candidate, tower1_context, captured, scan_id)
                         logger.info(f"Recorded recommendation {recommendation_id} for {candidate['ticker']} (cost ${actual_cost:.4f})")
                         recorded += 1
                     except Exception as e:
@@ -259,6 +261,7 @@ def run_tower2_pass(deep_dive_candidates, tower1_context, mcp_servers, scan_budg
                         account_id, candidate,
                         note="Deep-dive run did not complete with a recommendation "
                              "(hit its cost/iteration/time ceiling, or found nothing worth recommending).",
+                        scan_id=scan_id,
                     )
                     skipped += 1
 
@@ -334,14 +337,14 @@ def handler(event, context=None):
 
     # 3. Tower 2 — budget-gated, concurrent, only for the top DEEP_DIVE_TOP_N.
     scan_budget = ScanBudget(total_budget_usd=SCAN_BUDGET_USD)
-    recorded, skipped, never_started = run_tower2_pass(deep_dive_candidates, tower1_context, mcp_servers, scan_budget, account_id)
+    recorded, skipped, never_started = run_tower2_pass(deep_dive_candidates, tower1_context, mcp_servers, scan_budget, account_id, scan_id)
 
     # 4. Everything else (below the top N, plus anything the budget ran
     # out before starting) gets a lightweight, zero-cost record.
     for candidate in screened_only_candidates:
-        persist_screened_only(account_id, candidate, note="Did not rank in the top candidates selected for deep-dive analysis.")
+        persist_screened_only(account_id, candidate, note="Did not rank in the top candidates selected for deep-dive analysis.", scan_id=scan_id)
     for candidate in never_started:
-        persist_screened_only(account_id, candidate, note="Scan budget was exhausted before this candidate's deep-dive could start.")
+        persist_screened_only(account_id, candidate, note="Scan budget was exhausted before this candidate's deep-dive could start.", scan_id=scan_id)
 
     completed_at = datetime.datetime.utcnow().isoformat() + "Z"
     recommendations_repo.put_scan_run(
