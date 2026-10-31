@@ -1418,18 +1418,20 @@ Resources:
       MemorySize: 2048
       # Forced to 0 (fully throttled) immediately after the 2026-10-26
       # incident (a single scan exhausted the entire Anthropic account
-      # credit balance), then raised to 1 on 2026-10-31 once the cost
-      # guardrails below (scan budget, per-candidate ceiling,
-      # deep-dive-top-N split) were in place. 1 does NOT change a single
-      # scan's cost or latency -- SCAN_BUDGET_USD/PER_CANDIDATE_CEILING_USD
-      # already cap that regardless of this setting, and the fan-out across
-      # candidates within one scan is a ThreadPoolExecutor inside this one
-      # invocation, not a Lambda-concurrency concern. This setting's only
-      # job is to refuse a second, genuinely simultaneous invocation (double
-      # trigger, retry storm) so worst-case spend can't multiply across
-      # overlapping runs. Raise above 1 only with a specific multi-tenant
-      # reason, not casually.
-      ReservedConcurrentExecutions: 1
+      # credit balance). Attempted to raise to 1 on 2026-10-31 once the
+      # cost guardrails below (scan budget, per-candidate ceiling,
+      # deep-dive-top-N split) were in place, but this AWS account's total
+      # Lambda concurrent-execution quota is exactly 50 and AWS enforces a
+      # hard floor of 50 UNRESERVED executions account-wide -- any nonzero
+      # reservation here pushes the account below that floor and the
+      # deploy is rejected outright. No explicit ReservedConcurrentExecutions
+      # means this function shares the default pool like every other
+      # function, instead of carving out a dedicated (and here, unobtainable)
+      # slice of it. This is an acceptable tradeoff for a single-user app --
+      # the actual protection against overlapping runs multiplying spend is
+      # the application-level try_claim_job in-progress guard in handler.py,
+      # not this setting. Revisit (go back to an explicit reservation) only
+      # after requesting an AWS quota increase above 50.
       Layers:
         - !Ref FinVaultAgentCoreLayer
         - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
@@ -1524,13 +1526,13 @@ Resources:
       Handler: handler.worker_handler
       Timeout: 300
       MemorySize: 512
-      # Forced to 0 after the 2026-10-26 Opportunity Engine cost incident,
-      # raised to 1 on 2026-10-31 (same rationale as
-      # OpportunityEngineFunction's own setting above -- 1 doesn't change a
-      # single turn's cost or latency, since DEEP_DIVE_PER_TURN_COST_CAP_USD
-      # already caps that; it only refuses a second simultaneous turn so
-      # overlapping invocations can't multiply worst-case spend).
-      ReservedConcurrentExecutions: 1
+      # Forced to 0 after the 2026-10-26 Opportunity Engine cost incident.
+      # Same account-wide 50-execution quota wall as OpportunityEngineFunction
+      # above blocks any explicit reservation here too -- see that comment.
+      # No ReservedConcurrentExecutions means this shares the default pool;
+      # protection against overlapping turns multiplying spend is the
+      # try_claim_job in-progress guard in handler.py's worker_handler, not
+      # a Lambda-level cap. Revisit after an AWS quota increase above 50.
       Layers:
         - !Ref FinVaultAgentCoreLayer
         - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
