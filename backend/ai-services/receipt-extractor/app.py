@@ -74,6 +74,7 @@ RECEIPT_TOOL_SCHEMA = {
                 "currency": {"type": ["string", "null"], "description": "e.g., USD"},
             },
             "required": ["store", "purchaseDate", "currency"],
+            "additionalProperties": False,
         },
         "lines": {
             "type": "array",
@@ -87,6 +88,7 @@ RECEIPT_TOOL_SCHEMA = {
                     "rawText": {"type": ["string", "null"]},
                 },
                 "required": ["lineId", "productCode", "productDescription", "amount", "rawText"],
+                "additionalProperties": False,
             },
         },
         "summaryLines": {
@@ -100,10 +102,12 @@ RECEIPT_TOOL_SCHEMA = {
                     "rawText": {"type": ["string", "null"]},
                 },
                 "required": ["type", "amount", "rawText"],
+                "additionalProperties": False,
             },
         },
     },
     "required": ["receipt", "lines", "summaryLines"],
+    "additionalProperties": False,
 }
 
 

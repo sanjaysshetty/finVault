@@ -78,6 +78,46 @@ jobs:
           echo "$ARNS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
+      - name: Prune on-demand DynamoDB backups older than 90 days
+        run: |
+          set -euo pipefail
+          # Time-based retention here, unlike the ECR image policy below --
+          # deliberately different strategy, not an inconsistency. A backup
+          # is a passive snapshot never actively referenced by a running
+          # resource, so there's no "CloudFormation rolled back to this one"
+          # risk the way there is for a live Lambda's container image --
+          # deleting an old backup can only foreclose a *future* restore
+          # option, never break something currently running. What actually
+          # matters is "how long might I plausibly need to notice a data
+          # problem and restore to before it" -- a time window, not a count
+          # (deploy frequency varies, so "keep last N" could mean losing a
+          # 2-week-old backup after a short burst of deploys). 90 days
+          # matches the existing precedent already used for the frontend S3
+          # bucket's noncurrent-version expiry. Table sizes here are tiny
+          # (~660KB combined across all 6 tables, confirmed directly) so
+          # this is about avoiding clutter when restoring, not storage cost.
+          # BackupCreationDateTime comes back as an ISO8601 string with a
+          # timezone offset (e.g. "2026-10-31T15:46:00.844000-05:00"), not
+          # a Unix epoch number -- confirmed directly against the real AWS
+          # CLI output, not assumed. jq can't compare that against a
+          # number, so each timestamp is normalized via `date -d` (GNU
+          # date on the ubuntu-latest runner handles the offset correctly)
+          # instead of trying to do the date math inside jq.
+          RETENTION_DAYS=90
+          CUTOFF_EPOCH=$(date -u -d "-${RETENTION_DAYS} days" +%s)
+          TABLES="finAssets StoreReceiptLedger FinAccounts FinAccountMembers FinAccountInvitesV2 PaperTrades"
+          for t in $TABLES; do
+            aws dynamodb list-backups --table-name "$t" --backup-type USER --output json \
+              | jq -r '.BackupSummaries[] | "\(.BackupArn)\t\(.BackupCreationDateTime)"' \
+              | while IFS=$'\t' read -r arn created; do
+                  CREATED_EPOCH=$(date -u -d "$created" +%s)
+                  if [ "$CREATED_EPOCH" -lt "$CUTOFF_EPOCH" ]; then
+                    echo "Deleting backup older than ${RETENTION_DAYS}d for $t: $arn (created $created)"
+                    aws dynamodb delete-backup --backup-arn "$arn"
+                  fi
+                done
+          done
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -96,11 +136,36 @@ jobs:
           sam deploy ${{ steps.env.outputs.config_env_flag }} \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
+            --resolve-image-repos \
             --parameter-overrides "${{ secrets.PARAM_OVERRIDES }}" \
             --tags \
               DeploySha=${{ steps.env.outputs.sha }} \
               DeployedBy=${{ github.actor }} \
               DeployedAt=${{ steps.env.outputs.deployed_at }}
+
+      - name: Apply ECR lifecycle policy (keep latest + 1 previous image per repo)
+        env:
+          STACK_NAME: ${{ steps.env.outputs.stack_name }}
+        run: |
+          set -euo pipefail
+          # countNumber=2 keeps the current image plus one previous one --
+          # not pure time-based expiry, deliberately. A Lambda function that
+          # goes Inactive from disuse must re-pull its current image on the
+          # next invoke; if CloudFormation ever auto-rolls a failed deploy
+          # back to the previous image while the (broken) new one is the
+          # most recently *pushed*, a time-based or keep-only-1 policy could
+          # delete the one the function is actually running on. Keeping 2
+          # covers that case. Rollback itself (backend-rollback.yml) rebuilds
+          # from source rather than reusing an old pushed image, so older
+          # images beyond this safety margin aren't needed for anything.
+          POLICY='{"rules":[{"rulePriority":1,"description":"Keep latest + 1 previous image","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":2},"action":{"type":"expire"}}]}'
+          for FN in OpportunityEngineFunction DeepDiveWorkerFunction CategorizationFunction ReceiptExtractorFunction TaxDocExtractorFunction; do
+            PHYSICAL_NAME=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" --logical-resource-id "$FN" --query "StackResources[0].PhysicalResourceId" --output text)
+            IMAGE_URI=$(aws lambda get-function --function-name "$PHYSICAL_NAME" --query "Code.ImageUri" --output text)
+            REPO_NAME=$(echo "$IMAGE_URI" | sed -E 's#^[0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/##; s#[@:].*$##')
+            echo "Applying ECR lifecycle policy to $REPO_NAME (function: $FN)"
+            aws ecr put-lifecycle-policy --repository-name "$REPO_NAME" --lifecycle-policy-text "$POLICY"
+          done
 
       - name: Record this deployment
         env:

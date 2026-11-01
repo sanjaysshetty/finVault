@@ -117,6 +117,30 @@ jobs:
           echo "$ARNS" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
+      - name: Prune on-demand DynamoDB backups older than 90 days
+        run: |
+          set -euo pipefail
+          # Same policy and rationale as backend-deploy.yml -- see that
+          # workflow's comment. Runs here too since a rollback also creates
+          # its own on-demand backup (the safety snapshot above).
+          # BackupCreationDateTime comes back as an ISO8601 string with a
+          # timezone offset, not a Unix epoch number -- see
+          # backend-deploy.yml's identical step for the full rationale.
+          RETENTION_DAYS=90
+          CUTOFF_EPOCH=$(date -u -d "-${RETENTION_DAYS} days" +%s)
+          TABLES="finAssets StoreReceiptLedger FinAccounts FinAccountMembers FinAccountInvitesV2 PaperTrades"
+          for t in $TABLES; do
+            aws dynamodb list-backups --table-name "$t" --backup-type USER --output json \
+              | jq -r '.BackupSummaries[] | "\(.BackupArn)\t\(.BackupCreationDateTime)"' \
+              | while IFS=$'\t' read -r arn created; do
+                  CREATED_EPOCH=$(date -u -d "$created" +%s)
+                  if [ "$CREATED_EPOCH" -lt "$CUTOFF_EPOCH" ]; then
+                    echo "Deleting backup older than ${RETENTION_DAYS}d for $t: $arn (created $created)"
+                    aws dynamodb delete-backup --backup-arn "$arn"
+                  fi
+                done
+          done
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -135,6 +159,7 @@ jobs:
           sam deploy ${{ steps.env.outputs.config_env_flag }} \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
+            --resolve-image-repos \
             --parameter-overrides "${{ secrets.PARAM_OVERRIDES }}" \
             --tags \
               DeploySha=${{ steps.env.outputs.sha }} \
@@ -142,6 +167,24 @@ jobs:
               DeployedAt=${{ steps.env.outputs.deployed_at }} \
               IsRollback=true \
               RolledBackFrom=${{ steps.current.outputs.sha }}
+
+      - name: Apply ECR lifecycle policy (keep latest + 1 previous image per repo)
+        env:
+          STACK_NAME: ${{ steps.env.outputs.stack_name }}
+        run: |
+          set -euo pipefail
+          # Same policy and rationale as backend-deploy.yml -- see that
+          # workflow's comment. A rollback is itself a fresh sam deploy
+          # (rebuilds the image from the target SHA's source), so this
+          # step needs to run here too, not just on normal deploys.
+          POLICY='{"rules":[{"rulePriority":1,"description":"Keep latest + 1 previous image","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":2},"action":{"type":"expire"}}]}'
+          for FN in OpportunityEngineFunction DeepDiveWorkerFunction CategorizationFunction ReceiptExtractorFunction TaxDocExtractorFunction; do
+            PHYSICAL_NAME=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" --logical-resource-id "$FN" --query "StackResources[0].PhysicalResourceId" --output text)
+            IMAGE_URI=$(aws lambda get-function --function-name "$PHYSICAL_NAME" --query "Code.ImageUri" --output text)
+            REPO_NAME=$(echo "$IMAGE_URI" | sed -E 's#^[0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/##; s#[@:].*$##')
+            echo "Applying ECR lifecycle policy to $REPO_NAME (function: $FN)"
+            aws ecr put-lifecycle-policy --repository-name "$REPO_NAME" --lifecycle-policy-text "$POLICY"
+          done
 
       - name: Record this rollback
         env:

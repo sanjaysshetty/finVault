@@ -1,0 +1,8 @@
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.venv_test
+**/.pytest_cache
+**/tests
+.aws-sam
+.git

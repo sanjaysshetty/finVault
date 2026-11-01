@@ -24,7 +24,7 @@ import logging
 import boto3
 from finvault_agent_core.agent_loop import ToolSpec
 from finvault_agent_core.recommendations_repo import put_recommendation, put_scenario_run, update_status
-from finvault_agent_core.tower2_shared import LEG_SCHEMA, build_simulate_scenario_tool
+from finvault_agent_core.tower2_shared import LEG_SCHEMA, build_get_option_chain_tool, build_simulate_scenario_tool
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,7 @@ def build_deep_dive_tools(state, recommendations_table, account_id, paper_trade_
 
     return [
         build_simulate_scenario_tool(state),
+        build_get_option_chain_tool(),
         ToolSpec(
             name="save_scenario_run",
             description=(

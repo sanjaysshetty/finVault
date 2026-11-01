@@ -15,6 +15,7 @@ mcp-client beta flag is mcp-client-2026-09-15 (see client_factory.py).
 """
 
 from .agent_loop import ToolSpec
+from .options_market_data import get_option_chain_data
 from .scenario_math import Leg, LegSide, LegType, simulate_scenario
 
 WEB_SEARCH_TOOL = {"type": "web_search_20260318", "name": "web_search"}
@@ -128,5 +129,68 @@ def build_simulate_scenario_tool(state):
         },
         fn=_simulate_scenario_fn,
         category="deterministic_compute",
+        requires_confirmation=False,
+    )
+
+
+def build_get_option_chain_tool():
+    """Real option chain data (strike, bid/ask mid price, implied
+    volatility) via yfinance — the ground-truth source for
+    simulate_scenario's underlying_price/iv inputs when considering an
+    options structure. Robinhood's market-data tools are listed in this
+    module's allowlist for when a Robinhood MCP access token exists, but
+    there is currently no supported way to obtain one for a headless
+    backend Lambda (confirmed against Robinhood's own onboarding docs —
+    scoped to interactive AI chat clients, not server-to-server use) —
+    this tool is the actual, working source today, same "never invent,
+    never guess" principle simulate_scenario already applies to the
+    probability math itself.
+
+    Calls yfinance in-process. The calling function must be packaged as
+    a container image (PackageType: Image), not a zip -- yfinance now
+    requires curl_cffi as a hard dependency (to avoid Yahoo's rate
+    limiting, confirmed live), and that stack doesn't fit Lambda's 250MB
+    zip limit alongside this layer's own anthropic/mcp dependencies
+    (confirmed directly: 287MB combined, 2026-10-31 size investigation).
+    Container images lift that to 10GB.
+
+    Raises on fetch failure — AgentLoop's own tool-error handling turns
+    that into a visible is_error result, never a silent fabricated
+    number."""
+
+    def _get_option_chain_fn(**kwargs):
+        return get_option_chain_data(
+            ticker=kwargs["ticker"],
+            expiry=kwargs["expiry"],
+            option_type=kwargs["option_type"],
+            strike_hint=kwargs.get("strike_hint"),
+        )
+
+    return ToolSpec(
+        name="get_option_chain",
+        description=(
+            "Fetch real option chain data for a ticker/expiry/option_type — "
+            "underlying price plus a liquid, near-the-money window of strikes "
+            "with bid/ask, mid price, and implied volatility. Call this before "
+            "simulate_scenario whenever you're considering an options structure "
+            "(covered call, cash-secured put, vertical spread) — you must never "
+            "invent, estimate, or recall a strike's price or implied volatility "
+            "yourself. Not needed for a straight long/short equity position."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "expiry": {"type": "string", "description": "Option expiration date, YYYY-MM-DD"},
+                "option_type": {"type": "string", "enum": ["call", "put"]},
+                "strike_hint": {
+                    "type": "number",
+                    "description": "Optional — center the returned strikes near this value instead of the current underlying price",
+                },
+            },
+            "required": ["ticker", "expiry", "option_type"],
+        },
+        fn=_get_option_chain_fn,
+        category="data_fetch",
         requires_confirmation=False,
     )

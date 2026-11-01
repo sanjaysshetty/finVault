@@ -78,7 +78,15 @@ Parameters:
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    # Runtime deliberately NOT set here -- it used to default every
+    # function to nodejs20.x, but Image-packaged functions (container
+    # images) cannot have a Runtime property at all, and SAM's Globals
+    # merge applies this default before CloudFormation would ever get a
+    # chance to resolve a `!Ref AWS::NoValue` override (confirmed
+    # directly: that override does not work here, a known open SAM gap --
+    # https://github.com/aws/serverless-application-model/issues/1874).
+    # Every Node.js zip-packaged function below sets Runtime: nodejs20.x
+    # explicitly instead.
     Timeout: 30
     MemorySize: 256
 
@@ -571,6 +579,7 @@ Resources:
   PricesFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/src/
       Handler: handler.handler
       Layers:
@@ -601,6 +610,7 @@ Resources:
   SpendingApiFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/spending-api/
       Handler: app.handler
       Timeout: 30
@@ -765,17 +775,20 @@ Resources:
   ReceiptExtractorFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: python3.11
-      CodeUri: ai-services/receipt-extractor/
-      Handler: app.handler
+      PackageType: Image
       MemorySize: 1024
       Timeout: 60
+      # Container-image packaged -- see OpportunityEngineFunction's comment
+      # for the full rationale (yfinance/curl_cffi size pressure doesn't
+      # apply here directly, but keeping all 5 AI-services Python
+      # functions on the same packaging model avoids a split zip/image
+      # maintenance burden for no benefit). No Layers property -- Lambda
+      # Layers aren't usable with container images; the shared
+      # finvault_agent_core source is copied directly into the image by
+      # the Dockerfile instead.
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt ReceiptExtractorDLQ.Arn
-      Layers:
-        - !Ref FinVaultAgentCoreLayer
-        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
       Environment:
         Variables:
           RECEIPT_LEDGER_TABLE: !Ref ReceiptLedgerV2TableName
@@ -794,6 +807,10 @@ Resources:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+    Metadata:
+      Dockerfile: ai-services/receipt-extractor/Dockerfile
+      DockerContext: .
+      DockerTag: python3.11-v1
 
   ReceiptUploadUrlFunction:
     Type: AWS::Serverless::Function
@@ -836,6 +853,7 @@ Resources:
   FrontendProxyFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/frontend-proxy/
       Handler: src/handler.handler
       Timeout: 15
@@ -933,6 +951,7 @@ Resources:
   PostConfirmationFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/post-confirmation/
       Handler: app.handler
       Timeout: 15
@@ -962,6 +981,7 @@ Resources:
   AssetsApi:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/assets-api/
       Handler: app.handler
       Layers:
@@ -1227,6 +1247,7 @@ Resources:
   LiabilitiesApi:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/liabilities/
       Handler: app.handler
       Layers:
@@ -1279,6 +1300,7 @@ Resources:
   AccountsApi:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/accounts-api/
       Handler: app.handler
       Layers:
@@ -1411,9 +1433,7 @@ Resources:
   OpportunityEngineFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: python3.11
-      CodeUri: ai-services/opportunity-engine/
-      Handler: handler.handler
+      PackageType: Image
       Timeout: 900
       MemorySize: 2048
       # Forced to 0 (fully throttled) immediately after the 2026-10-26
@@ -1432,9 +1452,15 @@ Resources:
       # the application-level try_claim_job in-progress guard in handler.py,
       # not this setting. Revisit (go back to an explicit reservation) only
       # after requesting an AWS quota increase above 50.
-      Layers:
-        - !Ref FinVaultAgentCoreLayer
-        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      #
+      # Container-image packaged, not zip -- yfinance (for get_option_chain)
+      # requires curl_cffi as a hard dependency and doesn't fit Lambda's
+      # 250MB zip limit alongside this function's own anthropic/mcp
+      # dependencies (confirmed directly: 287MB combined, 2026-10-31 size
+      # investigation). No Layers property -- Lambda Layers aren't usable
+      # with container images at all; the shared finvault_agent_core
+      # source is copied directly into the image by the Dockerfile instead
+      # (see Metadata below and that Dockerfile's own comments).
       Environment:
         Variables:
           FIN_ASSETS_TABLE: !Ref FinAssetsTableName
@@ -1462,11 +1488,16 @@ Resources:
               Resource:
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/mcp-access-token"
+    Metadata:
+      Dockerfile: ai-services/opportunity-engine/Dockerfile
+      DockerContext: .
+      DockerTag: python3.11-v1
 
   # ── Opportunity Engine Read — Node.js Lambda (serves recommendations, triggers scans) ──
   OpportunityEngineReadFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/opportunity-engine-read/
       Handler: app.handler
       Timeout: 30
@@ -1533,9 +1564,7 @@ Resources:
   DeepDiveWorkerFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: python3.11
-      CodeUri: ai-services/deep-dive/
-      Handler: handler.worker_handler
+      PackageType: Image
       Timeout: 300
       MemorySize: 512
       # Forced to 0 after the 2026-10-26 Opportunity Engine cost incident.
@@ -1545,9 +1574,11 @@ Resources:
       # protection against overlapping turns multiplying spend is the
       # try_claim_job in-progress guard in handler.py's worker_handler, not
       # a Lambda-level cap. Revisit after an AWS quota increase above 50.
-      Layers:
-        - !Ref FinVaultAgentCoreLayer
-        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      #
+      # Container-image packaged, not zip -- same reason as
+      # OpportunityEngineFunction above (get_option_chain's yfinance/
+      # curl_cffi stack doesn't fit a 250MB zip alongside anthropic/mcp).
+      # No Layers property -- see that function's comment.
       EventInvokeConfig:
         MaximumRetryAttempts: 0
       Environment:
@@ -1577,6 +1608,10 @@ Resources:
               Resource:
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/mcp-access-token"
+    Metadata:
+      Dockerfile: ai-services/deep-dive/Dockerfile
+      DockerContext: .
+      DockerTag: python3.11-v1
 
   # ── Deep Dive API — handles auth, cache lookup, async dispatch ───────────────
   # POST /research/deep-dive/chat → checks AdvisorCacheTable (reused generic
@@ -1586,6 +1621,7 @@ Resources:
   DeepDiveApiFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/deep-dive-api/
       Handler: app.handler
       Timeout: 15
@@ -1633,20 +1669,23 @@ Resources:
   CategorizationFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: python3.11
-      CodeUri: ai-services/categorization/
-      Handler: app.handler
+      PackageType: Image
       Timeout: 60
       MemorySize: 512
-      Layers:
-        - !Ref FinVaultAgentCoreLayer
-        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      # Container-image packaged -- see OpportunityEngineFunction's comment
+      # for the full rationale. No Layers property -- Lambda Layers aren't
+      # usable with container images; the shared finvault_agent_core
+      # source is copied directly into the image by the Dockerfile instead.
       Policies:
         - AWSLambdaBasicExecutionRole
         - Statement:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
+    Metadata:
+      Dockerfile: ai-services/categorization/Dockerfile
+      DockerContext: .
+      DockerTag: python3.11-v1
 
   # ── Paper Trade API ───────────────────────────────────────────────────────
   # Fully internal paper trading engine — no broker integration.
@@ -1656,6 +1695,7 @@ Resources:
   PaperTradeApi:
     Type: AWS::Serverless::Function
     Properties:
+      Runtime: nodejs20.x
       CodeUri: crud/paper-trade-api/
       Handler: app.handler
       Timeout: 60
@@ -1966,14 +2006,14 @@ Resources:
   TaxDocExtractorFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: ai-services/tax-return-extractor/
-      Handler: app.handler
-      Runtime: python3.11
+      PackageType: Image
       Timeout: 60
       MemorySize: 1024
-      Layers:
-        - !Ref FinVaultAgentCoreLayer
-        - !Sub '{{resolve:ssm:/aws/service/aws-parameters-and-secrets-lambda-extension/x86/latest}}'
+      # Container-image packaged -- see OpportunityEngineFunction's comment
+      # for the full rationale. No Layers property -- Lambda Layers aren't
+      # usable with container images; the shared finvault_agent_core
+      # source and this function's own Pillow dependency are copied
+      # directly into the image by the Dockerfile instead.
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt TaxDocExtractorDLQ.Arn
@@ -2012,6 +2052,10 @@ Resources:
       # SAM's Type:S3 event on a same-stack bucket creates a circular dependency
       # (Lambda policy → !Ref Bucket, Bucket notification → Lambda Arn → circular).
       # Instead: explicit Lambda::Permission + DependsOn + NotificationConfiguration.
+    Metadata:
+      Dockerfile: ai-services/tax-return-extractor/Dockerfile
+      DockerContext: .
+      DockerTag: python3.11-v1
 
   # Allow S3 to invoke the extractor. SourceArn uses !Sub (not !GetAtt TaxDocsBucket.Arn)
   # so this permission has no CloudFormation dep on TaxDocsBucket.
