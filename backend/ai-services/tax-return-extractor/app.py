@@ -176,7 +176,12 @@ def extract_with_claude(file_bytes, mime_type, doc_type, schema):
         if is_pdf
         else {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}}
     )
-    input_schema = {"type": "object", "properties": schema["fields"], "required": schema["required"]}
+    input_schema = {
+        "type": "object",
+        "properties": schema["fields"],
+        "required": schema["required"],
+        "additionalProperties": False,
+    }
     user_message = [
         media_block,
         {

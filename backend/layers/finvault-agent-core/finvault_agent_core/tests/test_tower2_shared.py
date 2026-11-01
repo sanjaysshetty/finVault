@@ -1,15 +1,18 @@
 """
 Unit tests for tower2_shared.py — the Robinhood allowlist/config and
-simulate_scenario tool builder shared by Opportunity Engine and Deep Dive.
+simulate_scenario/get_option_chain tool builders shared by Opportunity
+Engine and Deep Dive.
 
 Run with: python3 -m unittest finvault_agent_core.tests.test_tower2_shared -v
 (from backend/layers/finvault-agent-core/)
 """
 
 import unittest
+from unittest.mock import patch
 
 from finvault_agent_core.tower2_shared import (
     TOWER2_ROBINHOOD_ALLOWED_TOOLS,
+    build_get_option_chain_tool,
     build_robinhood_mcp_server_config,
     build_simulate_scenario_tool,
 )
@@ -63,6 +66,33 @@ class TestBuildSimulateScenarioTool(unittest.TestCase):
         )
         self.assertIn("last_scenario_result", state_a)
         self.assertNotIn("last_scenario_result", state_b)
+
+
+class TestBuildGetOptionChainTool(unittest.TestCase):
+    def test_tool_metadata(self):
+        tool = build_get_option_chain_tool()
+        self.assertEqual(tool.name, "get_option_chain")
+        self.assertEqual(tool.category, "data_fetch")
+        self.assertFalse(tool.requires_confirmation)
+
+    @patch("finvault_agent_core.tower2_shared.get_option_chain_data")
+    def test_fn_forwards_kwargs_to_get_option_chain_data(self, mock_get):
+        mock_get.return_value = {"underlying_price": 100.0, "expiry": "2026-12-18", "contracts": []}
+        tool = build_get_option_chain_tool()
+
+        result = tool.fn(ticker="AAPL", expiry="2026-12-18", option_type="call", strike_hint=150)
+
+        mock_get.assert_called_once_with(ticker="AAPL", expiry="2026-12-18", option_type="call", strike_hint=150)
+        self.assertEqual(result["underlying_price"], 100.0)
+
+    @patch("finvault_agent_core.tower2_shared.get_option_chain_data")
+    def test_strike_hint_defaults_to_none_when_omitted(self, mock_get):
+        mock_get.return_value = {"underlying_price": 100.0, "expiry": "2026-12-18", "contracts": []}
+        tool = build_get_option_chain_tool()
+
+        tool.fn(ticker="AAPL", expiry="2026-12-18", option_type="put")
+
+        mock_get.assert_called_once_with(ticker="AAPL", expiry="2026-12-18", option_type="put", strike_hint=None)
 
 
 if __name__ == "__main__":

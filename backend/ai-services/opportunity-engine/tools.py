@@ -16,6 +16,7 @@ from finvault_agent_core.tower2_shared import (
     ROBINHOOD_MCP_URL,
     TOWER2_ROBINHOOD_ALLOWED_TOOLS,
     WEB_SEARCH_TOOL,
+    build_get_option_chain_tool,
     build_robinhood_mcp_server_config,
     build_simulate_scenario_tool,
 )
@@ -62,6 +63,7 @@ def build_tower2_tools(state):
     capture mechanism."""
     return [
         build_simulate_scenario_tool(state),
+        build_get_option_chain_tool(),
         ToolSpec(
             name="write_ranked_recommendation",
             description=(

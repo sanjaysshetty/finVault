@@ -1,6 +1,20 @@
 # deep-dive dependencies.
 # boto3, anthropic, and mcp are all provided via the finvault-agent-core
-# Lambda layer -- this function has no direct dependencies of its own
-# (unlike Opportunity Engine, it doesn't do its own yfinance-based
-# universe prefiltering; all market data comes from Robinhood MCP tools
-# via Tower 2's native connector).
+# shared source (copied directly into this function's own container
+# image at build time -- see Dockerfile; Lambda Layers aren't usable
+# with container-image functions at all, so this is no longer a Layer
+# attachment).
+#
+# yfinance/pandas/numpy/lxml are required for the shared
+# finvault_agent_core.options_market_data module's get_option_chain tool
+# (real option chain/IV data -- Robinhood MCP's market-data tools are
+# unusable here since there's no supported way for a headless backend
+# Lambda to obtain a Robinhood MCP access token; see that module's
+# docstring). Pinned to the same versions as Opportunity Engine's own
+# requirements.txt, the one other consumer of this module, so both
+# surfaces behave identically against the same yfinance release.
+yfinance>=0.2.40
+pandas==2.2.3
+numpy==1.26.4
+lxml>=4.9.0
+requests>=2.31.0

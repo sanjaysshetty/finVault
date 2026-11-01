@@ -64,13 +64,15 @@ OUTPUT_SCHEMA = {
                 "properties": {
                     "index": {"type": "integer", "description": "0-based index matching the input item's position"},
                     "category": {"type": "string", "enum": CATEGORIES},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "confidence": {"type": "number", "description": "Between 0 and 1"},
                 },
                 "required": ["index", "category", "confidence"],
+                "additionalProperties": False,
             },
         },
     },
     "required": ["categorizations"],
+    "additionalProperties": False,
 }
 
 
