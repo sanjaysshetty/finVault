@@ -115,13 +115,6 @@ export const queryKeys = {
   members:   (accountId) => ["accounts", accountId, "members"],
   invites:   (accountId) => ["accounts", accountId, "invites"],
 
-  // Opportunity Engine — replaces the old Wheel Scan keys (page + backend
-  // both removed in the agentic rebuild)
-  opportunities:      ()       => ["opportunities"],
-  opportunityDetail:  (recId)  => ["opportunities", recId],
-  opportunityScans:   ()       => ["opportunities", "scans"],
-  opportunityScanDetail: (scanId) => ["opportunities", "scans", scanId],
-
   // Budget & Goals
   budgetDefinition: (year, month) =>
     month != null ? ["budget", "definition", year, month] : ["budget", "definition", year],

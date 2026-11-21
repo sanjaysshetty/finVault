@@ -178,7 +178,7 @@ jobs:
           # (rebuilds the image from the target SHA's source), so this
           # step needs to run here too, not just on normal deploys.
           POLICY='{"rules":[{"rulePriority":1,"description":"Keep latest + 1 previous image","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":2},"action":{"type":"expire"}}]}'
-          for FN in OpportunityEngineFunction DeepDiveWorkerFunction CategorizationFunction ReceiptExtractorFunction TaxDocExtractorFunction; do
+          for FN in CategorizationFunction ReceiptExtractorFunction TaxDocExtractorFunction; do
             PHYSICAL_NAME=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" --logical-resource-id "$FN" --query "StackResources[0].PhysicalResourceId" --output text)
             IMAGE_URI=$(aws lambda get-function --function-name "$PHYSICAL_NAME" --query "Code.ImageUri" --output text)
             REPO_NAME=$(echo "$IMAGE_URI" | sed -E 's#^[0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/##; s#[@:].*$##')

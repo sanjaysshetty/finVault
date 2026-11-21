@@ -131,7 +131,7 @@ SCHEMAS = {
 
 def _to_decimal(obj):
     """Local copy, same deliberate duplication precedent as
-    recommendations_repo.py/job_cache.py/receipt-extractor's own copies."""
+    receipt-extractor's own copy."""
     if isinstance(obj, float):
         return Decimal(str(obj))
     if isinstance(obj, dict):

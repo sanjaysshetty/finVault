@@ -75,8 +75,7 @@ def redact_image_pii(image_bytes, mime_type, textract_client=None):
 
     Never raises -- any failure (unsupported format, Textract error,
     missing Pillow) logs a warning and returns the ORIGINAL bytes
-    unmodified, the same degrade-gracefully posture used elsewhere in
-    this codebase (e.g. tower1's Robinhood-unavailable fallback). This is
+    unmodified, a deliberate degrade-gracefully posture. This is
     defense-in-depth, not the only control -- schema minimization and
     post-extraction output redaction both still apply regardless of
     whether this step actually finds or redacts anything.

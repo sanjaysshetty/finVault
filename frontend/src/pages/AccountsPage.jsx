@@ -451,7 +451,7 @@ function InvestorProfilePanel({ account }) {
     <div>
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs font-bold uppercase tracking-wide text-slate-600">Investor Profile</p>
-        <p className="text-[11px] text-slate-600">Context for the Opportunity Engine &amp; Deep Dive — never used to size positions</p>
+        <p className="text-[11px] text-slate-600">For your reference only — never used to size positions</p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         <div>
