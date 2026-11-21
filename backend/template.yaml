@@ -775,6 +775,40 @@ Resources:
   ReceiptExtractorFunction:
     Type: AWS::Serverless::Function
     Properties:
+      # Explicit, stable name -- required because its S3 trigger is NOT
+      # managed by this template at all. ReceiptsBucketName is a
+      # pre-existing bucket (not an AWS::S3::Bucket resource in this
+      # stack), so there's nothing here to attach a NotificationConfiguration
+      # to the way TaxDocsBucket does for TaxDocExtractorFunction below --
+      # the S3 trigger + its Lambda::Permission are wired out-of-band via
+      # the AWS CLI instead. Without an explicit name, SAM lets
+      # CloudFormation auto-generate a random suffix that changes on
+      # every replacement (e.g. a future PackageType change), silently
+      # breaking that out-of-band wiring with no deploy-time warning --
+      # confirmed as the root cause of a real incident (2026-11-21:
+      # receipt uploads stopped processing because the bucket's
+      # notification config still pointed at a deleted prior function
+      # ARN, and the current function had no S3 invoke permission at
+      # all). Pinning the name here stops it from drifting on unrelated
+      # deploys; it still changes if FunctionName itself is edited, or if
+      # some other property forces replacement, so this is "stable by
+      # default," not "immune."
+      #
+      # One-time setup required after EVERY replacement of this function
+      # (new deploy to a stack that doesn't have this function yet, or a
+      # deliberate FunctionName change) -- re-run both commands against
+      # the current ReceiptsBucketName / stack's account:
+      #   aws lambda add-permission \
+      #     --function-name ReceiptExtractor-<StackName> \
+      #     --statement-id s3-receipts-trigger \
+      #     --action lambda:InvokeFunction \
+      #     --principal s3.amazonaws.com \
+      #     --source-arn arn:aws:s3:::<ReceiptsBucketName> \
+      #     --source-account <AccountId>
+      #   aws s3api put-bucket-notification-configuration \
+      #     --bucket <ReceiptsBucketName> \
+      #     --notification-configuration '{"LambdaFunctionConfigurations":[{"Id":"receipt-upload-trigger","LambdaFunctionArn":"arn:aws:lambda:<region>:<AccountId>:function:ReceiptExtractor-<StackName>","Events":["s3:ObjectCreated:*"],"Filter":{"Key":{"FilterRules":[{"Name":"Prefix","Value":"<ReceiptsPrefix>"}]}}}]}'
+      FunctionName: !Sub "ReceiptExtractor-${AWS::StackName}"
       PackageType: Image
       MemorySize: 1024
       Timeout: 60
