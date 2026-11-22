@@ -112,9 +112,9 @@ RECEIPT_TOOL_SCHEMA = {
 
 
 def _to_decimal(obj):
-    """boto3's DynamoDB resource API rejects native floats. Local copy, not
-    shared with recommendations_repo.py's/job_cache.py's own copies --
-    small, deliberate duplication to avoid cross-module coupling."""
+    """boto3's DynamoDB resource API rejects native floats. Local copy,
+    deliberately duplicated rather than shared, to avoid cross-module
+    coupling."""
     if isinstance(obj, float):
         return Decimal(str(obj))
     if isinstance(obj, dict):

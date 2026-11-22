@@ -3,11 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: FinVault API (Prices + Spending + Receipt Processing + Curation + Analytics Export)
 
 Parameters:
-  OpportunityEngineAccountId:
-    Type: String
-    Default: ""
-    Description: userId (= accountId) whose account receives the weekly scheduled Opportunity Engine scan
-
   # Existing buckets (NOT created by this stack)
   # No Default — real bucket/table/domain names are resource-identifying info,
   # supplied only via a local, gitignored parameter-overrides file (see CLAUDE.md).
@@ -376,26 +371,6 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # ── Advisor Response Cache ─────────────────────────────────────────────────
-  # Short-lived DDB table (TTL 30 min) — stores Claude raw HTML reply keyed by
-  # SHA-256(request). Allows frontend to recover the reply on render error without
-  # re-invoking the Anthropic API. DeletionPolicy: Delete — ephemeral data only.
-  AdvisorCacheTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Delete
-    Properties:
-      TableName: !Sub "AdvisorCache-${AWS::StackName}"
-      BillingMode: PAY_PER_REQUEST
-      TimeToLiveSpecification:
-        AttributeName: expiresAt
-        Enabled: true
-      AttributeDefinitions:
-        - AttributeName: cacheKey
-          AttributeType: S
-      KeySchema:
-        - AttributeName: cacheKey
-          KeyType: HASH
-
   # ── Paper Trading ──────────────────────────────────────────────────────────
   # PaperTradesTable: stores all paper trade records (staged, submitted, filled, etc.)
   # Intentionally separate from any future LiveTradesTable — different table, different Lambda,
@@ -432,62 +407,6 @@ Resources:
         - IndexName: ModeStatusIndex
           KeySchema:
             - AttributeName: modeStatus
-              KeyType: HASH
-            - AttributeName: createdAt
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
-
-  # AgentRecommendationsTable: Opportunity Engine / Deep Dive recommendations
-  # and their scenario-run history (Part 5/6 agentic rebuild).
-  # Not a fit for the single-table finAssets pattern — this is a
-  # status-lifecycle entity with sub-record history, modeled like
-  # PaperTradesTable above rather than a transaction ledger.
-  #
-  # Key design:
-  #   PK = accountId
-  #   SK = "REC#<recId>"                 — recommendation header
-  #      | "REC#<recId>#SCENARIO#<ts>"    — one item per scenario run
-  #   Query(begins_with(sk, "REC#<recId>")) returns the header + full
-  #   scenario-run history in one call.
-  #
-  # StatusIndex GSI exists for the weekly calibration job, which needs a
-  # cross-account scan of resolved (APPROVED/EXPIRED) recommendations.
-  #
-  # ttl is set only on DISMISSED items (~90-day auto-cleanup) — APPROVED and
-  # EXPIRED items are never given a ttl, since they're the calibration
-  # ground-truth dataset and auto-deleting them would silently break the
-  # only mechanism for checking whether stated probabilities were honest.
-  AgentRecommendationsTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TableName: AgentRecommendations
-      BillingMode: PAY_PER_REQUEST
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-      AttributeDefinitions:
-        - AttributeName: accountId
-          AttributeType: S
-        - AttributeName: sk
-          AttributeType: S
-        - AttributeName: status
-          AttributeType: S
-        - AttributeName: createdAt
-          AttributeType: S
-      KeySchema:
-        - AttributeName: accountId
-          KeyType: HASH
-        - AttributeName: sk
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: StatusIndex
-          KeySchema:
-            - AttributeName: status
               KeyType: HASH
             - AttributeName: createdAt
               KeyType: RANGE
@@ -553,14 +472,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      LifecycleConfiguration:
-        Rules:
-          - Id: archive-asset-hub-reports
-            Status: Enabled
-            Prefix: AssetHubReports/
-            Transitions:
-              - TransitionInDays: 7
-                StorageClass: GLACIER
 
   # Private bucket for daily stocks holdings snapshot.
   # Access via: aws s3 cp s3://<bucket>/stocks-snapshot.json - --profile finvault-dev
@@ -812,14 +723,14 @@ Resources:
       PackageType: Image
       MemorySize: 1024
       Timeout: 60
-      # Container-image packaged -- see OpportunityEngineFunction's comment
-      # for the full rationale (yfinance/curl_cffi size pressure doesn't
-      # apply here directly, but keeping all 5 AI-services Python
-      # functions on the same packaging model avoids a split zip/image
-      # maintenance burden for no benefit). No Layers property -- Lambda
-      # Layers aren't usable with container images; the shared
-      # finvault_agent_core source is copied directly into the image by
-      # the Dockerfile instead.
+      # Container-image packaged, not zip -- originally to match
+      # Opportunity Engine/Deep Dive's yfinance/curl_cffi size pressure
+      # (both since removed), kept for this function too so the 3
+      # remaining AI-services Python functions share one packaging model
+      # instead of splitting zip/image maintenance for no benefit. No
+      # Layers property -- Lambda Layers aren't usable with container
+      # images; the shared finvault_agent_core source is copied directly
+      # into the image by the Dockerfile instead.
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt ReceiptExtractorDLQ.Arn
@@ -938,22 +849,10 @@ Resources:
     Metadata:
       BuildMethod: nodejs20.x
 
-  FinVaultAgentCoreLayer:
-    Type: AWS::Serverless::LayerVersion
-    Properties:
-      LayerName: !Sub "finvault-agent-core-${AWS::StackName}"
-      Description: Shared Python utilities for FinVault AI Lambdas (secrets access, agent harness)
-      ContentUri: layers/finvault-agent-core/
-      CompatibleRuntimes:
-        - python3.11
-      RetentionPolicy: Retain
-    Metadata:
-      BuildMethod: python3.11
-
   # No automatic trigger (manual invoke only) -- its DailyCuration ScheduleV2
   # was removed 2026-10-26 after an unattended run of a different AI service
-  # (Opportunity Engine) burned through the Anthropic account's credit
-  # balance in a single invocation. No scheduled runs for any AI-calling
+  # (the now-removed Opportunity Engine) burned through the Anthropic
+  # account's credit balance in a single invocation. No scheduled runs for any AI-calling
   # Lambda (this one invokes CategorizationFunction) until cost guardrails
   # are in place and verified. Re-add the schedule deliberately, not as a
   # side effect of an unrelated template change.
@@ -1449,250 +1348,6 @@ Resources:
             Path: /assets/options/marks
             Method: POST
 
-  # ── Opportunity Engine — Part 5/6 agentic rebuild ──────────────────────────
-  # Pipeline: deterministic prefilter (relocated from wheel-scan/tools.py,
-  # strategy-agnostic) -> Tower 1 (portfolio/risk context) -> Tower 2
-  # (AgentLoop ranking pass per shortlisted candidate, concurrent) ->
-  # AgentRecommendationsTable.
-  #
-  # No automatic trigger -- its WeeklyOpportunityScan ScheduleV2 was removed
-  # 2026-10-26 after a single manually-triggered run burned through the
-  # Anthropic account's entire credit balance (25 concurrent Tower 2 passes,
-  # each up to its 200k-token-per-run ceiling, web_search-heavy since
-  # Robinhood MCP wasn't authorized yet). No scheduled runs for any
-  # AI-calling Lambda until a scan-level cost cap and a much lower
-  # per-candidate token ceiling are in place and verified. Re-add the
-  # schedule deliberately, not as a side effect of an unrelated template
-  # change.
-  OpportunityEngineFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      PackageType: Image
-      Timeout: 900
-      MemorySize: 2048
-      # Forced to 0 (fully throttled) immediately after the 2026-10-26
-      # incident (a single scan exhausted the entire Anthropic account
-      # credit balance). Attempted to raise to 1 on 2026-10-31 once the
-      # cost guardrails below (scan budget, per-candidate ceiling,
-      # deep-dive-top-N split) were in place, but this AWS account's total
-      # Lambda concurrent-execution quota is exactly 50 and AWS enforces a
-      # hard floor of 50 UNRESERVED executions account-wide -- any nonzero
-      # reservation here pushes the account below that floor and the
-      # deploy is rejected outright. No explicit ReservedConcurrentExecutions
-      # means this function shares the default pool like every other
-      # function, instead of carving out a dedicated (and here, unobtainable)
-      # slice of it. This is an acceptable tradeoff for a single-user app --
-      # the actual protection against overlapping runs multiplying spend is
-      # the application-level try_claim_job in-progress guard in handler.py,
-      # not this setting. Revisit (go back to an explicit reservation) only
-      # after requesting an AWS quota increase above 50.
-      #
-      # Container-image packaged, not zip -- yfinance (for get_option_chain)
-      # requires curl_cffi as a hard dependency and doesn't fit Lambda's
-      # 250MB zip limit alongside this function's own anthropic/mcp
-      # dependencies (confirmed directly: 287MB combined, 2026-10-31 size
-      # investigation). No Layers property -- Lambda Layers aren't usable
-      # with container images at all; the shared finvault_agent_core
-      # source is copied directly into the image by the Dockerfile instead
-      # (see Metadata below and that Dockerfile's own comments).
-      Environment:
-        Variables:
-          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
-          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
-          AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
-          OPPORTUNITY_ENGINE_ACCOUNT_ID: !Ref OpportunityEngineAccountId
-          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
-          OPPORTUNITY_ENGINE_SCAN_BUDGET_USD: "0.20"
-          OPPORTUNITY_ENGINE_PER_CANDIDATE_CEILING_USD: "0.10"
-          OPPORTUNITY_ENGINE_DEEP_DIVE_TOP_N: "5"
-          OPPORTUNITY_ENGINE_MIN_VIABLE_CANDIDATE_BUDGET_USD: "0.02"
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AgentRecommendationsTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAssetsTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAccountsTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AdvisorCacheTable
-        - Statement:
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource:
-                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
-                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/mcp-access-token"
-    Metadata:
-      Dockerfile: ai-services/opportunity-engine/Dockerfile
-      DockerContext: .
-      DockerTag: python3.11-v1
-
-  # ── Opportunity Engine Read — Node.js Lambda (serves recommendations, triggers scans) ──
-  OpportunityEngineReadFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Runtime: nodejs20.x
-      CodeUri: crud/opportunity-engine-read/
-      Handler: app.handler
-      Timeout: 30
-      MemorySize: 256
-      Layers:
-        - !Ref FinVaultSharedLayer
-      Environment:
-        Variables:
-          AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
-          OPPORTUNITY_ENGINE_FUNCTION: !GetAtt OpportunityEngineFunction.Arn
-          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
-          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
-          NODE_PATH: /opt/nodejs
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - DynamoDBReadPolicy:
-            TableName: !Ref AgentRecommendationsTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAccountMembersTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAccountsTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - lambda:InvokeFunction
-              Resource: !GetAtt OpportunityEngineFunction.Arn
-      Events:
-        OpportunityEngineList:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref MetalsHttpApi
-            Path: /research/opportunities
-            Method: GET
-        OpportunityEngineTrigger:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref MetalsHttpApi
-            Path: /research/opportunities/trigger
-            Method: POST
-        OpportunityEngineScans:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref MetalsHttpApi
-            Path: /research/opportunities/scans
-            Method: GET
-        OpportunityEngineScanById:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref MetalsHttpApi
-            Path: /research/opportunities/scans/{scanId}
-            Method: GET
-        OpportunityEngineById:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref MetalsHttpApi
-            Path: /research/opportunities/{recommendationId}
-            Method: GET
-
-  # ── Deep Dive Worker — the actual AgentLoop work, Part 5/6 agentic rebuild ────
-  # Invoked as InvocationType: Event (fire-and-forget) by DeepDiveApi.
-  # MaximumRetryAttempts: 0 + try_claim_job's in-progress marker together close
-  # the idempotency gap AdvisorWorkerFunction has today (no guard at all) --
-  # the plan's explicit "fix as part of this port, not after" requirement.
-  DeepDiveWorkerFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      PackageType: Image
-      Timeout: 300
-      MemorySize: 512
-      # Forced to 0 after the 2026-10-26 Opportunity Engine cost incident.
-      # Same account-wide 50-execution quota wall as OpportunityEngineFunction
-      # above blocks any explicit reservation here too -- see that comment.
-      # No ReservedConcurrentExecutions means this shares the default pool;
-      # protection against overlapping turns multiplying spend is the
-      # try_claim_job in-progress guard in handler.py's worker_handler, not
-      # a Lambda-level cap. Revisit after an AWS quota increase above 50.
-      #
-      # Container-image packaged, not zip -- same reason as
-      # OpportunityEngineFunction above (get_option_chain's yfinance/
-      # curl_cffi stack doesn't fit a 250MB zip alongside anthropic/mcp).
-      # No Layers property -- see that function's comment.
-      EventInvokeConfig:
-        MaximumRetryAttempts: 0
-      Environment:
-        Variables:
-          FIN_ASSETS_TABLE: !Ref FinAssetsTableName
-          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
-          AGENT_RECOMMENDATIONS_TABLE: !Ref AgentRecommendationsTable
-          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
-          PAPER_TRADE_API_FUNCTION: !GetAtt PaperTradeApi.Arn
-          DEEP_DIVE_PER_TURN_COST_CAP_USD: "0.10"
-          DEEP_DIVE_MAX_WEB_SEARCHES_PER_TURN: "3"
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAssetsTableName
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAccountsTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AgentRecommendationsTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AdvisorCacheTable
-        - LambdaInvokePolicy:
-            FunctionName: !Ref PaperTradeApi
-        - Statement:
-            - Effect: Allow
-              Action: ssm:GetParameter
-              Resource:
-                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/anthropic/api-key"
-                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/finvault/robinhood/mcp-access-token"
-    Metadata:
-      Dockerfile: ai-services/deep-dive/Dockerfile
-      DockerContext: .
-      DockerTag: python3.11-v1
-
-  # ── Deep Dive API — handles auth, cache lookup, async dispatch ───────────────
-  # POST /research/deep-dive/chat → checks AdvisorCacheTable (reused generic
-  #   job-result cache, not a new table); on miss fires DeepDiveWorkerFunction
-  #   async and returns 202 { jobId, status: "pending" }.
-  # GET  /research/deep-dive/result/:cacheKey → poll; 404 = still pending.
-  DeepDiveApiFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      Runtime: nodejs20.x
-      CodeUri: crud/deep-dive-api/
-      Handler: app.handler
-      Timeout: 15
-      MemorySize: 256
-      Layers:
-        - !Ref FinVaultSharedLayer
-      Environment:
-        Variables:
-          DEEP_DIVE_WORKER_FUNCTION: !GetAtt DeepDiveWorkerFunction.Arn
-          ADVISOR_CACHE_TABLE: !Ref AdvisorCacheTable
-          FIN_ACCOUNT_MEMBERS_TABLE: !Ref FinAccountMembersTable
-          FIN_ACCOUNTS_TABLE: !Ref FinAccountsTable
-          NODE_PATH: /opt/nodejs
-      Policies:
-        - AWSLambdaBasicExecutionRole
-        - DynamoDBReadPolicy:
-            TableName: !Ref AdvisorCacheTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAccountMembersTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref FinAccountsTable
-        - LambdaInvokePolicy:
-            FunctionName: !Ref DeepDiveWorkerFunction
-      Events:
-        DeepDiveChat:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref MetalsHttpApi
-            Path: /research/deep-dive/chat
-            Method: POST
-        DeepDiveResult:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref MetalsHttpApi
-            Path: /research/deep-dive/result/{cacheKey}
-            Method: GET
-
   # ── Categorization — the one shared categorization service (Part 7 step 9) ──
   # Direct-invoke only, no API Gateway route. Consolidates 3 independently
   # drifted taxonomies (category-curator's batch job, spending-api's on-demand
@@ -1706,7 +1361,7 @@ Resources:
       PackageType: Image
       Timeout: 60
       MemorySize: 512
-      # Container-image packaged -- see OpportunityEngineFunction's comment
+      # Container-image packaged -- see ReceiptExtractorFunction's comment
       # for the full rationale. No Layers property -- Lambda Layers aren't
       # usable with container images; the shared finvault_agent_core
       # source is copied directly into the image by the Dockerfile instead.
@@ -2043,7 +1698,7 @@ Resources:
       PackageType: Image
       Timeout: 60
       MemorySize: 1024
-      # Container-image packaged -- see OpportunityEngineFunction's comment
+      # Container-image packaged -- see ReceiptExtractorFunction's comment
       # for the full rationale. No Layers property -- Lambda Layers aren't
       # usable with container images; the shared finvault_agent_core
       # source and this function's own Pillow dependency are copied

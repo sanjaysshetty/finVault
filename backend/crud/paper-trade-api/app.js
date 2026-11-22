@@ -19,13 +19,6 @@
  *   GET    /paper-trade/orders          → order history
  *   POST   /paper-trade/status/{id}     → manually check fill on a SUBMITTED order
  *   EventBridge schedule (every 15 min) → auto-fill all SUBMITTED limit orders
- *   Direct Lambda invoke (event.source === "deep-dive-approval") → stage an
- *     order from Deep Dive's approve_scenario tool. No JWT exists on a
- *     backend-to-backend invoke, so this path trusts event.accountId
- *     directly rather than going through resolveContext — safe because
- *     IAM already restricts the only caller (DeepDiveWorkerFunction's
- *     execution role) to this one Lambda's ARN; this isn't reachable from
- *     the public API Gateway route at all.
  *
  * Fill logic:
  *   Market order → fills at current BS / stock price on submission
@@ -608,16 +601,6 @@ async function handleAutoFill() {
 exports.handler = async (event) => {
   // EventBridge scheduled trigger
   if (event.source === "aws.events") return handleAutoFill();
-
-  // Direct Lambda invoke from Deep Dive's approve_scenario tool — no JWT
-  // exists on a backend-to-backend invoke, so this trusts event.accountId
-  // directly. Not reachable via API Gateway; only DeepDiveWorkerFunction's
-  // execution role has lambda:InvokeFunction on this function's ARN.
-  if (event.source === "deep-dive-approval") {
-    if (!event.accountId) return { ok: false, error: "accountId is required" };
-    const result = await handleStageOrder(event.accountId, event.body);
-    return { ok: result.statusCode === 201, statusCode: result.statusCode, body: JSON.parse(result.body) };
-  }
 
   const method  = (event.requestContext?.http?.method || "GET").toUpperCase();
   const rawPath = event.rawPath || event.path || "/";

@@ -17,8 +17,6 @@ import Liabilities from "./pages/Liabilities";
 import Insurance from "./pages/Insurance";
 
 import AccountsPage from "./pages/AccountsPage";
-import OpportunityEngine from "./pages/OpportunityEngine";
-import DeepDiveScenarios from "./pages/DeepDive/DeepDiveScenarios";
 import BudgetPage from "./pages/Budget/BudgetPage";
 import CapitalGains from "./pages/CapitalGains";
 import TaxReturn from "./pages/TaxReturn/TaxReturn";
@@ -85,10 +83,6 @@ export default function App() {
           {/* Spending */}
           <Route path="/spending/dashboard" element={<SpendingDash />} />
           <Route path="/spending/receipts-ledger" element={<Spending />} />
-
-          {/* Agentic Center */}
-          <Route path="/research/opportunities" element={<OpportunityEngine />} />
-          <Route path="/research/deep-dive" element={<DeepDiveScenarios />} />
 
           {/* Budget & Goals */}
           <Route path="/budget/overview" element={<BudgetPage />} />

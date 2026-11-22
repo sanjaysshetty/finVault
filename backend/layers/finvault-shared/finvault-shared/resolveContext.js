@@ -33,14 +33,6 @@ const ALL_PAGES_WRITE = {
   insurance:         "write",
   spendingDashboard: "write",
   receiptsLedger:    "write",
-  // Replaces wheelScan/assetHub/advisor/paperTrading — see the Part 5/6
-  // agentic rebuild plan. Paper Trading has no page anymore; its backend
-  // (wheel-scan-read, paper-trade-api, advisor-api) keeps its own existing
-  // page-key checks unchanged until each is actually rewired/retired in a
-  // later migration phase — this object only governs newly-bootstrapped
-  // members' default grants, not those Lambdas' authorization.
-  opportunityEngine: "write",
-  deepDive:          "write",
 };
 
 /**

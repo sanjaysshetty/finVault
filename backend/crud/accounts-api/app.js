@@ -53,11 +53,11 @@ const USER_POOL_ID   = process.env.USER_POOL_ID              || "";
 
 const cognito = new CognitoIdentityProviderClient({});
 
-// Investor profile — account-level risk/goal context consumed by Tower 1
-// (Opportunity Engine + Deep Dive). Promoted from AdvisorChat.jsx's old
-// client-only "Goals" localStorage panel so it's visible server-side.
-// Context only — never an optimization target the agentic engine sizes
-// positions against (see Part 5/6 plan, §6.2).
+// Investor profile — account-level risk/goal context. Promoted from
+// AdvisorChat.jsx's old client-only "Goals" localStorage panel so it's
+// visible server-side. (Formerly also consumed by Opportunity Engine/Deep
+// Dive's Tower 1, both removed 2026-10-31; this field and its editor stay,
+// just unused by any AI feature right now.)
 const RISK_TOLERANCE_VALUES = ["Conservative", "Moderate", "Aggressive", "Very Aggressive"];
 const OBJECTIVE_VALUES = ["Capital Preservation", "Income Generation", "Balanced Growth", "Aggressive Growth", "Speculation"];
 const TIME_HORIZON_VALUES = ["< 1 year", "1–3 years", "3–5 years", "5–10 years", "10+ years"];
