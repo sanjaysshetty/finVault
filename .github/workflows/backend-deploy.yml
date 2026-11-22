@@ -52,13 +52,23 @@ jobs:
           PK: "${{ inputs.environment }}#frontend"
         run: |
           set -euo pipefail
-          ITEM=$(aws dynamodb query \
-            --table-name "$TABLE_NAME" \
-            --key-condition-expression "envComponent = :pk" \
-            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
-            --no-scan-index-forward \
-            --limit 1 \
-            --query "Items[0]" --output json)
+          # Deployments-<stack> may not exist yet -- true on a stack's very
+          # first deploy through this workflow (e.g. promoting a new
+          # environment like sandbox). Treat "table doesn't exist" as "no
+          # prior deploy" (ITEM=null) rather than letting the query's
+          # ResourceNotFoundException fail the whole job; any other AWS
+          # error (permissions, etc.) still propagates normally via -e.
+          if aws dynamodb describe-table --table-name "$TABLE_NAME" >/dev/null 2>&1; then
+            ITEM=$(aws dynamodb query \
+              --table-name "$TABLE_NAME" \
+              --key-condition-expression "envComponent = :pk" \
+              --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+              --no-scan-index-forward \
+              --limit 1 \
+              --query "Items[0]" --output json)
+          else
+            ITEM="null"
+          fi
           echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
           echo "deployed_at=$(echo "$ITEM" | jq -r '.deployedAt.S // "none"')" >> "$GITHUB_OUTPUT"
 
