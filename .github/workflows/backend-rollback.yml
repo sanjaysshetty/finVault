@@ -49,6 +49,18 @@ jobs:
           actual=$(git rev-parse --short HEAD)
           echo "Checked out: $actual (requested: ${{ inputs.target_sha }})"
 
+      - name: Verify target_sha was actually promoted to this environment
+        run: |
+          set -euo pipefail
+          # Refuses to roll back to a commit that skipped the promotion gate
+          # (e.g. a dev-only commit that was never merged into sandbox) --
+          # HEAD is target_sha, already checked out by the previous step.
+          git fetch origin ${{ inputs.environment }}
+          if ! git merge-base --is-ancestor HEAD origin/${{ inputs.environment }}; then
+            echo "ERROR: ${{ inputs.target_sha }} is not reachable from origin/${{ inputs.environment }} -- refusing to roll back to a commit that was never actually promoted to this branch. If this is intentional, merge it to ${{ inputs.environment }} first." >&2
+            exit 1
+          fi
+
       - name: Resolve environment-specific settings
         id: env
         run: |

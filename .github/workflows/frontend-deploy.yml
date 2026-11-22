@@ -35,6 +35,15 @@ jobs:
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      - name: Enforce deploying from the matching branch
+        run: |
+          set -euo pipefail
+          # See backend-deploy.yml's identical check for the full rationale.
+          if [ "${{ github.ref_name }}" != "${{ inputs.environment }}" ]; then
+            echo "ERROR: dispatched from branch '${{ github.ref_name }}' but environment is '${{ inputs.environment }}'. Deploys to '${{ inputs.environment }}' must be dispatched with \"Use workflow from: ${{ inputs.environment }}\" -- this is what enforces promoting via a merged PR into that branch, not deploying another branch's content directly." >&2
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
