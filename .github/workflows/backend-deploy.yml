@@ -57,18 +57,33 @@ jobs:
           # environment like sandbox). Treat "table doesn't exist" as "no
           # prior deploy" (ITEM=null) rather than letting the query's
           # ResourceNotFoundException fail the whole job; any other AWS
-          # error (permissions, etc.) still propagates normally via -e.
-          if aws dynamodb describe-table --table-name "$TABLE_NAME" >/dev/null 2>&1; then
-            ITEM=$(aws dynamodb query \
+          # error (permissions, etc.) still propagates normally via exit 1.
+          #
+          # Deliberately NOT using `aws dynamodb describe-table` as a
+          # pre-check -- confirmed via a real incident (2026-11-22) that
+          # some roles invoking this workflow (e.g. the frontend deploy
+          # role) are granted Query/PutItem on this table but NOT
+          # DescribeTable, which made that pre-check silently fail with
+          # AccessDenied and get misread as "table doesn't exist," losing
+          # a real paired SHA. Probing with the exact same call (query)
+          # that's already permitted avoids needing any extra permission.
+          ERR_FILE=$(mktemp)
+          if ITEM=$(aws dynamodb query \
               --table-name "$TABLE_NAME" \
               --key-condition-expression "envComponent = :pk" \
               --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
               --no-scan-index-forward \
               --limit 1 \
-              --query "Items[0]" --output json)
-          else
+              --query "Items[0]" --output json 2>"$ERR_FILE"); then
+            :
+          elif grep -q "ResourceNotFoundException" "$ERR_FILE"; then
             ITEM="null"
+          else
+            cat "$ERR_FILE" >&2
+            rm -f "$ERR_FILE"
+            exit 1
           fi
+          rm -f "$ERR_FILE"
           echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
           echo "deployed_at=$(echo "$ITEM" | jq -r '.deployedAt.S // "none"')" >> "$GITHUB_OUTPUT"
 
