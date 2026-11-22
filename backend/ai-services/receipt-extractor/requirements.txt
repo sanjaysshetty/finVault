@@ -1,0 +1,3 @@
+# receipt-extractor dependencies.
+# boto3 and anthropic are provided via the finvault-agent-core Lambda
+# layer -- this function has no direct dependencies of its own.

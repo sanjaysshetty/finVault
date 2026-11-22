@@ -33,15 +33,6 @@ export const PAGE_ROUTES = [
   { pageKey: "receiptsLedger",    path: "/spending/receipts-ledger", label: "Receipts",      group: "Spending" },
   { pageKey: "budget",            path: "/budget/overview",          label: "Budget & Goals", group: "Spending" },
 
-  // ── Research ───────────────────────────────────────────────
-  { pageKey: "wheelScan",         path: "/research/wheel-scan",      label: "Wheel Scan",    group: "Research" },
-  { pageKey: "assetHub",          path: "/research/asset-hub",       label: "Asset Hub",     group: "Research" },
-  { pageKey: "advisor",           path: "/research/compass",         label: "Compass AI",    group: "Research" },
-
-  // ── Trading ────────────────────────────────────────────────
-  // paperTrading is intentionally separate from any future liveTrading entry.
-  { pageKey: "paperTrading",      path: "/research/paper-trading",   label: "Paper Trading", group: "Trading" },
-
   // ── Tax ────────────────────────────────────────────────────
   { pageKey: "taxReturn",         path: "/tax/return",               label: "Tax Return",    group: "Tax" },
 ];

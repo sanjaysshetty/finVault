@@ -1,0 +1,10 @@
+# finvault_agent_core dependencies.
+# boto3 is already provided by the Lambda Python runtime — not listed here.
+# Pinned to >=2.x deliberately -- confirmed by installing and introspecting
+# the live package, not assumed from memory.
+anthropic>=2.0.0
+# Pillow (redaction.redact_image_pii's PIL dependency) deliberately does NOT
+# live here -- it's a per-function dependency of tax-return-extractor only
+# (the one consumer that calls redact_image_pii). This layer is shared by
+# every Python Lambda that uses it, so anything not needed by (almost)
+# everyone belongs in the specific function's own requirements.txt instead.

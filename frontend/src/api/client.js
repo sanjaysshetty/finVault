@@ -115,16 +115,6 @@ export const queryKeys = {
   members:   (accountId) => ["accounts", accountId, "members"],
   invites:   (accountId) => ["accounts", accountId, "invites"],
 
-  // Wheel Scan
-  wheelHistory: ()         => ["wheel", "history"],
-  wheelLatest:  ()         => ["wheel", "latest"],
-  wheelScan:    (scanId)   => ["wheel", "scan", scanId],
-
-  // Paper Trading — intentionally namespaced "paperTrade" (not "trade")
-  // so a future liveTrade namespace stays clearly separate.
-  paperTradeStaged: ()         => ["paperTrade", "staged"],
-  paperTradeOrders: ()         => ["paperTrade", "orders"],
-
   // Budget & Goals
   budgetDefinition: (year, month) =>
     month != null ? ["budget", "definition", year, month] : ["budget", "definition", year],

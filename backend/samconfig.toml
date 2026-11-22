@@ -1,0 +1,35 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "finVault"
+resolve_s3 = true
+s3_prefix = "finVault"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+# parameter_overrides intentionally omitted — real bucket/table/domain names are
+# resource-identifying info, kept out of git. Supply at deploy time:
+#   source backend/.deploy-params.dev.sh && sam deploy --parameter-overrides "$PARAM_OVERRIDES"
+
+[default.global.parameters]
+region = "us-east-1"
+
+# ── Sandbox environment ────────────────────────────────────────────────────────
+# Deploy with: sam deploy --config-env sb
+# Uses AWS profile "finvault-sb" — set via: export AWS_PROFILE=finvault-sb
+
+[sb.deploy.parameters]
+stack_name = "finVault-sb"
+resolve_s3 = true
+s3_prefix = "finVault-sb"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = false
+image_repositories = []
+# parameter_overrides intentionally omitted — real bucket/table/domain names are
+# resource-identifying info, kept out of git. Supply at deploy time:
+#   source backend/.deploy-params.sb.sh && sam deploy --config-env sb --parameter-overrides "$PARAM_OVERRIDES"
+
+[sb.global.parameters]
+region = "us-east-1"

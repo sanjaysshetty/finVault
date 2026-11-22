@@ -17,11 +17,6 @@ import Liabilities from "./pages/Liabilities";
 import Insurance from "./pages/Insurance";
 
 import AccountsPage from "./pages/AccountsPage";
-import WheelScanPageReports from "./pages/WheelScan/WheelScanPageReports";
-import WheelScanResult from "./pages/WheelScan/WheelScanResult";
-import AssetHub from "./pages/AssetHub";
-import AdvisorChat from "./pages/AdvisorChat";
-import PaperTradingDesk from "./pages/PaperTrading/PaperTradingDesk";
 import BudgetPage from "./pages/Budget/BudgetPage";
 import CapitalGains from "./pages/CapitalGains";
 import TaxReturn from "./pages/TaxReturn/TaxReturn";
@@ -88,13 +83,6 @@ export default function App() {
           {/* Spending */}
           <Route path="/spending/dashboard" element={<SpendingDash />} />
           <Route path="/spending/receipts-ledger" element={<Spending />} />
-
-          {/* Research */}
-          <Route path="/research/wheel-scan" element={<WheelScanPageReports />} />
-          <Route path="/research/wheel-scan/:scanId" element={<WheelScanResult />} />
-          <Route path="/research/asset-hub" element={<AssetHub />} />
-          <Route path="/research/compass" element={<AdvisorChat />} />
-          <Route path="/research/paper-trading" element={<PaperTradingDesk />} />
 
           {/* Budget & Goals */}
           <Route path="/budget/overview" element={<BudgetPage />} />

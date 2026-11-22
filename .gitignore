@@ -30,11 +30,6 @@ dist-ssr
 
 # Build output
 .aws-sam/
-# local deploy config (do not commit)
-template.yaml
-
-# SAM local deployment config
-samconfig.toml
 
 # dependencies
 node_modules/
@@ -42,6 +37,9 @@ node_modules/
 
 # Scripts folder (local use only)
 backend/scripts/
+
+# Local deploy parameter overrides — real bucket/table/domain names, kept out of git
+backend/.deploy-params.*.sh
 
 # Secrets and sensitive data
 backend/keys.json
@@ -62,6 +60,9 @@ local/
 # Python virtual environments
 .venv/
 **/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
 
 # Architecture Diagrams
 **/*.drawio
@@ -69,6 +70,12 @@ local/
 # Markdown and HTML files (anywhere in the project)
 **/*.md
 **/*.html
+
+# Exception: agent system prompts are markdown files the Lambda actually
+# reads at runtime (Part 5/6 plan's "versioned prompt files" convention) —
+# not planning/notes docs. Without this, they'd be silently excluded from
+# every deploy and the function would crash with FileNotFoundError.
+!backend/ai-services/**/prompts/*.md
 
 # Claude Code local memory (never push)
 .claude/
