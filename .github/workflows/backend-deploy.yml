@@ -40,6 +40,22 @@ jobs:
           # separate timestamp variant for backup names only.
           echo "backup_ts=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
 
+      - name: Enforce deploying from the matching branch
+        run: |
+          set -euo pipefail
+          # environment's values (dev/sandbox) are literally the same strings
+          # as the branch names, by design -- no mapping table needed. This
+          # is what actually enforces the promotion gate (feature branch ->
+          # PR -> dev -> PR -> sandbox): deploying to an environment must be
+          # dispatched from that environment's own branch, never from
+          # another branch's content with the environment picked from the
+          # dropdown. github.ref_name is exactly whichever branch was chosen
+          # under "Use workflow from" for this workflow_dispatch run.
+          if [ "${{ github.ref_name }}" != "${{ inputs.environment }}" ]; then
+            echo "ERROR: dispatched from branch '${{ github.ref_name }}' but environment is '${{ inputs.environment }}'. Deploys to '${{ inputs.environment }}' must be dispatched with \"Use workflow from: ${{ inputs.environment }}\" -- this is what enforces promoting via a merged PR into that branch, not deploying another branch's content directly." >&2
+            exit 1
+          fi
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_BACKEND_DEPLOY_ROLE_ARN }}
