@@ -75,13 +75,20 @@ jobs:
           PK: "${{ inputs.environment }}#backend"
         run: |
           set -euo pipefail
-          ITEM=$(aws dynamodb query \
-            --table-name "$TABLE_NAME" \
-            --key-condition-expression "envComponent = :pk" \
-            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
-            --no-scan-index-forward \
-            --limit 1 \
-            --query "Items[0]" --output json)
+          # See backend-deploy.yml's identical guard for the full rationale --
+          # Deployments-<stack> may not exist if this environment has never
+          # been deployed through these workflows before.
+          if aws dynamodb describe-table --table-name "$TABLE_NAME" >/dev/null 2>&1; then
+            ITEM=$(aws dynamodb query \
+              --table-name "$TABLE_NAME" \
+              --key-condition-expression "envComponent = :pk" \
+              --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+              --no-scan-index-forward \
+              --limit 1 \
+              --query "Items[0]" --output json)
+          else
+            ITEM="null"
+          fi
           echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
 
       - name: Look up the most recent frontend deploy, to cross-link lineage
@@ -91,13 +98,17 @@ jobs:
           PK: "${{ inputs.environment }}#frontend"
         run: |
           set -euo pipefail
-          ITEM=$(aws dynamodb query \
-            --table-name "$TABLE_NAME" \
-            --key-condition-expression "envComponent = :pk" \
-            --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
-            --no-scan-index-forward \
-            --limit 1 \
-            --query "Items[0]" --output json)
+          if aws dynamodb describe-table --table-name "$TABLE_NAME" >/dev/null 2>&1; then
+            ITEM=$(aws dynamodb query \
+              --table-name "$TABLE_NAME" \
+              --key-condition-expression "envComponent = :pk" \
+              --expression-attribute-values "{\":pk\":{\"S\":\"$PK\"}}" \
+              --no-scan-index-forward \
+              --limit 1 \
+              --query "Items[0]" --output json)
+          else
+            ITEM="null"
+          fi
           echo "sha=$(echo "$ITEM" | jq -r '.sha.S // "none"')" >> "$GITHUB_OUTPUT"
           echo "deployed_at=$(echo "$ITEM" | jq -r '.deployedAt.S // "none"')" >> "$GITHUB_OUTPUT"
 
