@@ -22,16 +22,23 @@ on:
       sha:
         description: "The commit SHA of the deploy you've manually confirmed works"
         required: true
+      version:
+        description: "Optional: git tag to create at this SHA (e.g. v2.0.0). Leave blank to just mark verified with no tag."
+        required: false
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   mark-verified:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history -- inputs.sha can be any past commit, not just the latest
+
       - name: Resolve environment-specific settings
         id: env
         run: |
@@ -82,6 +89,36 @@ jobs:
             --update-expression "SET verified = :v, verifiedBy = :by, verifiedAt = :at" \
             --expression-attribute-values "{\":v\":{\"BOOL\":true},\":by\":{\"S\":\"$VERIFIED_BY\"},\":at\":{\"S\":\"$NOW\"}}"
 
+      - name: Create version tag
+        if: inputs.version != ''
+        id: tag
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET_SHA: ${{ inputs.sha }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          COMPONENT: ${{ inputs.component }}
+          DEPLOYED_AT: ${{ steps.find.outputs.deployed_at }}
+          VERIFIED_BY: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          TARGET_SHA_FULL=$(git rev-parse "$TARGET_SHA")
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            EXISTING_SHA=$(git rev-list -n 1 "$VERSION")
+            if [ "$EXISTING_SHA" = "$TARGET_SHA_FULL" ]; then
+              echo "Tag $VERSION already exists and already points to $TARGET_SHA_FULL -- nothing to do."
+              echo "created=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "ERROR: tag $VERSION already exists but points to $EXISTING_SHA, not $TARGET_SHA_FULL. Refusing to move an existing tag -- pick a new version or confirm this is intentional and retag manually." >&2
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$VERSION" -m "$VERSION -- verified ${ENVIRONMENT}/${COMPONENT} deploy @ ${TARGET_SHA_FULL}, deployed ${DEPLOYED_AT}, verified by ${VERIFIED_BY}"
+            git push origin "$VERSION"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Summary
         run: |
           {
@@ -89,4 +126,7 @@ jobs:
             echo "- SHA: \`${{ inputs.sha }}\`"
             echo "- Deploy timestamp: ${{ steps.find.outputs.deployed_at }}"
             echo "- Verified by: ${{ github.actor }}"
+            if [ -n "${{ inputs.version }}" ]; then
+              echo "- Version tag: \`${{ inputs.version }}\`$( [ "${{ steps.tag.outputs.created }}" = "true" ] && echo " (created)" || echo " (already existed, pointed at this same commit)" )"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
